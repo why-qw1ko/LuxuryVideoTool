@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/resolver"
 )
 
 type SQLiteRepository struct{ db *sql.DB }
+type scanner interface{ Scan(...any) error }
 func NewSQLiteRepository(db *sql.DB) *SQLiteRepository { return &SQLiteRepository{db: db} }
 
 func (r *SQLiteRepository) FindByIdempotencyKey(ctx context.Context, userID, key string) (Job, error) {
@@ -19,8 +21,43 @@ func (r *SQLiteRepository) FindByIdempotencyKey(ctx context.Context, userID, key
 }
 func (r *SQLiteRepository) FindByID(ctx context.Context, userID, jobID string) (Job, error) {
 	job, err := r.find(ctx, `j.user_id = ? AND j.id = ?`, userID, jobID); if err != nil { return Job{}, err }
-	if job.Status == "completed" && job.Action == "download" { items, filesErr := r.FindFiles(ctx, userID, jobID); if filesErr != nil { return Job{}, filesErr }; job.Result = map[string]any{"files": items} }
+	if job.Status == "completed" { items, filesErr := r.FindFiles(ctx, userID, jobID); if filesErr != nil { return Job{}, filesErr }; if job.Result == nil { job.Result = map[string]any{} }; if value, ok := job.Result.(map[string]any); ok { value["files"] = items } }
 	return job, nil
+}
+
+func (r *SQLiteRepository) List(ctx context.Context, input ListInput) (JobPage, error) {
+	where := []string{"j.user_id = ?"}
+	args := []any{input.UserID}
+	if input.Status != "" { where = append(where, "j.status = ?"); args = append(args, input.Status) }
+	if input.Action != "" { where = append(where, "j.action = ?"); args = append(args, input.Action) }
+	if input.Query != "" {
+		where = append(where, "(j.input_text LIKE ? ESCAPE '\\' OR w.title LIKE ? ESCAPE '\\' OR w.author_name LIKE ? ESCAPE '\\')")
+		like := "%" + escapeLike(input.Query) + "%"
+		args = append(args, like, like, like)
+	}
+	clause := strings.Join(where, " AND ")
+	var total int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs j LEFT JOIN works w ON w.id = j.work_id WHERE `+clause, args...).Scan(&total); err != nil { return JobPage{}, fmt.Errorf("count jobs: %w", err) }
+	query := jobSelect + ` WHERE ` + clause + ` ORDER BY j.created_at DESC, j.id DESC LIMIT ? OFFSET ?`
+	args = append(args, input.Limit, input.Offset)
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil { return JobPage{}, fmt.Errorf("list jobs: %w", err) }
+	defer rows.Close()
+	items := make([]Job, 0, input.Limit)
+	for rows.Next() { job, scanErr := scanJob(rows); if scanErr != nil { return JobPage{}, scanErr }; items = append(items, job) }
+	if err := rows.Err(); err != nil { return JobPage{}, err }
+	return JobPage{Items: items, Total: total, Limit: input.Limit, Offset: input.Offset}, nil
+}
+
+func (r *SQLiteRepository) Delete(ctx context.Context, userID, jobID string) error {
+	tx, err := r.db.BeginTx(ctx, nil); if err != nil { return err }; defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM job_steps WHERE job_id = ?`, jobID); err != nil { return fmt.Errorf("delete job steps: %w", err) }
+	if _, err = tx.ExecContext(ctx, `DELETE FROM asr_calls WHERE job_id = ?`, jobID); err != nil { return fmt.Errorf("delete ASR calls: %w", err) }
+	if _, err = tx.ExecContext(ctx, `DELETE FROM files WHERE job_id = ? AND user_id = ?`, jobID, userID); err != nil { return fmt.Errorf("delete job files: %w", err) }
+	result, err := tx.ExecContext(ctx, `DELETE FROM jobs WHERE id = ? AND user_id = ?`, jobID, userID)
+	if err != nil { return fmt.Errorf("delete job: %w", err) }
+	if err := changed(result); err != nil { return err }
+	return tx.Commit()
 }
 
 func (r *SQLiteRepository) CreateInfo(ctx context.Context, job Job) error {
@@ -32,11 +69,12 @@ func (r *SQLiteRepository) CreateQueued(ctx context.Context, job Job) error { re
 func (r *SQLiteRepository) create(ctx context.Context, job Job, started bool) error {
 	var startedAt any
 	if started { startedAt = job.CreatedAt.UnixMilli() }
-	_, err := r.db.ExecContext(ctx, `INSERT INTO jobs(id, user_id, input_text, input_url, action, status,
-		progress, status_message, idempotency_key, force_refresh, created_at, updated_at, started_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, job.ID, job.UserID, job.InputText, job.InputURL,
+	options, err := json.Marshal(map[string]any{"keepVideo": job.KeepVideo, "languageHints": job.LanguageHints, "hotwords": job.Hotwords}); if err != nil { return err }
+	_, err = r.db.ExecContext(ctx, `INSERT INTO jobs(id, user_id, input_text, input_url, action, status,
+		progress, status_message, idempotency_key, force_refresh, created_at, updated_at, started_at, options_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, job.ID, job.UserID, job.InputText, job.InputURL,
 		job.Action, job.Status, job.Progress, job.StatusMessage, job.IdempotencyKey, boolInt(job.ForceRefresh),
-		job.CreatedAt.UnixMilli(), job.UpdatedAt.UnixMilli(), startedAt)
+		job.CreatedAt.UnixMilli(), job.UpdatedAt.UnixMilli(), startedAt, string(options))
 	if err != nil { return fmt.Errorf("create job: %w", err) }
 	return nil
 }
@@ -51,37 +89,47 @@ func (r *SQLiteRepository) CompleteInfo(ctx context.Context, jobID string, work 
 
 func (r *SQLiteRepository) Fail(ctx context.Context, jobID, code, message string, at time.Time) error {
 	result, err := r.db.ExecContext(ctx, `UPDATE jobs SET status = 'failed', progress = 100, status_message = ?,
-		error_code = ?, error_message = ?, completed_at = ?, updated_at = ? WHERE id = ?`, message, code, message,
+		error_code = ?, error_message = ?, completed_at = ?, updated_at = ?, lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL WHERE id = ?`, message, code, message,
 		at.UnixMilli(), at.UnixMilli(), jobID)
 	if err != nil { return fmt.Errorf("fail info job: %w", err) }
 	return changed(result)
 }
 
-func (r *SQLiteRepository) find(ctx context.Context, where string, args ...any) (Job, error) {
-	query := `SELECT j.id, j.user_id, j.input_text, j.input_url, j.action, j.status, j.progress,
+const jobSelect = `SELECT j.id, j.user_id, j.input_text, j.input_url, j.action, j.status, j.progress,
 		j.status_message, j.idempotency_key, j.force_refresh, j.error_code, j.error_message,
-		j.created_at, j.updated_at, j.completed_at, j.attempt_count, j.max_attempts, j.lease_owner,
+		j.created_at, j.updated_at, j.completed_at, j.attempt_count, j.max_attempts, j.lease_owner, j.result_json, j.options_json,
 		w.id, w.douyin_work_id, w.content_type, w.canonical_url, w.author_id, w.author_name,
 		w.title, w.description, w.cover_url, w.published_at, w.metadata_json, w.resolver_name, w.resolver_version, w.resolved_at
-		FROM jobs j LEFT JOIN works w ON w.id = j.work_id WHERE ` + where
+		FROM jobs j LEFT JOIN works w ON w.id = j.work_id`
+
+func (r *SQLiteRepository) find(ctx context.Context, where string, args ...any) (Job, error) {
+	query := jobSelect + ` WHERE ` + where
 	row := r.db.QueryRowContext(ctx, query, args...)
+	return scanJob(row)
+}
+
+func scanJob(row scanner) (Job, error) {
 	var job Job
 	var force int
 	var errorCode, errorMessage sql.NullString
 	var created, updated int64
 	var completed sql.NullInt64
 	var leaseOwner sql.NullString
+	var resultJSON sql.NullString
+	var optionsJSON string
 	var workID, douyinID, kind, canonical, authorID, authorName, title, description, cover, metadata, resolverName, resolverVersion sql.NullString
 	var published, resolved sql.NullInt64
 	err := row.Scan(&job.ID, &job.UserID, &job.InputText, &job.InputURL, &job.Action, &job.Status, &job.Progress,
 		&job.StatusMessage, &job.IdempotencyKey, &force, &errorCode, &errorMessage, &created, &updated, &completed,
-		&job.AttemptCount, &job.MaxAttempts, &leaseOwner,
+		&job.AttemptCount, &job.MaxAttempts, &leaseOwner, &resultJSON, &optionsJSON,
 		&workID, &douyinID, &kind, &canonical, &authorID, &authorName, &title, &description, &cover, &published, &metadata,
 		&resolverName, &resolverVersion, &resolved)
 	if errors.Is(err, sql.ErrNoRows) { return Job{}, ErrNotFound }
 	if err != nil { return Job{}, fmt.Errorf("find job: %w", err) }
 	job.ForceRefresh, job.ErrorCode, job.ErrorMessage = force == 1, errorCode.String, errorMessage.String
 	job.LeaseOwner = leaseOwner.String
+	if resultJSON.Valid { var result map[string]any; if json.Unmarshal([]byte(resultJSON.String), &result) == nil { job.Result = result } }
+	var options struct { KeepVideo bool `json:"keepVideo"`; LanguageHints []string `json:"languageHints"`; Hotwords []string `json:"hotwords"` }; if json.Unmarshal([]byte(optionsJSON), &options) == nil { job.KeepVideo, job.LanguageHints, job.Hotwords = options.KeepVideo, options.LanguageHints, options.Hotwords }
 	if errorCode.Valid { job.Error = &JobError{Code: errorCode.String, Message: errorMessage.String} }
 	job.CreatedAt, job.UpdatedAt = time.UnixMilli(created).UTC(), time.UnixMilli(updated).UTC()
 	if completed.Valid { value := time.UnixMilli(completed.Int64).UTC(); job.CompletedAt = &value }
@@ -104,10 +152,12 @@ func (r *SQLiteRepository) find(ctx context.Context, where string, args ...any) 
 			work.Images, work.Hashtags = extra.Images, extra.Hashtags
 		}
 		job.Work = &work
-		if job.Status == "completed" { job.Result = map[string]any{"workId": work.ID} }
+		if job.Status == "completed" && job.Result == nil { job.Result = map[string]any{"workId": work.ID} }
 	}
 	return job, nil
 }
+
+func escapeLike(value string) string { return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(value) }
 
 func (r *SQLiteRepository) ClaimNext(ctx context.Context, owner string, now time.Time, lease time.Duration) (Job, error) {
 	var id string
@@ -147,6 +197,7 @@ func (r *SQLiteRepository) CompleteDownload(ctx context.Context, jobID, owner, f
 		error_code = NULL, error_message = NULL WHERE id = ? AND lease_owner = ? AND status = 'downloading'`, at.UnixMilli(), at.UnixMilli(), jobID, owner)
 	if err != nil { return fmt.Errorf("complete download job %s: %w", fileID, err) }; if changed(result) != nil { return ErrLeaseLost }; return nil
 }
+func (r *SQLiteRepository) CompleteTranscription(ctx context.Context, jobID, owner string, result map[string]any, at time.Time) error { encoded, err := json.Marshal(result); if err != nil { return err }; dbResult, err := r.db.ExecContext(ctx, `UPDATE jobs SET status='completed', progress=100, status_message='转写与结果生成完成', result_json=?, completed_at=?, updated_at=?, lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL, error_code=NULL, error_message=NULL WHERE id=? AND lease_owner=? AND status='postprocessing'`, string(encoded), at.UnixMilli(), at.UnixMilli(), jobID, owner); if err != nil { return err }; if changed(dbResult) != nil { return ErrLeaseLost }; return nil }
 
 func (r *SQLiteRepository) RetryLater(ctx context.Context, jobID, owner, code, message string, retryAt, at time.Time) error {
 	result, err := r.db.ExecContext(ctx, `UPDATE jobs SET status = CASE WHEN attempt_count >= max_attempts THEN 'failed' ELSE 'retry_wait' END,
@@ -185,6 +236,11 @@ func (r *SQLiteRepository) Retry(ctx context.Context, userID, jobID string, at t
 }
 
 func (r *SQLiteRepository) Recover(ctx context.Context, now time.Time) (int64, error) {
+	// 已提交供应商任务的 transcribing 作业不能直接重放，否则可能重复计费；保留失败状态供人工核对供应商任务 ID 后重试。
+	if _, err := r.db.ExecContext(ctx, `UPDATE jobs SET status='failed', progress=100, status_message='ASR 状态需人工恢复',
+		error_code='ASR_RECOVERY_REQUIRED', error_message='ASR 状态需人工恢复', completed_at=?, lease_owner=NULL,
+		lease_expires_at=NULL, heartbeat_at=NULL, updated_at=? WHERE status='transcribing' AND lease_expires_at < ?
+		AND EXISTS (SELECT 1 FROM asr_calls WHERE asr_calls.job_id=jobs.id AND provider_task_id IS NOT NULL AND status IN ('submitted','running'))`, now.UnixMilli(), now.UnixMilli(), now.UnixMilli()); err != nil { return 0, fmt.Errorf("mark ASR recovery required: %w", err) }
 	result, err := r.db.ExecContext(ctx, `UPDATE jobs SET status = CASE WHEN attempt_count >= max_attempts THEN 'failed' ELSE 'queued' END,
 		progress = CASE WHEN attempt_count >= max_attempts THEN 100 ELSE 0 END,
 		status_message = CASE WHEN attempt_count >= max_attempts THEN '任务恢复次数已耗尽' ELSE '服务恢复后重新排队' END,
@@ -192,7 +248,7 @@ func (r *SQLiteRepository) Recover(ctx context.Context, now time.Time) (int64, e
 		error_message = CASE WHEN attempt_count >= max_attempts THEN '任务恢复次数已耗尽' ELSE error_message END,
 		completed_at = CASE WHEN attempt_count >= max_attempts THEN ? ELSE NULL END,
 		lease_owner = NULL, lease_expires_at = NULL, heartbeat_at = NULL, updated_at = ?
-		WHERE status IN ('resolving','downloading','extracting','postprocessing') AND lease_expires_at < ?`, now.UnixMilli(), now.UnixMilli(), now.UnixMilli())
+		WHERE status IN ('resolving','downloading','extracting','transcribing','postprocessing') AND lease_expires_at < ?`, now.UnixMilli(), now.UnixMilli(), now.UnixMilli())
 	if err != nil { return 0, fmt.Errorf("recover expired jobs: %w", err) }; return result.RowsAffected()
 }
 
@@ -224,6 +280,7 @@ func (r *SQLiteRepository) FindFiles(ctx context.Context, userID, jobID string) 
 }
 
 func (r *SQLiteRepository) DeleteFileRecord(ctx context.Context, fileID string) error { _, err := r.db.ExecContext(ctx, `DELETE FROM files WHERE id = ?`, fileID); return err }
+func (r *SQLiteRepository) DeleteFilesByKind(ctx context.Context, jobID, kind string) error { _, err := r.db.ExecContext(ctx, `DELETE FROM files WHERE job_id = ? AND kind = ? AND deleted_at IS NOT NULL`, jobID, kind); return err }
 
 func changed(result sql.Result) error { count, err := result.RowsAffected(); if err != nil { return err }; if count == 0 { return ErrNotFound }; return nil }
 func boolInt(value bool) int { if value { return 1 }; return 0 }

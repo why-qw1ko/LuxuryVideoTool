@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +30,7 @@ type Dependencies struct {
 	Jobs           *jobs.Service
 	Files          *ownedfiles.Repository
 	Storage        *ownedfiles.Storage
+	ASRSigner      *ownedfiles.Signer
 	Audit          *audit.Recorder
 	Ready          Readiness
 	LoginRateLimit int
@@ -124,17 +126,28 @@ func New(deps Dependencies) http.Handler {
 		var input struct {
 			ShareText string `json:"shareText"`
 			Action string `json:"action"`
-			Options struct { Force bool `json:"force"` } `json:"options"`
+			Options struct { Force bool `json:"force"`; KeepVideo bool `json:"keepVideo"`; LanguageHints []string `json:"languageHints"`; Hotwords []string `json:"hotwords"` } `json:"options"`
 		}
 		if err := decodeJSON(w, r, &input); err != nil { return }
-		if (input.Action != "info" && input.Action != "download") || strings.TrimSpace(input.ShareText) == "" || len(input.ShareText) > 4096 { writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "仅支持有效的 info 或 download 任务", false); return }
+		if (input.Action != "info" && input.Action != "download" && input.Action != "transcribe" && input.Action != "full") || strings.TrimSpace(input.ShareText) == "" || len(input.ShareText) > 4096 { writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "不支持的任务类型", false); return }
 		var job jobs.Job; var reused bool; var err error
 		if input.Action == "info" { job, reused, err = deps.Jobs.CreateInfo(r.Context(), jobs.CreateInput{UserID: principal.UserID, ShareText: input.ShareText, IdempotencyKey: key, Force: input.Options.Force})
-		} else { job, reused, err = deps.Jobs.CreateDownload(r.Context(), jobs.CreateInput{UserID: principal.UserID, ShareText: input.ShareText, IdempotencyKey: key, Force: input.Options.Force}) }
+		} else { job, reused, err = deps.Jobs.CreateDownload(r.Context(), jobs.CreateInput{UserID: principal.UserID, ShareText: input.ShareText, IdempotencyKey: key, Action: input.Action, Force: input.Options.Force, KeepVideo: input.Options.KeepVideo, LanguageHints: input.Options.LanguageHints, Hotwords: input.Options.Hotwords}) }
 		if errors.Is(err, jobs.ErrIdempotencyConflict) { writeError(w, r, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "Idempotency-Key 已用于其他请求", false); return }
+		if errors.Is(err, jobs.ErrInvalidOptions) { writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "任务选项不合法", false); return }
 		if err != nil { writeResolverError(w, r, err); return }
 		recordJobAudit(deps.Audit, r, principal.UserID, job.ID, reused, job.Status)
 		writeJSON(w, http.StatusAccepted, map[string]any{"job": job, "reused": reused, "requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("GET /api/v1/jobs", func(w http.ResponseWriter, r *http.Request) {
+		if deps.Jobs == nil { writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true); return }
+		principal, _ := Principal(r.Context())
+		limit, limitErr := queryInt(r, "limit", 20); offset, offsetErr := queryInt(r, "offset", 0)
+		status, action := strings.TrimSpace(r.URL.Query().Get("status")), strings.TrimSpace(r.URL.Query().Get("action"))
+		if limitErr != nil || offsetErr != nil || limit < 1 || limit > 100 || offset < 0 || !validJobFilter(status, action) { writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "历史筛选参数不正确", false); return }
+		page, err := deps.Jobs.List(r.Context(), jobs.ListInput{UserID: principal.UserID, Query: r.URL.Query().Get("q"), Status: status, Action: action, Limit: limit, Offset: offset})
+		if err != nil { writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取历史记录", true); return }
+		writeJSON(w, http.StatusOK, map[string]any{"jobs": page.Items, "total": page.Total, "limit": page.Limit, "offset": page.Offset, "requestId": RequestID(r.Context())})
 	})
 	protected.HandleFunc("POST /api/v1/jobs/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
 		principal, _ := Principal(r.Context()); job, err := deps.Jobs.Cancel(r.Context(), principal.UserID, r.PathValue("id"))
@@ -148,11 +161,32 @@ func New(deps Dependencies) http.Handler {
 		if errors.Is(err, jobs.ErrNotRetryable) { writeError(w, r, http.StatusConflict, "JOB_NOT_RETRYABLE", "当前任务不能重试", false); return }
 		if err != nil { writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "重试任务失败", true); return }; writeJSON(w, http.StatusAccepted, map[string]any{"job": job, "requestId": RequestID(r.Context())})
 	})
+	protected.HandleFunc("DELETE /api/v1/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context())
+		job, findErr := deps.Jobs.Get(r.Context(), principal.UserID, r.PathValue("id"))
+		if errors.Is(findErr, jobs.ErrNotFound) { writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在", false); return }
+		if findErr != nil { writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "删除任务失败", true); return }
+		if job.Status != "completed" && job.Status != "failed" && job.Status != "cancelled" { writeError(w, r, http.StatusConflict, "JOB_NOT_DELETABLE", "进行中的任务不能删除", false); return }
+		var owned []ownedfiles.File
+		if deps.Files != nil { owned, _ = deps.Files.ListByJob(r.Context(), principal.UserID, r.PathValue("id")) }
+		if deps.Storage != nil { for _, file := range owned { if removeErr := deps.Storage.Remove(file); removeErr != nil { writeError(w, r, http.StatusInternalServerError, "FILE_DELETE_FAILED", "删除任务文件失败", true); return } } }
+		err := deps.Jobs.Delete(r.Context(), principal.UserID, r.PathValue("id"))
+		if errors.Is(err, jobs.ErrNotFound) { writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在", false); return }
+		if errors.Is(err, jobs.ErrNotDeletable) { writeError(w, r, http.StatusConflict, "JOB_NOT_DELETABLE", "进行中的任务不能删除", false); return }
+		if err != nil { writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "删除任务失败", true); return }
+		recordAudit(deps.Audit, r, principal.UserID, "job.delete", r.PathValue("id"), nil)
+		writeJSON(w, http.StatusOK, map[string]any{"requestId": RequestID(r.Context())})
+	})
 	protected.HandleFunc("GET /api/v1/files/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if deps.Files == nil || deps.Storage == nil { writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true); return }
 		principal, _ := Principal(r.Context()); file, err := deps.Files.FindOwned(r.Context(), principal.UserID, r.PathValue("id"))
 		if errors.Is(err, ownedfiles.ErrNotFound) { writeError(w, r, http.StatusNotFound, "FILE_NOT_FOUND", "文件不存在", false); return }
 		if err != nil { writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取文件", true); return }
+		handleFileDownload(deps.Storage, file, w, r)
+	})
+	mux.HandleFunc("GET /api/v1/asr-source/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if deps.Files == nil || deps.Storage == nil || deps.ASRSigner == nil || !deps.ASRSigner.Validate(r.PathValue("id"), r.URL.Query().Get("expires"), r.URL.Query().Get("signature"), time.Now()) { http.NotFound(w, r); return }
+		file, err := deps.Files.FindByID(r.Context(), r.PathValue("id")); if err != nil || file.Kind != "asr_source" { http.NotFound(w, r); return }
 		handleFileDownload(deps.Storage, file, w, r)
 	})
 	protected.HandleFunc("GET /api/v1/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -169,12 +203,21 @@ func New(deps Dependencies) http.Handler {
 		mux.Handle("DELETE /api/v1/auth/sessions/{id}", requireAuth(deps.Auth, protected))
 		mux.Handle("DELETE /api/v1/admin/sessions/{id}", requireAuth(deps.Auth, protected))
 		mux.Handle("POST /api/v1/jobs", requireAuth(deps.Auth, protected))
+		mux.Handle("GET /api/v1/jobs", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/jobs/{id}", requireAuth(deps.Auth, protected))
+		mux.Handle("DELETE /api/v1/jobs/{id}", requireAuth(deps.Auth, protected))
 		mux.Handle("POST /api/v1/jobs/{id}/cancel", requireAuth(deps.Auth, protected))
 		mux.Handle("POST /api/v1/jobs/{id}/retry", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/files/{id}", requireAuth(deps.Auth, protected))
 	}
 	return requestMiddleware(deps.Build.Version, mux)
+}
+
+func queryInt(r *http.Request, name string, fallback int) (int, error) { value := strings.TrimSpace(r.URL.Query().Get(name)); if value == "" { return fallback, nil }; return strconv.Atoi(value) }
+func validJobFilter(status, action string) bool {
+	statuses := map[string]bool{"": true, "queued": true, "resolving": true, "downloading": true, "extracting": true, "transcribing": true, "postprocessing": true, "retry_wait": true, "completed": true, "failed": true, "cancelled": true}
+	actions := map[string]bool{"": true, "info": true, "download": true, "transcribe": true, "full": true}
+	return statuses[status] && actions[action]
 }
 
 func handleFileDownload(storage *ownedfiles.Storage, file ownedfiles.File, w http.ResponseWriter, r *http.Request) {

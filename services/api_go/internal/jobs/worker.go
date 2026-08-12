@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/asr"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/auth"
 	ownedfiles "github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/files"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/media"
@@ -33,16 +34,17 @@ type Worker struct {
 	downloader media.Downloader
 	fileRepo *ownedfiles.Repository
 	storage *ownedfiles.Storage
+	transcriber *Transcriber
 	config WorkerConfig
 	now func() time.Time
 	stopMu sync.Mutex
 	stops map[string]context.CancelFunc
 }
 
-func NewWorker(repo Repository, resolverService *resolver.Service, downloader media.Downloader, fileRepo *ownedfiles.Repository, storage *ownedfiles.Storage, config WorkerConfig) *Worker {
+func NewWorker(repo Repository, resolverService *resolver.Service, downloader media.Downloader, fileRepo *ownedfiles.Repository, storage *ownedfiles.Storage, transcriber *Transcriber, config WorkerConfig) *Worker {
 	if config.Concurrency < 1 { config.Concurrency = 1 }; if config.Concurrency > 2 { config.Concurrency = 2 }
 	if config.Lease <= 0 { config.Lease = 60*time.Second }; if config.Heartbeat <= 0 { config.Heartbeat = 15*time.Second }; if config.Poll <= 0 { config.Poll = time.Second }
-	return &Worker{repo: repo, resolver: resolverService, downloader: downloader, fileRepo: fileRepo, storage: storage, config: config, now: time.Now, stops: make(map[string]context.CancelFunc)}
+	return &Worker{repo: repo, resolver: resolverService, downloader: downloader, fileRepo: fileRepo, storage: storage, transcriber: transcriber, config: config, now: time.Now, stops: make(map[string]context.CancelFunc)}
 }
 
 func (w *Worker) Run(ctx context.Context) error {
@@ -86,7 +88,10 @@ func (w *Worker) process(ctx context.Context, owner string, job Job) (resultErr 
 	if err != nil { return w.finishFailed(job, owner, stepID, err) }
 	if err := w.fileRepo.Create(jobCtx, file); err != nil { return w.finishFailed(job, owner, stepID, err) }
 	if err := w.repo.FinishStep(jobCtx, stepID, "completed", "", "", map[string]any{"fileId": file.ID, "sizeBytes": file.SizeBytes, "sha256": file.SHA256}, now); err != nil { w.rollbackFile(file); return err }
-	if err := w.repo.CompleteDownload(jobCtx, job.ID, owner, file.ID, now); err != nil { w.rollbackFile(file); return err }; return nil
+	if job.Action == "download" { if err := w.repo.CompleteDownload(jobCtx, job.ID, owner, file.ID, now); err != nil { w.rollbackFile(file); return err }; return nil }
+	if w.transcriber == nil { return w.finishFailed(job, owner, stepID, asr.ErrAuth) }
+	job.Work = &work; if err := w.transcriber.Run(jobCtx, w.repo, job, owner, file); err != nil { return w.failed(job, owner, err) }
+	if job.Action == "transcribe" && !job.KeepVideo { _ = w.storage.Remove(file); _ = w.fileRepo.MarkDeleted(context.Background(), file.ID, w.now().UTC()) }; return nil
 }
 
 func (w *Worker) Cancel(jobID string) bool { w.stopMu.Lock(); cancel := w.stops[jobID]; w.stopMu.Unlock(); if cancel == nil { return false }; cancel(); return true }
@@ -104,14 +109,21 @@ func (w *Worker) failedWith(job Job, owner, code, message string, cause error) e
 	if errors.Is(cause, context.Canceled) {
 		if persistErr := w.repo.CancelOwned(context.Background(), job.ID, owner, "任务已取消", w.now().UTC()); persistErr != nil { return errors.Join(cause, persistErr) }; return cause
 	}
-	delay := time.Duration(1<<min(job.AttemptCount, 6))*time.Second + time.Duration(rand.IntN(1000))*time.Millisecond
+	if errors.Is(cause, asr.ErrAuth) || errors.Is(cause, asr.ErrBudgetExceeded) || errors.Is(cause, asr.ErrInputRejected) || errors.Is(cause, resolver.ErrInvalidShareLink) || errors.Is(cause, resolver.ErrWorkUnavailable) || errors.Is(cause, media.ErrTooLarge) {
+		if persistErr := w.repo.Fail(context.Background(), job.ID, code, message, w.now().UTC()); persistErr != nil { return errors.Join(cause, persistErr) }; return cause
+	}
+	if errors.Is(cause, media.ErrFFmpeg) && job.AttemptCount >= 2 {
+		if persistErr := w.repo.Fail(context.Background(), job.ID, code, message, w.now().UTC()); persistErr != nil { return errors.Join(cause, persistErr) }; return cause
+	}
+	delay := asr.RetryAfter(cause, job.AttemptCount-1)
+	if delay <= 0 { delay = time.Duration(1<<min(job.AttemptCount, 6))*time.Second + time.Duration(rand.IntN(1000))*time.Millisecond }
 	if persistErr := w.repo.RetryLater(context.Background(), job.ID, owner, code, message, w.now().UTC().Add(delay), w.now().UTC()); persistErr != nil { return errors.Join(cause, persistErr) }; return cause
 }
 
 func (w *Worker) rollbackFile(file ownedfiles.File) { _ = w.storage.Remove(file); _ = w.repo.DeleteFileRecord(context.Background(), file.ID) }
 
 func mediaError(err error) (string, string) {
-	switch { case errors.Is(err, media.ErrTooLarge): return "MEDIA_TOO_LARGE", "视频超过允许的大小"; case errors.Is(err, resolver.ErrURLNotAllowed): return "URL_NOT_ALLOWED", "媒体地址不允许访问"; case errors.Is(err, resolver.ErrWorkUnavailable): return "DOUYIN_WORK_UNAVAILABLE", "作品不存在或不可访问"; case errors.Is(err, resolver.ErrResolveFailed), errors.Is(err, resolver.ErrInvalidShareLink): return "DOUYIN_RESOLVE_FAILED", "无法解析该作品"; default: return "MEDIA_DOWNLOAD_FAILED", "媒体下载失败" }
+	switch { case errors.Is(err, asr.ErrAuth): return "ASR_AUTH_FAILED", "语音识别服务认证失败"; case errors.Is(err, asr.ErrRateLimited): return "ASR_RATE_LIMITED", "语音识别服务限流"; case errors.Is(err, asr.ErrBudgetExceeded): return "ASR_BUDGET_EXCEEDED", "语音识别预算已达上限"; case errors.Is(err, asr.ErrFailed): return "ASR_FAILED", "语音识别失败"; case errors.Is(err, media.ErrFFmpeg): return "FFMPEG_FAILED", "音频处理失败"; case errors.Is(err, media.ErrTooLarge): return "MEDIA_TOO_LARGE", "视频超过允许的大小"; case errors.Is(err, resolver.ErrURLNotAllowed): return "URL_NOT_ALLOWED", "媒体地址不允许访问"; case errors.Is(err, resolver.ErrWorkUnavailable): return "DOUYIN_WORK_UNAVAILABLE", "作品不存在或不可访问"; case errors.Is(err, resolver.ErrResolveFailed), errors.Is(err, resolver.ErrInvalidShareLink): return "DOUYIN_RESOLVE_FAILED", "无法解析该作品"; default: return "MEDIA_DOWNLOAD_FAILED", "媒体下载失败" }
 }
 func classify(err error) string { code, _ := mediaError(err); return code }
 func safeMediaName(value string) string { value = filepath.Base(strings.TrimSpace(value)); if value == "." || value == "" { return "douyin-video" }; return value }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/audit"
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/asr"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/auth"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/cleanup"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/config"
@@ -52,7 +53,11 @@ func run() error {
 	resolverService := resolver.NewService(resolver.NewDouyin(resolver.NewSafeClient(10*time.Second, 4<<20)), resolver.NewSQLiteCache(db), cfg.ResolverCacheTTL, resolver.DouyinResolverVersion)
 	jobRepository := jobs.NewSQLiteRepository(db); jobService := jobs.NewService(jobRepository, resolverService)
 	fileRepository := ownedfiles.NewRepository(db); storage, err := ownedfiles.NewStorage(cfg.DataDir); if err != nil { return err }
-	worker := jobs.NewWorker(jobRepository, resolverService, media.NewHTTPDownloader(), fileRepository, storage, jobs.WorkerConfig{
+	signer := ownedfiles.NewSigner(signingKey, cfg.PublicBaseURL); primaryASR := asr.NewParaformer(cfg.DashScopeAPIKey, cfg.DashScopeEndpoint, cfg.ASRModel); primaryASR.VocabularyID = cfg.ASRVocabularyID
+	var fallbackASR asr.Provider; if cfg.SiliconFlowAPIKey != "" { fallbackASR = asr.NewSiliconFlow(cfg.SiliconFlowAPIKey, "", "") }
+	asrService := asr.NewService(primaryASR, fallbackASR, asr.NewRepository(db), asr.Budget{DailyCNY: cfg.DailyASRBudgetCNY, MonthlyCNY: cfg.MonthlyASRBudgetCNY, PricePerMinuteCNY: cfg.ASRPricePerMinuteCNY})
+	transcriber := &jobs.Transcriber{ASR: asrService, FFmpeg: media.FFmpeg{Path: cfg.FFmpegPath, Timeout: 30*time.Minute, LogLimit: 16*1024}, Probe: media.Probe{Path: cfg.FFprobePath, Timeout: time.Minute}, Signer: signer, FileRepo: fileRepository, Storage: storage, TempRetention: cfg.TempRetention}
+	worker := jobs.NewWorker(jobRepository, resolverService, media.NewHTTPDownloader(), fileRepository, storage, transcriber, jobs.WorkerConfig{
 		Owner: "server", Concurrency: cfg.WorkerConcurrency, Lease: 60*time.Second, Heartbeat: 15*time.Second,
 		Poll: time.Second, MaxVideoBytes: cfg.MaxVideoBytes, VideoRetention: cfg.VideoRetention,
 	})
@@ -67,7 +72,7 @@ func run() error {
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler: httpapi.New(httpapi.Dependencies{
-			Build: version.Current(), Auth: authService, Jobs: jobService, Files: fileRepository, Storage: storage, Audit: audit.New(db, signingKey),
+			Build: version.Current(), Auth: authService, Jobs: jobService, Files: fileRepository, Storage: storage, ASRSigner: signer, Audit: audit.New(db, signingKey),
 			Ready: readiness, LoginRateLimit: cfg.LoginRateLimit,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,

@@ -14,6 +14,6 @@ func TestOpenRunsMigrationsIdempotently(t *testing.T) {
 	if err := Migrate(context.Background(), db); err != nil { t.Fatalf("second Migrate() error = %v", err) }
 	var count int
 	if err := db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil { t.Fatal(err) }
-	if count != 3 { t.Fatalf("migration count = %d", count) }
+	if count != 4 { t.Fatalf("migration count = %d", count) }
 }
 

@@ -48,6 +48,7 @@ func (r *Repository) FindOwned(ctx context.Context, userID, fileID string) (File
 		size_bytes, sha256, expires_at, created_at FROM files WHERE id = ? AND user_id = ? AND deleted_at IS NULL`, fileID, userID)
 	return scanFile(row)
 }
+func (r *Repository) FindByID(ctx context.Context, fileID string) (File, error) { row := r.db.QueryRowContext(ctx, `SELECT id, user_id, job_id, kind, relative_path, original_name, mime_type, size_bytes, sha256, expires_at, created_at FROM files WHERE id = ? AND deleted_at IS NULL`, fileID); return scanFile(row) }
 
 func (r *Repository) ListByJob(ctx context.Context, userID, jobID string) ([]File, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id, user_id, job_id, kind, relative_path, original_name, mime_type,
@@ -91,12 +92,15 @@ func (s *Storage) NewTarget(userID, jobID, extension string) (relative, temporar
 	if err = os.MkdirAll(filepath.Dir(final), 0o700); err != nil { return "", "", "", err }
 	temporary = final + ".part"; return relative, temporary, final, nil
 }
+func (s *Storage) NewScopedTarget(scope, userID, jobID, extension string) (relative, temporary, final string, err error) { if !safeSegment(scope) || !safeSegment(userID) || !safeSegment(jobID) || extension == "" || len(extension) > 10 || strings.ContainsAny(extension, `/\\`) { return "", "", "", errors.New("unsafe storage target") }; relative = filepath.Join(scope, userID, jobID, randomName()+extension); final, err = s.Resolve(relative); if err != nil { return "", "", "", err }; if err = os.MkdirAll(filepath.Dir(final), 0o700); err != nil { return "", "", "", err }; return relative, final+".part", final, nil }
+func (s *Storage) WriteAtomic(temporary, final string, body []byte) error { file, err := os.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); if err != nil { return err }; keep := false; defer func() { file.Close(); if !keep { os.Remove(temporary) } }(); if _, err := file.Write(body); err != nil { return err }; if err := file.Sync(); err != nil { return err }; if err := file.Close(); err != nil { return err }; if err := os.Rename(temporary, final); err != nil { return err }; keep = true; return nil }
 
 func (s *Storage) Resolve(relative string) (string, error) {
 	if relative == "" || filepath.IsAbs(relative) { return "", errors.New("unsafe relative path") }
 	target := filepath.Clean(filepath.Join(s.root, relative)); relation, err := filepath.Rel(s.root, target)
 	if err != nil || relation == "." || relation == ".." || strings.HasPrefix(relation, ".."+string(os.PathSeparator)) || filepath.IsAbs(relation) { return "", errors.New("path escapes data root") }; return target, nil
 }
+func (s *Storage) Relative(path string) (string, error) { absolute, err := filepath.Abs(path); if err != nil { return "", err }; relative, err := filepath.Rel(s.root, absolute); if err != nil { return "", err }; if _, err := s.Resolve(relative); err != nil { return "", err }; return relative, nil }
 
 func (s *Storage) Open(file File) (*os.File, error) { path, err := s.Resolve(file.RelativePath); if err != nil { return nil, err }; return os.Open(path) }
 func (s *Storage) Remove(file File) error { path, err := s.Resolve(file.RelativePath); if err != nil { return err }; err = os.Remove(path); if errors.Is(err, os.ErrNotExist) { return nil }; return err }

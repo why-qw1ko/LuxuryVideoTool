@@ -13,6 +13,8 @@ var (
 	ErrIdempotencyConflict = errors.New("idempotency key reused with different request")
 	ErrNotCancellable = errors.New("job not cancellable")
 	ErrNotRetryable = errors.New("job not retryable")
+	ErrNotDeletable = errors.New("job not deletable")
+	ErrInvalidOptions = errors.New("invalid job options")
 	ErrLeaseLost = errors.New("job lease lost")
 )
 
@@ -38,6 +40,9 @@ type Job struct {
 	AttemptCount   int            `json:"attemptCount"`
 	MaxAttempts    int            `json:"maxAttempts"`
 	LeaseOwner     string         `json:"-"`
+	KeepVideo      bool           `json:"-"`
+	LanguageHints  []string       `json:"-"`
+	Hotwords       []string       `json:"-"`
 }
 
 type JobError struct {
@@ -49,6 +54,25 @@ type CreateInput struct {
 	UserID, ShareText, IdempotencyKey string
 	Action string
 	Force bool
+	KeepVideo bool
+	LanguageHints []string
+	Hotwords []string
+}
+
+type ListInput struct {
+	UserID string
+	Query string
+	Status string
+	Action string
+	Limit int
+	Offset int
+}
+
+type JobPage struct {
+	Items []Job `json:"items"`
+	Total int `json:"total"`
+	Limit int `json:"limit"`
+	Offset int `json:"offset"`
 }
 
 type Step struct {
@@ -70,6 +94,8 @@ type Repository interface {
 	CompleteInfo(ctx context.Context, jobID string, work resolver.Work, at time.Time) error
 	Fail(ctx context.Context, jobID, code, message string, at time.Time) error
 	FindByID(ctx context.Context, userID, jobID string) (Job, error)
+	List(ctx context.Context, input ListInput) (JobPage, error)
+	Delete(ctx context.Context, userID, jobID string) error
 	CreateQueued(ctx context.Context, job Job) error
 	ClaimNext(ctx context.Context, owner string, now time.Time, lease time.Duration) (Job, error)
 	Heartbeat(ctx context.Context, jobID, owner string, now time.Time, lease time.Duration) error
@@ -86,6 +112,8 @@ type Repository interface {
 	FindFiles(ctx context.Context, userID, jobID string) ([]JobFile, error)
 	DeleteFileRecord(ctx context.Context, fileID string) error
 	FailExhaustedQueued(ctx context.Context, at time.Time) (int64, error)
+	CompleteTranscription(ctx context.Context, jobID, owner string, result map[string]any, at time.Time) error
+	DeleteFilesByKind(ctx context.Context, jobID, kind string) error
 }
 
 type JobFile struct { ID string `json:"id"`; Kind string `json:"kind"`; Name string `json:"name"`; MIMEType string `json:"mimeType"`; SizeBytes int64 `json:"sizeBytes"` }
