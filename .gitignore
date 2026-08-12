@@ -1,0 +1,39 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.jks
+key.properties
+
+# Go
+services/api_go/bin/
+services/api_go/coverage.out
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+coverage/
+apps/client_flutter/android/.gradle/
+apps/client_flutter/android/local.properties
+apps/client_flutter/windows/flutter/ephemeral/
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Runtime data
+data/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
