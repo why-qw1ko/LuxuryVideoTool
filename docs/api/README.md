@@ -18,8 +18,11 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 
 ## M2 作品信息任务
 
-- `POST /api/v1/jobs`：Bearer 鉴权，必须携带 `Idempotency-Key`；M2 仅接受 `action: "info"`。
+- `POST /api/v1/jobs`：Bearer 鉴权，必须携带 `Idempotency-Key`；当前接受 `info` 与 `download`。
 - `GET /api/v1/jobs/{id}`：只返回当前用户拥有的任务及结构化作品信息。
+- `POST /api/v1/jobs/{id}/cancel`：立即取消排队任务；本进程处理中任务协作终止下载/解析并持久化取消状态。
+- `POST /api/v1/jobs/{id}/retry`：将失败或已取消的任务重新入队。
+- `GET /api/v1/files/{id}`：鉴权、归属校验后流式返回文件，支持 Range。
 
 创建示例：
 
@@ -32,6 +35,8 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 ```
 
 解析结果缓存默认 6 小时，可用 `RESOLVER_CACHE_TTL` 调整。服务端仅访问 HTTPS 抖音白名单域名，重定向逐跳校验且最多 5 跳，DNS 返回任何非公网地址时拒绝请求。
+
+`download` 请求立即返回 `queued`；后台 Worker 默认单并发，持久化 Lease 为 60 秒、心跳为 15 秒，服务重启后重新领取过期任务。媒体临时写入后原子改名，登记 SHA-256、MIME 和字节数；视频默认保留 168 小时。
 
 Access Token 默认 15 分钟有效；Refresh Token 默认 30 天有效且数据库只保存 SHA-256 哈希。登录按“来源 IP + 规范化用户名”限制为默认每分钟 5 次。
 

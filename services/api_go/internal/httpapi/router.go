@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/audit"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/auth"
+	ownedfiles "github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/files"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/jobs"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/resolver"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/version"
@@ -25,6 +27,8 @@ type Dependencies struct {
 	Build          version.Info
 	Auth           *auth.Service
 	Jobs           *jobs.Service
+	Files          *ownedfiles.Repository
+	Storage        *ownedfiles.Storage
 	Audit          *audit.Recorder
 	Ready          Readiness
 	LoginRateLimit int
@@ -123,12 +127,33 @@ func New(deps Dependencies) http.Handler {
 			Options struct { Force bool `json:"force"` } `json:"options"`
 		}
 		if err := decodeJSON(w, r, &input); err != nil { return }
-		if input.Action != "info" || strings.TrimSpace(input.ShareText) == "" || len(input.ShareText) > 4096 { writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "M2 仅支持有效的 info 任务", false); return }
-		job, reused, err := deps.Jobs.CreateInfo(r.Context(), jobs.CreateInput{UserID: principal.UserID, ShareText: input.ShareText, IdempotencyKey: key, Force: input.Options.Force})
+		if (input.Action != "info" && input.Action != "download") || strings.TrimSpace(input.ShareText) == "" || len(input.ShareText) > 4096 { writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "仅支持有效的 info 或 download 任务", false); return }
+		var job jobs.Job; var reused bool; var err error
+		if input.Action == "info" { job, reused, err = deps.Jobs.CreateInfo(r.Context(), jobs.CreateInput{UserID: principal.UserID, ShareText: input.ShareText, IdempotencyKey: key, Force: input.Options.Force})
+		} else { job, reused, err = deps.Jobs.CreateDownload(r.Context(), jobs.CreateInput{UserID: principal.UserID, ShareText: input.ShareText, IdempotencyKey: key, Force: input.Options.Force}) }
 		if errors.Is(err, jobs.ErrIdempotencyConflict) { writeError(w, r, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "Idempotency-Key 已用于其他请求", false); return }
 		if err != nil { writeResolverError(w, r, err); return }
 		recordJobAudit(deps.Audit, r, principal.UserID, job.ID, reused, job.Status)
 		writeJSON(w, http.StatusAccepted, map[string]any{"job": job, "reused": reused, "requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("POST /api/v1/jobs/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context()); job, err := deps.Jobs.Cancel(r.Context(), principal.UserID, r.PathValue("id"))
+		if errors.Is(err, jobs.ErrNotFound) { writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在", false); return }
+		if errors.Is(err, jobs.ErrNotCancellable) { writeError(w, r, http.StatusConflict, "JOB_NOT_CANCELLABLE", "当前阶段不能即时取消", false); return }
+		if err != nil { writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "取消任务失败", true); return }; writeJSON(w, http.StatusOK, map[string]any{"job": job, "requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("POST /api/v1/jobs/{id}/retry", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context()); job, err := deps.Jobs.Retry(r.Context(), principal.UserID, r.PathValue("id"))
+		if errors.Is(err, jobs.ErrNotFound) { writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在", false); return }
+		if errors.Is(err, jobs.ErrNotRetryable) { writeError(w, r, http.StatusConflict, "JOB_NOT_RETRYABLE", "当前任务不能重试", false); return }
+		if err != nil { writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "重试任务失败", true); return }; writeJSON(w, http.StatusAccepted, map[string]any{"job": job, "requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("GET /api/v1/files/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if deps.Files == nil || deps.Storage == nil { writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true); return }
+		principal, _ := Principal(r.Context()); file, err := deps.Files.FindOwned(r.Context(), principal.UserID, r.PathValue("id"))
+		if errors.Is(err, ownedfiles.ErrNotFound) { writeError(w, r, http.StatusNotFound, "FILE_NOT_FOUND", "文件不存在", false); return }
+		if err != nil { writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取文件", true); return }
+		handleFileDownload(deps.Storage, file, w, r)
 	})
 	protected.HandleFunc("GET /api/v1/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if deps.Jobs == nil { writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true); return }
@@ -145,13 +170,24 @@ func New(deps Dependencies) http.Handler {
 		mux.Handle("DELETE /api/v1/admin/sessions/{id}", requireAuth(deps.Auth, protected))
 		mux.Handle("POST /api/v1/jobs", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/jobs/{id}", requireAuth(deps.Auth, protected))
+		mux.Handle("POST /api/v1/jobs/{id}/cancel", requireAuth(deps.Auth, protected))
+		mux.Handle("POST /api/v1/jobs/{id}/retry", requireAuth(deps.Auth, protected))
+		mux.Handle("GET /api/v1/files/{id}", requireAuth(deps.Auth, protected))
 	}
 	return requestMiddleware(deps.Build.Version, mux)
 }
 
+func handleFileDownload(storage *ownedfiles.Storage, file ownedfiles.File, w http.ResponseWriter, r *http.Request) {
+	handle, err := storage.Open(file); if err != nil { writeError(w, r, http.StatusNotFound, "FILE_NOT_FOUND", "文件不存在", false); return }; defer handle.Close()
+	stat, err := handle.Stat(); if err != nil { writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取文件", true); return }
+	w.Header().Set("Content-Type", file.MIMEType); w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(file.OriginalName))
+	http.ServeContent(w, r, file.OriginalName, stat.ModTime(), handle)
+}
+
 func recordJobAudit(recorder *audit.Recorder, r *http.Request, userID, jobID string, reused bool, status string) {
 	if recorder == nil { return }
-	if err := recorder.Record(r.Context(), audit.Event{ActorUserID: userID, Action: "job.info_create", TargetType: "job", TargetID: jobID, RequestID: RequestID(r.Context()), IP: remoteIP(r.RemoteAddr), Metadata: map[string]any{"reused": reused, "status": status}}); err != nil {
+	if err := recorder.Record(r.Context(), audit.Event{ActorUserID: userID, Action: "job.create", TargetType: "job", TargetID: jobID, RequestID: RequestID(r.Context()), IP: remoteIP(r.RemoteAddr), Metadata: map[string]any{"reused": reused, "status": status}}); err != nil {
 		slog.ErrorContext(r.Context(), "audit record failed", "service", "api", "request_id", RequestID(r.Context()), "user_id", userID, "event", "audit_failure", "error_code", "AUDIT_WRITE_FAILED")
 	}
 }

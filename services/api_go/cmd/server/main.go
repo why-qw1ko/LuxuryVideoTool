@@ -12,10 +12,13 @@ import (
 
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/audit"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/auth"
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/cleanup"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/config"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/database"
+	ownedfiles "github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/files"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/httpapi"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/jobs"
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/media"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/resolver"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/version"
 )
@@ -47,7 +50,14 @@ func run() error {
 	authService, err := auth.NewService(auth.NewSQLiteRepository(db), tokenManager, cfg.RefreshTokenTTL)
 	if err != nil { return err }
 	resolverService := resolver.NewService(resolver.NewDouyin(resolver.NewSafeClient(10*time.Second, 4<<20)), resolver.NewSQLiteCache(db), cfg.ResolverCacheTTL, resolver.DouyinResolverVersion)
-	jobService := jobs.NewService(jobs.NewSQLiteRepository(db), resolverService)
+	jobRepository := jobs.NewSQLiteRepository(db); jobService := jobs.NewService(jobRepository, resolverService)
+	fileRepository := ownedfiles.NewRepository(db); storage, err := ownedfiles.NewStorage(cfg.DataDir); if err != nil { return err }
+	worker := jobs.NewWorker(jobRepository, resolverService, media.NewHTTPDownloader(), fileRepository, storage, jobs.WorkerConfig{
+		Owner: "server", Concurrency: cfg.WorkerConcurrency, Lease: 60*time.Second, Heartbeat: 15*time.Second,
+		Poll: time.Second, MaxVideoBytes: cfg.MaxVideoBytes, VideoRetention: cfg.VideoRetention,
+	})
+	jobService.SetForceCancel(worker.Cancel)
+	cleanupService := cleanup.New(fileRepository, storage, time.Hour)
 	readiness := func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -57,7 +67,7 @@ func run() error {
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler: httpapi.New(httpapi.Dependencies{
-			Build: version.Current(), Auth: authService, Jobs: jobService, Audit: audit.New(db, signingKey),
+			Build: version.Current(), Auth: authService, Jobs: jobService, Files: fileRepository, Storage: storage, Audit: audit.New(db, signingKey),
 			Ready: readiness, LoginRateLimit: cfg.LoginRateLimit,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -68,6 +78,7 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	workerErr := make(chan error, 1); go func() { workerErr <- worker.Run(ctx) }(); go cleanupService.Run(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -76,6 +87,8 @@ func run() error {
 	}()
 
 	select {
+	case err := <-workerErr:
+		if err != nil { return err }; return nil
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil

@@ -11,6 +11,9 @@ import (
 var (
 	ErrNotFound = errors.New("job not found")
 	ErrIdempotencyConflict = errors.New("idempotency key reused with different request")
+	ErrNotCancellable = errors.New("job not cancellable")
+	ErrNotRetryable = errors.New("job not retryable")
+	ErrLeaseLost = errors.New("job lease lost")
 )
 
 type Job struct {
@@ -32,6 +35,9 @@ type Job struct {
 	CreatedAt      time.Time      `json:"createdAt"`
 	UpdatedAt      time.Time      `json:"updatedAt"`
 	CompletedAt    *time.Time     `json:"completedAt,omitempty"`
+	AttemptCount   int            `json:"attemptCount"`
+	MaxAttempts    int            `json:"maxAttempts"`
+	LeaseOwner     string         `json:"-"`
 }
 
 type JobError struct {
@@ -41,7 +47,21 @@ type JobError struct {
 
 type CreateInput struct {
 	UserID, ShareText, IdempotencyKey string
+	Action string
 	Force bool
+}
+
+type Step struct {
+	ID string
+	JobID string
+	Name string
+	Attempt int
+	Status string
+	StartedAt time.Time
+	CompletedAt *time.Time
+	Details map[string]any
+	ErrorCode string
+	ErrorMessage string
 }
 
 type Repository interface {
@@ -50,4 +70,22 @@ type Repository interface {
 	CompleteInfo(ctx context.Context, jobID string, work resolver.Work, at time.Time) error
 	Fail(ctx context.Context, jobID, code, message string, at time.Time) error
 	FindByID(ctx context.Context, userID, jobID string) (Job, error)
+	CreateQueued(ctx context.Context, job Job) error
+	ClaimNext(ctx context.Context, owner string, now time.Time, lease time.Duration) (Job, error)
+	Heartbeat(ctx context.Context, jobID, owner string, now time.Time, lease time.Duration) error
+	SetResolved(ctx context.Context, jobID, owner string, work resolver.Work, at time.Time) error
+	SetStage(ctx context.Context, jobID, owner, status string, progress int, message string, at time.Time) error
+	CompleteDownload(ctx context.Context, jobID, owner string, fileID string, at time.Time) error
+	RetryLater(ctx context.Context, jobID, owner, code, message string, retryAt, at time.Time) error
+	CancelOwned(ctx context.Context, jobID, owner, message string, at time.Time) error
+	Cancel(ctx context.Context, userID, jobID string, at time.Time) (bool, error)
+	Retry(ctx context.Context, userID, jobID string, at time.Time) error
+	Recover(ctx context.Context, now time.Time) (int64, error)
+	BeginStep(ctx context.Context, step Step) error
+	FinishStep(ctx context.Context, stepID, status, code, message string, details map[string]any, at time.Time) error
+	FindFiles(ctx context.Context, userID, jobID string) ([]JobFile, error)
+	DeleteFileRecord(ctx context.Context, fileID string) error
+	FailExhaustedQueued(ctx context.Context, at time.Time) (int64, error)
 }
+
+type JobFile struct { ID string `json:"id"`; Kind string `json:"kind"`; Name string `json:"name"`; MIMEType string `json:"mimeType"`; SizeBytes int64 `json:"sizeBytes"` }

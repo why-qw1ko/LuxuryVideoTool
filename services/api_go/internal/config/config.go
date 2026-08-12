@@ -21,6 +21,12 @@ type Config struct {
 	RefreshTokenTTL   time.Duration
 	LoginRateLimit    int
 	ResolverCacheTTL  time.Duration
+	WorkerConcurrency int
+	FFmpegPath        string
+	FFprobePath       string
+	MaxVideoBytes     int64
+	VideoRetention    time.Duration
+	TempRetention     time.Duration
 }
 
 func Load() (Config, error) {
@@ -50,6 +56,10 @@ func Load() (Config, error) {
 	}
 	resolverCacheTTL, err := durationEnv("RESOLVER_CACHE_TTL", 6*time.Hour)
 	if err != nil { return Config{}, err }
+	workerConcurrency, err := boundedIntEnv("WORKER_CONCURRENCY", 1, 1, 2); if err != nil { return Config{}, err }
+	maxVideoBytes, err := positiveInt64Env("MAX_VIDEO_BYTES", 2*1024*1024*1024); if err != nil { return Config{}, err }
+	videoHours, err := positiveIntEnv("RETENTION_VIDEO_HOURS", 168); if err != nil { return Config{}, err }
+	tempHours, err := positiveIntEnv("RETENTION_TEMP_HOURS", 24); if err != nil { return Config{}, err }
 
 	cfg := Config{
 		HTTPAddr:          addr,
@@ -61,6 +71,12 @@ func Load() (Config, error) {
 		RefreshTokenTTL:   refreshTTL,
 		LoginRateLimit:    loginLimit,
 		ResolverCacheTTL:  resolverCacheTTL,
+		WorkerConcurrency: workerConcurrency,
+		FFmpegPath:        stringEnv("FFMPEG_PATH", "ffmpeg"),
+		FFprobePath:       stringEnv("FFPROBE_PATH", "ffprobe"),
+		MaxVideoBytes:     maxVideoBytes,
+		VideoRetention:    time.Duration(videoHours)*time.Hour,
+		TempRetention:     time.Duration(tempHours)*time.Hour,
 	}
 	if cfg.JWTSigningKeyFile == "" {
 		return Config{}, fmt.Errorf("JWT_SIGNING_KEY_FILE is required")
@@ -101,3 +117,6 @@ func positiveIntEnv(name string, fallback int) (int, error) {
 	}
 	return value, nil
 }
+
+func boundedIntEnv(name string, fallback, minValue, maxValue int) (int, error) { value, err := positiveIntEnv(name, fallback); if err != nil { return 0, err }; if value < minValue || value > maxValue { return 0, fmt.Errorf("%s must be between %d and %d", name, minValue, maxValue) }; return value, nil }
+func positiveInt64Env(name string, fallback int64) (int64, error) { raw := strings.TrimSpace(os.Getenv(name)); if raw == "" { return fallback, nil }; value, err := strconv.ParseInt(raw, 10, 64); if err != nil || value <= 0 { return 0, fmt.Errorf("%s must be a positive integer", name) }; return value, nil }
