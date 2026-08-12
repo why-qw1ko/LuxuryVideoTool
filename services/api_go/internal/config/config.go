@@ -4,14 +4,22 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const defaultHTTPAddr = "127.0.0.1:8080"
 
 type Config struct {
-	HTTPAddr string
-	LogLevel slog.Level
+	HTTPAddr          string
+	LogLevel          slog.Level
+	DatabasePath      string
+	DataDir           string
+	JWTSigningKeyFile string
+	AccessTokenTTL    time.Duration
+	RefreshTokenTTL   time.Duration
+	LoginRateLimit    int
 }
 
 func Load() (Config, error) {
@@ -27,6 +35,65 @@ func Load() (Config, error) {
 		}
 	}
 
-	return Config{HTTPAddr: addr, LogLevel: level}, nil
+	accessTTL, err := durationEnv("ACCESS_TOKEN_TTL", 15*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	refreshTTL, err := durationEnv("REFRESH_TOKEN_TTL", 30*24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	loginLimit, err := positiveIntEnv("LOGIN_RATE_LIMIT_PER_MINUTE", 5)
+	if err != nil {
+		return Config{}, err
+	}
+
+	cfg := Config{
+		HTTPAddr:          addr,
+		LogLevel:          level,
+		DatabasePath:      stringEnv("DATABASE_PATH", "./data/app.db"),
+		DataDir:           stringEnv("DATA_DIR", "./data"),
+		JWTSigningKeyFile: strings.TrimSpace(os.Getenv("JWT_SIGNING_KEY_FILE")),
+		AccessTokenTTL:    accessTTL,
+		RefreshTokenTTL:   refreshTTL,
+		LoginRateLimit:    loginLimit,
+	}
+	if cfg.JWTSigningKeyFile == "" {
+		return Config{}, fmt.Errorf("JWT_SIGNING_KEY_FILE is required")
+	}
+	if len(cfg.DatabasePath) > 4096 || len(cfg.DataDir) > 4096 || len(cfg.JWTSigningKeyFile) > 4096 {
+		return Config{}, fmt.Errorf("configured path is too long")
+	}
+	return cfg, nil
 }
 
+func stringEnv(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func durationEnv(name string, fallback time.Duration) (time.Duration, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration", name)
+	}
+	return value, nil
+}
+
+func positiveIntEnv(name string, fallback int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", name)
+	}
+	return value, nil
+}

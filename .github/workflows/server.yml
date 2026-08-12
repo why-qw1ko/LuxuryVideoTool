@@ -1,14 +1,7 @@
 name: Server
 
 on:
-  push:
-    paths:
-      - services/api_go/**
-      - .github/workflows/server.yml
-  pull_request:
-    paths:
-      - services/api_go/**
-      - .github/workflows/server.yml
+  workflow_dispatch:
 
 permissions:
   contents: read

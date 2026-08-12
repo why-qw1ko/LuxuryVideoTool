@@ -8,6 +8,7 @@ import (
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("HTTP_ADDR", "")
 	t.Setenv("LOG_LEVEL", "")
+	t.Setenv("JWT_SIGNING_KEY_FILE", "test.key")
 
 	cfg, err := Load()
 	if err != nil {
@@ -23,9 +24,16 @@ func TestLoadDefaults(t *testing.T) {
 
 func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 	t.Setenv("LOG_LEVEL", "verbose")
+	t.Setenv("JWT_SIGNING_KEY_FILE", "test.key")
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want invalid log level error")
 	}
 }
 
+func TestLoadRequiresSigningKeyFile(t *testing.T) {
+	t.Setenv("JWT_SIGNING_KEY_FILE", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want missing signing key error")
+	}
+}

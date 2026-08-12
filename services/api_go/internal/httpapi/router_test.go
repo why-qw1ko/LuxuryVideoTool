@@ -13,7 +13,7 @@ func TestLiveHealth(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/health/live", nil)
 
-	New(version.Info{Version: "test"}).ServeHTTP(recorder, request)
+	New(Dependencies{Build: version.Info{Version: "test"}, LoginRateLimit: 5}).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
@@ -23,3 +23,10 @@ func TestLiveHealth(t *testing.T) {
 	}
 }
 
+func TestReadinessFailure(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	New(Dependencies{Build: version.Info{Version: "test"}, LoginRateLimit: 5}).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusServiceUnavailable { t.Fatalf("status = %d", recorder.Code) }
+	if recorder.Header().Get("X-Request-ID") == "" { t.Fatal("missing request id") }
+}
