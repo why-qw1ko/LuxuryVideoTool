@@ -16,6 +16,23 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 - `DELETE /api/v1/auth/sessions/{id}`：撤销当前用户指定会话。
 - `DELETE /api/v1/admin/sessions/{id}`：管理员撤销任意用户会话。
 
+## M2 作品信息任务
+
+- `POST /api/v1/jobs`：Bearer 鉴权，必须携带 `Idempotency-Key`；M2 仅接受 `action: "info"`。
+- `GET /api/v1/jobs/{id}`：只返回当前用户拥有的任务及结构化作品信息。
+
+创建示例：
+
+```json
+{
+  "shareText": "复制打开抖音 https://v.douyin.com/xxx/",
+  "action": "info",
+  "options": {"force": false}
+}
+```
+
+解析结果缓存默认 6 小时，可用 `RESOLVER_CACHE_TTL` 调整。服务端仅访问 HTTPS 抖音白名单域名，重定向逐跳校验且最多 5 跳，DNS 返回任何非公网地址时拒绝请求。
+
 Access Token 默认 15 分钟有效；Refresh Token 默认 30 天有效且数据库只保存 SHA-256 哈希。登录按“来源 IP + 规范化用户名”限制为默认每分钟 5 次。
 
 存活探针响应示例：

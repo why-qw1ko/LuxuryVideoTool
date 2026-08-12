@@ -15,6 +15,8 @@ import (
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/config"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/database"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/httpapi"
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/jobs"
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/resolver"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/version"
 )
 
@@ -44,6 +46,8 @@ func run() error {
 	if err != nil { return err }
 	authService, err := auth.NewService(auth.NewSQLiteRepository(db), tokenManager, cfg.RefreshTokenTTL)
 	if err != nil { return err }
+	resolverService := resolver.NewService(resolver.NewDouyin(resolver.NewSafeClient(10*time.Second, 4<<20)), resolver.NewSQLiteCache(db), cfg.ResolverCacheTTL, resolver.DouyinResolverVersion)
+	jobService := jobs.NewService(jobs.NewSQLiteRepository(db), resolverService)
 	readiness := func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -53,7 +57,7 @@ func run() error {
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler: httpapi.New(httpapi.Dependencies{
-			Build: version.Current(), Auth: authService, Audit: audit.New(db, signingKey),
+			Build: version.Current(), Auth: authService, Jobs: jobService, Audit: audit.New(db, signingKey),
 			Ready: readiness, LoginRateLimit: cfg.LoginRateLimit,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,

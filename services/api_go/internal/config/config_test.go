@@ -3,6 +3,7 @@ package config
 import (
 	"log/slog"
 	"testing"
+	"time"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -20,6 +21,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.LogLevel != slog.LevelInfo {
 		t.Fatalf("LogLevel = %v, want info", cfg.LogLevel)
 	}
+	if cfg.ResolverCacheTTL != 6*time.Hour { t.Fatalf("ResolverCacheTTL = %v", cfg.ResolverCacheTTL) }
 }
 
 func TestLoadRejectsInvalidLogLevel(t *testing.T) {

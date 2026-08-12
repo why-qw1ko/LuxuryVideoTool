@@ -20,6 +20,7 @@ type Config struct {
 	AccessTokenTTL    time.Duration
 	RefreshTokenTTL   time.Duration
 	LoginRateLimit    int
+	ResolverCacheTTL  time.Duration
 }
 
 func Load() (Config, error) {
@@ -47,6 +48,8 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	resolverCacheTTL, err := durationEnv("RESOLVER_CACHE_TTL", 6*time.Hour)
+	if err != nil { return Config{}, err }
 
 	cfg := Config{
 		HTTPAddr:          addr,
@@ -57,6 +60,7 @@ func Load() (Config, error) {
 		AccessTokenTTL:    accessTTL,
 		RefreshTokenTTL:   refreshTTL,
 		LoginRateLimit:    loginLimit,
+		ResolverCacheTTL:  resolverCacheTTL,
 	}
 	if cfg.JWTSigningKeyFile == "" {
 		return Config{}, fmt.Errorf("JWT_SIGNING_KEY_FILE is required")

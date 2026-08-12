@@ -12,6 +12,8 @@ import (
 
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/audit"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/auth"
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/jobs"
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/resolver"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/version"
 )
 
@@ -22,6 +24,7 @@ type Readiness func() error
 type Dependencies struct {
 	Build          version.Info
 	Auth           *auth.Service
+	Jobs           *jobs.Service
 	Audit          *audit.Recorder
 	Ready          Readiness
 	LoginRateLimit int
@@ -109,13 +112,57 @@ func New(deps Dependencies) http.Handler {
 		recordAudit(deps.Audit, r, principal.UserID, "admin.session_revoke", r.PathValue("id"), nil)
 		writeJSON(w, http.StatusOK, map[string]any{"requestId": RequestID(r.Context())})
 	})
+	protected.HandleFunc("POST /api/v1/jobs", func(w http.ResponseWriter, r *http.Request) {
+		if deps.Jobs == nil { writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true); return }
+		principal, _ := Principal(r.Context())
+		key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+		if key == "" || len(key) > 128 { writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "缺少有效的 Idempotency-Key", false); return }
+		var input struct {
+			ShareText string `json:"shareText"`
+			Action string `json:"action"`
+			Options struct { Force bool `json:"force"` } `json:"options"`
+		}
+		if err := decodeJSON(w, r, &input); err != nil { return }
+		if input.Action != "info" || strings.TrimSpace(input.ShareText) == "" || len(input.ShareText) > 4096 { writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "M2 仅支持有效的 info 任务", false); return }
+		job, reused, err := deps.Jobs.CreateInfo(r.Context(), jobs.CreateInput{UserID: principal.UserID, ShareText: input.ShareText, IdempotencyKey: key, Force: input.Options.Force})
+		if errors.Is(err, jobs.ErrIdempotencyConflict) { writeError(w, r, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "Idempotency-Key 已用于其他请求", false); return }
+		if err != nil { writeResolverError(w, r, err); return }
+		recordJobAudit(deps.Audit, r, principal.UserID, job.ID, reused, job.Status)
+		writeJSON(w, http.StatusAccepted, map[string]any{"job": job, "reused": reused, "requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("GET /api/v1/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if deps.Jobs == nil { writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true); return }
+		principal, _ := Principal(r.Context())
+		job, err := deps.Jobs.Get(r.Context(), principal.UserID, r.PathValue("id"))
+		if errors.Is(err, jobs.ErrNotFound) { writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在", false); return }
+		if err != nil { writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务", true); return }
+		writeJSON(w, http.StatusOK, map[string]any{"job": job, "requestId": RequestID(r.Context())})
+	})
 	if deps.Auth != nil {
 		mux.Handle("POST /api/v1/auth/logout", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/auth/sessions", requireAuth(deps.Auth, protected))
 		mux.Handle("DELETE /api/v1/auth/sessions/{id}", requireAuth(deps.Auth, protected))
 		mux.Handle("DELETE /api/v1/admin/sessions/{id}", requireAuth(deps.Auth, protected))
+		mux.Handle("POST /api/v1/jobs", requireAuth(deps.Auth, protected))
+		mux.Handle("GET /api/v1/jobs/{id}", requireAuth(deps.Auth, protected))
 	}
 	return requestMiddleware(deps.Build.Version, mux)
+}
+
+func recordJobAudit(recorder *audit.Recorder, r *http.Request, userID, jobID string, reused bool, status string) {
+	if recorder == nil { return }
+	if err := recorder.Record(r.Context(), audit.Event{ActorUserID: userID, Action: "job.info_create", TargetType: "job", TargetID: jobID, RequestID: RequestID(r.Context()), IP: remoteIP(r.RemoteAddr), Metadata: map[string]any{"reused": reused, "status": status}}); err != nil {
+		slog.ErrorContext(r.Context(), "audit record failed", "service", "api", "request_id", RequestID(r.Context()), "user_id", userID, "event", "audit_failure", "error_code", "AUDIT_WRITE_FAILED")
+	}
+}
+
+func writeResolverError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, resolver.ErrInvalidShareLink): writeError(w, r, http.StatusBadRequest, "INVALID_SHARE_LINK", "未找到有效的抖音作品链接", false)
+	case errors.Is(err, resolver.ErrURLNotAllowed): writeError(w, r, http.StatusBadRequest, "URL_NOT_ALLOWED", "链接目标不允许访问", false)
+	case errors.Is(err, resolver.ErrWorkUnavailable): writeError(w, r, http.StatusNotFound, "DOUYIN_WORK_UNAVAILABLE", "作品不存在或不可访问", false)
+	default: writeError(w, r, http.StatusUnprocessableEntity, "DOUYIN_RESOLVE_FAILED", "无法解析该作品，请确认链接仍然有效", false)
+	}
 }
 
 func handleLogin(deps Dependencies, limiter *loginLimiter, w http.ResponseWriter, r *http.Request) {
