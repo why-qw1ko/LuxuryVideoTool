@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -17,7 +18,9 @@ import (
 	ownedfiles "github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/files"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/jobs"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/resolver"
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/settings"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/version"
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/web"
 )
 
 const maxAuthBodyBytes = 16 * 1024
@@ -34,6 +37,8 @@ type Dependencies struct {
 	Audit          *audit.Recorder
 	Ready          Readiness
 	LoginRateLimit int
+	Settings       *settings.Service
+	AliyunAvailable bool
 }
 
 type healthResponse struct {
@@ -118,6 +123,27 @@ func New(deps Dependencies) http.Handler {
 		recordAudit(deps.Audit, r, principal.UserID, "admin.session_revoke", r.PathValue("id"), nil)
 		writeJSON(w, http.StatusOK, map[string]any{"requestId": RequestID(r.Context())})
 	})
+	protected.HandleFunc("GET /api/v1/admin/settings/providers", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context()); if principal.Role != auth.RoleAdmin { writeError(w, r, http.StatusForbidden, "FORBIDDEN", "仅管理员可查看 API 配置", false); return }
+		if deps.Settings == nil { writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "配置服务尚未就绪", true); return }
+		status, err := deps.Settings.Status(r.Context()); if err != nil { writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取 API 配置", true); return }; status.AliyunAvailable = deps.AliyunAvailable
+		writeJSON(w, http.StatusOK, map[string]any{"providers": status, "requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("PUT /api/v1/admin/settings/providers", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context()); if principal.Role != auth.RoleAdmin { writeError(w, r, http.StatusForbidden, "FORBIDDEN", "仅管理员可修改 API 配置", false); return }
+		if !secureSettingsRequest(r) { writeError(w, r, http.StatusForbidden, "HTTPS_REQUIRED", "远程配置 API Key 必须使用 HTTPS", false); return }
+		if deps.Settings == nil { writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "配置服务尚未就绪", true); return }
+		var input struct { AliyunAPIKey *string `json:"aliyunApiKey"`; SiliconFlowAPIKey *string `json:"siliconFlowApiKey"` }
+		if err := decodeJSON(w, r, &input); err != nil { return }; if input.AliyunAPIKey == nil && input.SiliconFlowAPIKey == nil { writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "至少提交一个 API Key", false); return }
+		if input.AliyunAPIKey != nil { if err := deps.Settings.Set(r.Context(), settings.AliyunKey, *input.AliyunAPIKey, principal.UserID); err != nil { writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "阿里 API Key 无效", false); return } }
+		if input.SiliconFlowAPIKey != nil { if err := deps.Settings.Set(r.Context(), settings.SiliconFlowKey, *input.SiliconFlowAPIKey, principal.UserID); err != nil { writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "硅基流动 API Key 无效", false); return } }
+		recordAudit(deps.Audit, r, principal.UserID, "admin.provider_settings.update", "", map[string]any{"aliyunChanged": input.AliyunAPIKey != nil, "siliconFlowChanged": input.SiliconFlowAPIKey != nil})
+		status, _ := deps.Settings.Status(r.Context()); status.AliyunAvailable = deps.AliyunAvailable; writeJSON(w, http.StatusOK, map[string]any{"providers": status, "requestId": RequestID(r.Context())})
+	})
+	webFiles, err := fs.Sub(web.Files, "static")
+	if err != nil { panic("invalid embedded web assets: " + err.Error()) }
+	webHandler := http.FileServer(http.FS(webFiles))
+	mux.Handle("GET /", webHandler)
 	protected.HandleFunc("POST /api/v1/jobs", func(w http.ResponseWriter, r *http.Request) {
 		if deps.Jobs == nil { writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true); return }
 		principal, _ := Principal(r.Context())
@@ -202,6 +228,8 @@ func New(deps Dependencies) http.Handler {
 		mux.Handle("GET /api/v1/auth/sessions", requireAuth(deps.Auth, protected))
 		mux.Handle("DELETE /api/v1/auth/sessions/{id}", requireAuth(deps.Auth, protected))
 		mux.Handle("DELETE /api/v1/admin/sessions/{id}", requireAuth(deps.Auth, protected))
+		mux.Handle("GET /api/v1/admin/settings/providers", requireAuth(deps.Auth, protected))
+		mux.Handle("PUT /api/v1/admin/settings/providers", requireAuth(deps.Auth, protected))
 		mux.Handle("POST /api/v1/jobs", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/jobs", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/jobs/{id}", requireAuth(deps.Auth, protected))
@@ -289,4 +317,10 @@ func remoteIP(value string) string {
 	host, _, err := net.SplitHostPort(value)
 	if err == nil { return host }
 	return strings.TrimSpace(value)
+}
+
+func secureSettingsRequest(r *http.Request) bool {
+	if r.TLS != nil { return true }
+	address := net.ParseIP(remoteIP(r.RemoteAddr))
+	return address != nil && address.IsLoopback()
 }

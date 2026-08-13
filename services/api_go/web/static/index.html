@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Douyin Capture</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header><div><h1>Douyin Capture</h1><p>私有化抖音内容提取</p></div><button id="logout" class="ghost hidden">退出</button></header>
+    <section id="notice" class="notice hidden" role="alert"></section>
+
+    <section id="login" class="panel narrow">
+      <h2>登录</h2>
+      <form id="api-form" class="api-form">
+        <label>API 服务地址<input id="api-url" type="url" placeholder="http://127.0.0.1:8080" required></label>
+        <button type="submit" class="ghost">连接此服务</button>
+      </form>
+      <hr>
+      <form id="login-form">
+        <label>用户名<input id="username" autocomplete="username" maxlength="64" required></label>
+        <label>密码<input id="password" type="password" autocomplete="current-password" maxlength="1024" required></label>
+        <button type="submit">登录</button>
+      </form>
+    </section>
+
+    <div id="app" class="hidden">
+      <section id="provider-settings" class="panel hidden">
+        <h2>大模型 API Key</h2>
+        <p class="meta">你只需输入抖音链接；服务端会自动下载视频、提取临时音频并上传硅基流动。阿里云作为可选备用，需要公网 HTTPS 地址。密钥加密保存且不会回显。</p>
+        <form id="provider-form">
+          <label>阿里云 DashScope API Key<input id="aliyun-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="当前状态：未配置"></label>
+          <label class="check"><input id="clear-aliyun" type="checkbox">清除阿里云 Key</label>
+          <label>硅基流动 API Key<input id="silicon-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="当前状态：未配置"></label>
+          <label class="check"><input id="clear-silicon" type="checkbox">清除硅基流动 Key</label>
+          <button type="submit">安全保存</button>
+        </form>
+      </section>
+      <section class="panel">
+        <h2>新建任务</h2>
+        <form id="capture-form">
+          <label>抖音分享文本<textarea id="share-text" rows="4" maxlength="4096" placeholder="粘贴完整分享文本或作品链接" required></textarea></label>
+          <div class="row">
+            <label>处理方式<select id="action"><option value="info">仅解析信息</option><option value="download">下载视频</option><option value="transcribe">提取口播</option><option value="full">完整处理并保留视频</option></select></label>
+            <button type="submit">提交</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="title-row"><div><h2>历史任务</h2><p class="meta">当前 API：<span id="current-api"></span></p></div><button id="refresh" class="ghost">刷新</button></div>
+        <form id="search-form" class="row"><input id="query" placeholder="搜索标题、作者或分享文本"><select id="status"><option value="">全部状态</option><option value="completed">已完成</option><option value="failed">失败</option><option value="queued">排队中</option></select><button type="submit" class="ghost">搜索</button></form>
+        <div id="jobs" class="jobs"></div>
+      </section>
+    </div>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>

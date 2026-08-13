@@ -35,6 +35,8 @@ jobs:
           LDFLAGS="-s -w -X github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/version.Version=$VERSION -X github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/version.Commit=$COMMIT -X github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/version.BuildTime=$BUILD_TIME"
           GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o bin/douyin-capture-linux-amd64 ./cmd/server
           GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o bin/douyin-capture-linux-arm64 ./cmd/server
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o bin/douyin-capture-admin-linux-amd64 ./cmd/admin
+          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o bin/douyin-capture-admin-linux-arm64 ./cmd/admin
           sha256sum bin/* > bin/SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:

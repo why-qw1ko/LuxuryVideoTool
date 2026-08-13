@@ -91,8 +91,8 @@ func Load() (Config, error) {
 		VideoRetention:    time.Duration(videoHours)*time.Hour,
 		TempRetention:     time.Duration(tempHours)*time.Hour,
 		PublicBaseURL:     strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")), "/"),
-		ASRProvider:       stringEnv("ASR_PROVIDER", "aliyun_paraformer"),
-		ASRModel:          stringEnv("ASR_MODEL", "paraformer-v2"),
+		ASRProvider:       stringEnv("ASR_PROVIDER", "siliconflow_sensevoice"),
+		ASRModel:          stringEnv("ASR_MODEL", "FunAudioLLM/SenseVoiceSmall"),
 		DashScopeAPIKey:   strings.TrimSpace(os.Getenv("ALIYUN_DASHSCOPE_API_KEY")),
 		DashScopeEndpoint: stringEnv("DASHSCOPE_ENDPOINT", "https://dashscope.aliyuncs.com/api/v1"),
 		ASRVocabularyID:   strings.TrimSpace(os.Getenv("ASR_VOCABULARY_ID")),
@@ -107,9 +107,8 @@ func Load() (Config, error) {
 	if len(cfg.DatabasePath) > 4096 || len(cfg.DataDir) > 4096 || len(cfg.JWTSigningKeyFile) > 4096 {
 		return Config{}, fmt.Errorf("configured path is too long")
 	}
-	if cfg.ASRProvider != "aliyun_paraformer" { return Config{}, fmt.Errorf("ASR_PROVIDER must be aliyun_paraformer") }
-	if (cfg.DashScopeAPIKey != "" || cfg.SiliconFlowAPIKey != "") && cfg.PublicBaseURL == "" { return Config{}, fmt.Errorf("PUBLIC_BASE_URL is required when ASR is configured") }
-	if cfg.DashScopeAPIKey != "" && cfg.ASRPricePerMinuteCNY <= 0 { return Config{}, fmt.Errorf("ASR_PRICE_PER_MINUTE_CNY is required when ASR is configured") }
+	if cfg.ASRProvider != "siliconflow_sensevoice" { return Config{}, fmt.Errorf("ASR_PROVIDER must be siliconflow_sensevoice") }
+	if cfg.DashScopeAPIKey != "" && cfg.PublicBaseURL == "" { return Config{}, fmt.Errorf("PUBLIC_BASE_URL is required when Aliyun ASR is configured") }
 	return cfg, nil
 }
 

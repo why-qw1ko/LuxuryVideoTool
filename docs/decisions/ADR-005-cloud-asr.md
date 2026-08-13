@@ -5,7 +5,7 @@
 
 ## 决策
 
-不部署本地 Whisper；默认阿里云 Paraformer，硅基流动作为备用适配器。
+不部署本地 Whisper。默认由服务端从抖音视频提取音频并上传硅基流动 SenseVoice；阿里云 Paraformer 仅在配置公网 HTTPS 音频地址时作为可选备用。
 
 ## 影响
 

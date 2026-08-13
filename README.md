@@ -2,13 +2,15 @@
 
 一个面向 Android 与 Windows 的私有化抖音内容提取工具。用户可以粘贴抖音分享文本，或在 Android 分享面板中直接选择本应用，由自托管服务端完成作品解析、媒体下载、音频提取和口播文案转写，并在不同设备间同步任务与结果。
 
+仓库同时提供嵌入 Go 服务的轻量网页版；无需 Flutter，启动服务后可直接用 Windows 浏览器访问。
+
 > 当前状态：M0–M5 功能源码已实现，可进入双端联调；生产部署、安全加固和正式签名安装包属于 M6，项目尚未正式发布。
 
 ## 它能做什么
 
 - 解析抖音视频与图文作品，提取标题、作者、描述、封面和媒体信息。
 - 下载无水印视频或图文资源。
-- 从视频中提取音频，通过 Paraformer 生成口播文案。
+- 从视频中提取音频，默认通过硅基流动 SenseVoice 生成口播文案；可选阿里云 Paraformer 备用。
 - 导出 Markdown、TXT 和结构化 meta JSON 结果。
 - 展示排队、解析、下载、音频提取、转写和结果生成进度。
 - 支持任务取消、失败重试、历史搜索、筛选和删除。
@@ -39,7 +41,7 @@ flowchart LR
 | API | Go REST API；认证、权限隔离、任务与文件接口 |
 | 任务系统 | SQLite 持久化队列、单 Worker、Lease、心跳、取消和故障恢复 |
 | 媒体处理 | 服务端下载、FFmpeg/FFprobe、音频分段与临时文件清理 |
-| 语音识别 | 阿里云 Paraformer 主服务，SiliconFlow 备用适配器 |
+| 语音识别 | 服务端从抖音链接下载视频并提取音频，再上传硅基流动 SenseVoice；可选阿里云 Paraformer 备用 |
 | 存储 | SQLite 元数据及服务端文件目录，按用户和任务隔离 |
 | 安全 | SSRF 防护、短期 Access Token、Refresh Token 轮换、HMAC 签名取源、费用预算上限 |
 
@@ -70,13 +72,64 @@ scripts/               Go 与 Flutter 一次性检查脚本
 
 ## 本地开发
 
+## Windows 本地运行方案
+
+根据是否需要修改源码，可选择两种方式。
+
+### 方式一：源码运行
+
+只使用网页版时需要 Go、FFmpeg/FFprobe 和硅基流动 API Key。首次执行：
+
+```powershell
+.\scripts\windows\initialize-local.ps1
+.\scripts\windows\start-web.ps1
+```
+
+浏览器访问 <http://127.0.0.1:8080>，管理员登录后可在网页配置硅基流动 Key。用户输入的是抖音链接，服务端会自动下载视频、提取临时音频并转写。
+
+Android 与 Windows 客户端源码还需要 Flutter 3.44。Windows 构建需要 Visual Studio 2022 的“使用 C++ 的桌面开发”；Android 构建需要 Android Studio、Android SDK 和 JDK 17。执行 `flutter doctor` 可检查环境。
+
+Android Debug 已允许局域网 HTTP 联调。需要把 `.env` 中的监听地址改为：
+
+```env
+HTTP_ADDR=0.0.0.0:8080
+```
+
+然后仅在 Windows 防火墙“专用网络”中开放 8080，手机与电脑连接同一局域网，在客户端填写 `http://电脑局域网IP:8080`。Release 版本仍要求 HTTPS。
+
+### 方式二：生成免开发环境运行包
+
+在一台已安装 Go 的构建电脑上执行：
+
+```powershell
+.\scripts\windows\build-local-package.ps1 -FFmpegBin C:\ffmpeg\bin
+```
+
+输出位于 `dist\douyin-capture-windows-<版本号>`。将整个目录复制给使用者后，对方不需要 Go、Flutter 或 FFmpeg 环境，只需依次运行：
+
+```text
+initialize-admin.ps1
+start-web.ps1
+```
+
+如需同时构建客户端：
+
+```powershell
+.\scripts\windows\build-local-package.ps1 `
+  -FFmpegBin C:\ffmpeg\bin `
+  -IncludeWindowsClient `
+  -IncludeAndroidAPK
+```
+
+构建客户端的电脑仍需完整 Flutter/Visual Studio/Android 工具链。当前 Android Release 使用调试签名，只适合本地内测，不应作为正式发布包。
+
 ### 环境要求
 
 - Go 1.26.5
 - Flutter 3.44.0 stable / Dart 3.10+
 - FFmpeg 与 FFprobe
 - Android API 26+、JDK 17，或 Windows 10 1809+/Windows 11
-- 阿里云 DashScope API Key；SiliconFlow Key 仅在启用备用识别时需要
+- 硅基流动 API Key；可选阿里云 DashScope API Key
 
 ### 1. 配置服务端
 
@@ -86,8 +139,8 @@ scripts/               Go 与 Flutter 一次性检查脚本
 
 - `DATABASE_PATH`、`DATA_DIR`
 - `JWT_SIGNING_KEY_FILE`：至少 32 个随机字节的私有文件
-- `PUBLIC_BASE_URL`：Paraformer 能访问的服务端公开地址
-- `ALIYUN_DASHSCOPE_API_KEY`
+- `SILICONFLOW_API_KEY`：也可由管理员在网页版安全配置
+- `PUBLIC_BASE_URL`、`ALIYUN_DASHSCOPE_API_KEY`：仅启用阿里云备用转写时需要
 - `ASR_PRICE_PER_MINUTE_CNY`、每日和每月预算上限
 - `FFMPEG_PATH`、`FFPROBE_PATH`
 
@@ -111,6 +164,16 @@ go run ./cmd/admin create-user --username collaborator --display-name Collaborat
 ```
 
 ### 3. 运行客户端
+
+只使用网页版时，在 Windows 项目根目录执行：
+
+```powershell
+.\scripts\windows\start-web.ps1
+```
+
+然后访问 <http://127.0.0.1:8080>。完整说明见 [Windows 网页版使用说明](docs/operations/windows-web.md)。
+
+使用 Flutter 桌面或 Android 客户端时：
 
 ```powershell
 Set-Location apps/client_flutter

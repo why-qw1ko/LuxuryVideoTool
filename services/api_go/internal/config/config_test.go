@@ -23,7 +23,7 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ResolverCacheTTL != 6*time.Hour { t.Fatalf("ResolverCacheTTL = %v", cfg.ResolverCacheTTL) }
 	if cfg.WorkerConcurrency != 1 || cfg.MaxVideoBytes != 2*1024*1024*1024 || cfg.VideoRetention != 168*time.Hour { t.Fatalf("M3 defaults = %#v", cfg) }
-	if cfg.ASRProvider != "aliyun_paraformer" || cfg.ASRModel != "paraformer-v2" || cfg.MonthlyASRBudgetCNY != 20 { t.Fatalf("M4 defaults = %#v", cfg) }
+	if cfg.ASRProvider != "siliconflow_sensevoice" || cfg.ASRModel != "FunAudioLLM/SenseVoiceSmall" || cfg.MonthlyASRBudgetCNY != 20 { t.Fatalf("M4 defaults = %#v", cfg) }
 }
 
 func TestLoadRejectsExcessiveWorkerConcurrency(t *testing.T) { t.Setenv("JWT_SIGNING_KEY_FILE", "test.key"); t.Setenv("WORKER_CONCURRENCY", "3"); if _, err := Load(); err == nil { t.Fatal("expected WORKER_CONCURRENCY error") } }

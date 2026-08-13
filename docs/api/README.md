@@ -15,6 +15,8 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 - `GET /api/v1/auth/sessions`：列出当前用户未撤销、未过期的设备会话。
 - `DELETE /api/v1/auth/sessions/{id}`：撤销当前用户指定会话。
 - `DELETE /api/v1/admin/sessions/{id}`：管理员撤销任意用户会话。
+- `GET /api/v1/admin/settings/providers`：管理员查看阿里云/硅基流动 API Key 状态及阿里云当前是否具备公网调用条件；不返回密钥原文。
+- `PUT /api/v1/admin/settings/providers`：管理员保存或清除供应商 API Key；服务端使用 JWT 主密钥派生密钥加密存储，并立即用于新任务。
 
 ## M2 作品信息任务
 
@@ -40,7 +42,7 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 
 `download` 请求立即返回 `queued`；后台 Worker 默认单并发，持久化 Lease 为 60 秒、心跳为 15 秒，服务重启后重新领取过期任务。媒体临时写入后原子改名，登记 SHA-256、MIME 和字节数；视频默认保留 168 小时。
 
-`transcribe/full` 依次执行解析、下载、MP3 提取、9 分钟分段（重叠 1 秒）、ASR 与结果生成。默认使用 `aliyun_paraformer/paraformer-v2`；只有可重试服务错误、超时或限流才切换 SiliconFlow。认证、输入、预算错误不会自动切换。Paraformer 通过两小时有效的 HMAC 签名只读音频地址取源，地址到期或音频登记删除后失效。
+`transcribe/full` 依次执行解析、下载、MP3 提取、9 分钟分段（重叠 1 秒）、ASR 与结果生成。默认使用 `siliconflow_sensevoice/FunAudioLLM/SenseVoiceSmall`，由服务端直接上传本地音频，不需要公网地址。配置阿里云 Key 和 `PUBLIC_BASE_URL` 后，硅基流动出现可重试服务错误、超时或限流时可切换至阿里 Paraformer；认证、输入和预算错误不会切换。
 
 Access Token 默认 15 分钟有效；Refresh Token 默认 30 天有效且数据库只保存 SHA-256 哈希。登录按“来源 IP + 规范化用户名”限制为默认每分钟 5 次。
 
