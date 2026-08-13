@@ -11,6 +11,7 @@ var (
 	ErrURLNotAllowed    = errors.New("URL not allowed")
 	ErrWorkUnavailable  = errors.New("Douyin work unavailable")
 	ErrResolveFailed    = errors.New("Douyin resolve failed")
+	ErrVideoRequired    = errors.New("Douyin work does not contain a video")
 )
 
 type Image struct {

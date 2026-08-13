@@ -43,8 +43,8 @@
         <form id="capture-form">
           <label>抖音分享文本<textarea id="share-text" rows="4" maxlength="4096" placeholder="粘贴完整分享文本或作品链接" required></textarea></label>
           <div class="row">
-            <label>处理方式<select id="action"><option value="info">仅解析信息</option><option value="download">下载视频</option><option value="transcribe">提取口播</option><option value="full">完整处理并保留视频</option></select></label>
-            <button type="submit">提交</button>
+            <label>我要做什么<select id="action"><option value="info">解析作品信息</option><option value="download">下载无水印视频</option><option value="transcribe">提取视频文案（不保留视频）</option><option value="full">提取视频文案并下载视频</option></select></label>
+            <button id="submit-task" type="submit">解析作品信息</button>
           </div>
         </form>
       </section>
