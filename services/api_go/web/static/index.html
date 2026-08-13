@@ -1,24 +1,46 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Douyin Capture</title>
+  <meta name="description" content="私有化抖音内容提取：去水印下载 · 文案转写">
+  <title>Douyin Capture · 抖音内容提取</title>
+  <link rel="icon" href="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%234F7CFF'/%3E%3Cpath d='M10 8.5l6 3.5-6 3.5z' fill='%23fff'/%3E%3C/svg%3E">
+  <script>try{document.documentElement.dataset.theme=localStorage.getItem('dc_theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light')}catch{}</script>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <main class="shell">
-    <header><div><h1>Douyin Capture</h1><p>私有化抖音内容提取</p></div><button id="logout" class="ghost hidden">退出</button></header>
-    <section id="notice" class="notice hidden" role="alert"></section>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
 
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="3.5"/><path d="m10.5 9 5.5 3-5.5 3Z"/></svg></span>
+        <span class="brand-text">
+          <h1>Douyin Capture</h1>
+          <p>私有化抖音内容提取 · 去水印下载 · 文案转写</p>
+        </span>
+      </div>
+      <div class="header-actions">
+        <button id="theme-toggle" class="ghost icon-btn" type="button" aria-label="切换主题"></button>
+        <button id="logout" class="ghost hidden" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg><span class="btn-label">退出</span></button>
+      </div>
+    </div>
+  </header>
+
+  <div class="shell">
     <section id="login" class="panel narrow">
-      <h2>登录</h2>
+      <div class="login-head">
+        <span class="brand-mark lg" aria-hidden="true"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="3.5"/><path d="m10.5 9 5.5 3-5.5 3Z"/></svg></span>
+        <h2>欢迎回来</h2>
+        <p class="meta">登录以使用你的私有化抖音内容提取服务</p>
+      </div>
       <form id="api-form" class="api-form">
         <label>API 服务地址<input id="api-url" type="url" placeholder="http://127.0.0.1:8080" required></label>
         <button type="submit" class="ghost">连接此服务</button>
       </form>
-      <hr>
+      <div class="divider"><span>账号登录</span></div>
       <form id="login-form">
         <label>用户名<input id="username" autocomplete="username" maxlength="64" required></label>
         <label>密码<input id="password" type="password" autocomplete="current-password" maxlength="1024" required></label>
@@ -27,35 +49,94 @@
     </section>
 
     <div id="app" class="hidden">
-      <section id="provider-settings" class="panel hidden">
-        <h2>大模型 API Key</h2>
-        <p class="meta">你只需输入抖音链接；服务端会自动下载视频、提取临时音频并上传硅基流动。阿里云作为可选备用，需要公网 HTTPS 地址。密钥加密保存且不会回显。</p>
-        <form id="provider-form">
-          <label>阿里云 DashScope API Key<input id="aliyun-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="当前状态：未配置"></label>
-          <label class="check"><input id="clear-aliyun" type="checkbox">清除阿里云 Key</label>
-          <label>硅基流动 API Key<input id="silicon-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="当前状态：未配置"></label>
-          <label class="check"><input id="clear-silicon" type="checkbox">清除硅基流动 Key</label>
-          <button type="submit">安全保存</button>
-        </form>
-      </section>
-      <section class="panel">
-        <h2>新建任务</h2>
-        <form id="capture-form">
-          <label>抖音分享文本<textarea id="share-text" rows="4" maxlength="4096" placeholder="粘贴完整分享文本或作品链接" required></textarea></label>
-          <div class="row">
-            <label>我要做什么<select id="action"><option value="info">解析作品信息</option><option value="download">下载无水印视频</option><option value="transcribe">提取视频文案（不保留视频）</option><option value="full">提取视频文案并下载视频</option></select></label>
-            <button id="submit-task" type="submit">解析作品信息</button>
+      <div class="layout master">
+        <aside class="master-list">
+          <button id="new-task-btn" class="btn-primary new-btn" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>新建任务</button>
+          <form id="search-form" class="master-filter">
+            <div class="search-wrap">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <input id="query" placeholder="搜索标题 / 作者 / 链接">
+            </div>
+            <div class="filter-row">
+              <select id="status">
+                <option value="">全部状态</option>
+                <option value="queued">排队中</option>
+                <option value="resolving">解析中</option>
+                <option value="downloading">下载中</option>
+                <option value="transcribing">识别中</option>
+                <option value="completed">已完成</option>
+                <option value="failed">失败</option>
+                <option value="cancelled">已取消</option>
+              </select>
+              <button id="refresh" class="ghost icon-btn" type="button" title="刷新" aria-label="刷新"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></button>
+            </div>
+          </form>
+          <div id="job-list" class="job-list"></div>
+          <div class="master-foot">
+            <span id="job-total"></span>
+            <span class="foot-api">API <span id="current-api"></span></span>
+            <a href="#" id="settings-link" class="admin-only hidden"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>设置</a>
           </div>
-        </form>
-      </section>
+        </aside>
 
-      <section class="panel">
-        <div class="title-row"><div><h2>历史任务</h2><p class="meta">当前 API：<span id="current-api"></span></p></div><button id="refresh" class="ghost">刷新</button></div>
-        <form id="search-form" class="row"><input id="query" placeholder="搜索标题、作者或分享文本"><select id="status"><option value="">全部状态</option><option value="completed">已完成</option><option value="failed">失败</option><option value="queued">排队中</option></select><button type="submit" class="ghost">搜索</button></form>
-        <div id="jobs" class="jobs"></div>
-      </section>
+        <main class="content">
+          <section id="view-new" class="panel">
+            <h2>新建任务</h2>
+            <p class="meta">粘贴抖音分享文本或作品链接，选择要执行的操作。任务创建后实时显示在左侧列表，点击即可查看进度与结果。</p>
+            <form id="capture-form">
+              <label>抖音分享文本<textarea id="share-text" rows="4" maxlength="4096" placeholder="复制抖音里的「分享」文案并整段粘贴，例如：8.88 复制打开抖音，看看【某作者】的作品…#话题" required></textarea></label>
+              <div class="row">
+                <label>我要做什么<select id="action">
+                  <option value="info">解析作品信息</option>
+                  <option value="download">下载无水印视频</option>
+                  <option value="transcribe">提取视频文案（不保留视频）</option>
+                  <option value="full">提取视频文案并下载视频</option>
+                </select></label>
+                <button id="submit-task" type="submit">解析作品信息</button>
+              </div>
+            </form>
+          </section>
+
+          <section id="view-detail" class="hidden">
+            <div id="detail"></div>
+          </section>
+
+          <section id="view-settings" class="panel hidden">
+            <h2>大模型 API Key</h2>
+            <p class="meta">只需输入抖音链接；服务端会自动下载视频、提取临时音频并上传硅基流动。阿里云作为可选备用，需要公网 HTTPS 地址。密钥加密保存且不会回显。</p>
+            <form id="provider-form">
+              <label>阿里云 DashScope API Key<input id="aliyun-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="当前状态：未配置"></label>
+              <label class="check"><input id="clear-aliyun" type="checkbox">清除阿里云 Key</label>
+              <label>硅基流动 API Key<input id="silicon-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="当前状态：未配置"></label>
+              <label class="check"><input id="clear-silicon" type="checkbox">清除硅基流动 Key</label>
+              <button type="submit">安全保存</button>
+            </form>
+          </section>
+        </main>
+      </div>
     </div>
-  </main>
+  </div>
+
+  <div id="preview-modal" class="modal hidden">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card">
+      <div class="modal-head"><strong id="preview-title">视频预览</strong><button type="button" class="modal-close" data-close aria-label="关闭"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
+      <video id="preview-video" controls playsinline></video>
+    </div>
+  </div>
+
+  <div id="confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card confirm-card">
+      <div class="modal-head"><strong id="confirm-title">确认操作</strong><button type="button" class="modal-close" data-close aria-label="关闭"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
+      <div class="confirm-body"><p id="confirm-message"></p></div>
+      <div class="confirm-actions">
+        <button id="confirm-cancel" class="ghost" type="button">取消</button>
+        <button id="confirm-ok" class="btn-danger" type="button">确认</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/app.js" defer></script>
 </body>
 </html>

@@ -21,6 +21,8 @@ type Config struct {
 	RefreshTokenTTL   time.Duration
 	LoginRateLimit    int
 	ResolverCacheTTL  time.Duration
+	DouyinTtwidFile   string
+	DouyinBrowserPath string
 	WorkerConcurrency int
 	FFmpegPath        string
 	FFprobePath       string
@@ -84,6 +86,8 @@ func Load() (Config, error) {
 		RefreshTokenTTL:   refreshTTL,
 		LoginRateLimit:    loginLimit,
 		ResolverCacheTTL:  resolverCacheTTL,
+		DouyinTtwidFile:   stringEnv("DOUYIN_TTWID_FILE", "./data/douyin_ttwid.json"),
+		DouyinBrowserPath: strings.TrimSpace(os.Getenv("DOUYIN_BROWSER_PATH")),
 		WorkerConcurrency: workerConcurrency,
 		FFmpegPath:        stringEnv("FFMPEG_PATH", "ffmpeg"),
 		FFprobePath:       stringEnv("FFPROBE_PATH", "ffprobe"),

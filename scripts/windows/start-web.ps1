@@ -45,18 +45,41 @@ if (-not [string]::IsNullOrWhiteSpace($env:ALIYUN_DASHSCOPE_API_KEY) -and [strin
     Write-Warning 'Aliyun fallback requires a public HTTPS PUBLIC_BASE_URL. SiliconFlow remains available without it.'
 }
 
+# 监听地址跟随 HTTP_ADDR（默认 127.0.0.1:8080），浏览器始终走 127.0.0.1
+$bindAddress = $env:HTTP_ADDR
+if ([string]::IsNullOrWhiteSpace($bindAddress)) { $bindAddress = '127.0.0.1:8080' }
+$webPort = ($bindAddress -split ':')[-1]
+$browserUrl = "http://127.0.0.1:$webPort"
+$healthUrl = "$browserUrl/health/live"
+
+# 已运行则直接打开页面，避免重复启动与端口冲突
+$alreadyRunning = $false
+try { if ((Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 1).StatusCode -eq 200) { $alreadyRunning = $true } } catch { }
+
+if ($alreadyRunning) {
+    Start-Process $browserUrl
+    Write-Host "Service is already running at $browserUrl."
+    return
+}
+
+# 服务日志落盘，便于排查解析/下载失败
+$dataDir = Join-Path $apiRoot 'data'
+New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+$outLog = Join-Path $dataDir 'server.out.log'
+$errLog = Join-Path $dataDir 'server.err.log'
+
 Push-Location $apiRoot
 try {
-    Write-Host 'Web UI: http://127.0.0.1:8080'
-    $server = Start-Process -FilePath 'go' -ArgumentList @('run', './cmd/server') -WorkingDirectory $apiRoot -WindowStyle Hidden -PassThru
+    Write-Host "Web UI: $browserUrl"
+    $server = Start-Process -FilePath 'go' -ArgumentList @('run', './cmd/server') -WorkingDirectory $apiRoot -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
     try {
         for ($attempt = 0; $attempt -lt 80; $attempt++) {
-            if ($server.HasExited) { throw "Service stopped with exit code $($server.ExitCode). Run 'go run ./cmd/server' in services/api_go to view the error." }
-            try { $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8080/health/live' -TimeoutSec 1; if ($response.StatusCode -eq 200) { $openBrowser = $true; break } } catch { Start-Sleep -Milliseconds 250 }
+            if ($server.HasExited) { throw "Service stopped with exit code $($server.ExitCode). See $errLog, or run 'go run ./cmd/server' in services/api_go to view the error." }
+            try { $response = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 1; if ($response.StatusCode -eq 200) { $openBrowser = $true; break } } catch { Start-Sleep -Milliseconds 250 }
         }
-        if (-not $openBrowser) { throw 'Service did not become ready in time.' }
-        Start-Process 'http://127.0.0.1:8080'
-        Write-Host 'Service is running. Closing this window stops the service.'
+        if (-not $openBrowser) { throw "Service did not become ready in time. See $errLog" }
+        Start-Process $browserUrl
+        Write-Host 'Service is running. Closing this window stops the service. Logs: data\server.out.log / data\server.err.log'
         Wait-Process -Id $server.Id
     } finally {
         if (-not $server.HasExited) { Stop-Process -Id $server.Id }

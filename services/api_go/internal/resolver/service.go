@@ -36,7 +36,8 @@ func (s *Service) Resolve(ctx context.Context, shareText string, force bool) (Wo
 	if err != nil {
 		return Work{}, false, err
 	}
-	if s.cache != nil {
+	// 空壳作品（仅 ID、无内容）不写缓存，避免瞬态失败污染后续请求。
+	if s.cache != nil && !isEmptyShell(work) {
 		work, err = s.cache.Save(ctx, work)
 		if err != nil {
 			return Work{}, false, err

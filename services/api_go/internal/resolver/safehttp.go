@@ -68,35 +68,50 @@ func NewSafeClient(timeout time.Duration, maxBody int64) *SafeClient {
 }
 
 func (c *SafeClient) Get(ctx context.Context, target *url.URL) ([]byte, *url.URL, error) {
+	body, respURL, _, err := c.request(ctx, http.MethodGet, target, nil, nil)
+	return body, respURL, err
+}
+
+// Request 发送带自定义请求头 / Cookie / 请求体的请求，返回响应体与响应头。
+// 仅用于对受信任域名（如 www.douyin.com 的 detail API）的调用。
+func (c *SafeClient) Request(ctx context.Context, method string, target *url.URL, headers map[string]string, body io.Reader) ([]byte, http.Header, error) {
+	bodyBytes, _, respHeaders, err := c.request(ctx, method, target, headers, body)
+	return bodyBytes, respHeaders, err
+}
+
+func (c *SafeClient) request(ctx context.Context, method string, target *url.URL, headers map[string]string, body io.Reader) ([]byte, *url.URL, http.Header, error) {
 	if err := validateURL(target); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, method, target.String(), body)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	req.Header.Set("User-Agent", mobileUserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: request failed: %v", ErrResolveFailed, err)
+		return nil, nil, nil, fmt.Errorf("%w: request failed: %v", ErrResolveFailed, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
-		return nil, resp.Request.URL, ErrWorkUnavailable
+		return nil, resp.Request.URL, nil, ErrWorkUnavailable
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, resp.Request.URL, fmt.Errorf("%w: upstream status %d", ErrResolveFailed, resp.StatusCode)
+		return nil, resp.Request.URL, nil, fmt.Errorf("%w: upstream status %d", ErrResolveFailed, resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, c.maxBody+1))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, c.maxBody+1))
 	if err != nil {
-		return nil, resp.Request.URL, fmt.Errorf("%w: read response: %v", ErrResolveFailed, err)
+		return nil, resp.Request.URL, nil, fmt.Errorf("%w: read response: %v", ErrResolveFailed, err)
 	}
-	if int64(len(body)) > c.maxBody {
-		return nil, resp.Request.URL, fmt.Errorf("%w: response too large", ErrResolveFailed)
+	if int64(len(data)) > c.maxBody {
+		return nil, resp.Request.URL, nil, fmt.Errorf("%w: response too large", ErrResolveFailed)
 	}
-	return body, resp.Request.URL, nil
+	return data, resp.Request.URL, resp.Header, nil
 }
 
 func validateURL(u *url.URL) error {

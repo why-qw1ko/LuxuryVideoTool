@@ -51,7 +51,8 @@ func run() error {
 	if err != nil { return err }
 	authService, err := auth.NewService(auth.NewSQLiteRepository(db), tokenManager, cfg.RefreshTokenTTL)
 	if err != nil { return err }
-	resolverService := resolver.NewService(resolver.NewDouyin(resolver.NewSafeClient(10*time.Second, 4<<20)), resolver.NewSQLiteCache(db), cfg.ResolverCacheTTL, resolver.DouyinResolverVersion)
+	safeClient := resolver.NewSafeClient(10*time.Second, 4<<20)
+	resolverService := resolver.NewService(resolver.NewDouyin(safeClient, resolver.NewTtwidManager(safeClient, cfg.DouyinTtwidFile, cfg.DouyinBrowserPath)), resolver.NewSQLiteCache(db), cfg.ResolverCacheTTL, resolver.DouyinResolverVersion)
 	jobRepository := jobs.NewSQLiteRepository(db); jobService := jobs.NewService(jobRepository, resolverService)
 	fileRepository := ownedfiles.NewRepository(db); storage, err := ownedfiles.NewStorage(cfg.DataDir); if err != nil { return err }
 	runtimeSettings, err := settings.New(db, signingKey); if err != nil { return err }
