@@ -171,7 +171,7 @@ go run ./cmd/admin create-user --username collaborator --display-name Collaborat
 .\scripts\windows\start-web.ps1
 ```
 
-然后访问 <http://127.0.0.1:8080>。完整说明见 [Windows 网页版使用说明](docs/operations/windows-web.md)。
+然后访问 <http://127.0.0.1:8080>。完整说明见 [Windows 网页版使用说明](docs/operations/Windows网页版使用说明.md)。
 
 使用 Flutter 桌面或 Android 客户端时：
 
@@ -191,7 +191,7 @@ Android 使用 `flutter run -d <device-id>`。首次打开后，在设置页填�
 
 Linux/macOS 使用 `./scripts/check.sh`。检查包含 Go 格式、静态分析、测试以及 Flutter 格式、分析和测试，不会访问真实抖音或调用收费 ASR。
 
-更完整的开发说明见 [docs/operations/development.md](docs/operations/development.md)。
+更完整的开发说明见 [开发运行说明](docs/operations/开发运行说明.md)。
 
 ## 数据与安全
 

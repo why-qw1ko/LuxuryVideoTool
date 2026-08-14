@@ -24,7 +24,7 @@ try {
 Copy-Item -LiteralPath (Join-Path $repositoryRoot '.env.example') -Destination (Join-Path $outputRoot '.env.example') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'run-package.ps1') -Destination (Join-Path $outputRoot 'start-web.ps1') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'initialize-package.ps1') -Destination (Join-Path $outputRoot 'initialize-admin.ps1') -Force
-Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs\operations\windows-web.md') -Destination (Join-Path $outputRoot 'README.md') -Force
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs\operations\Windows网页版使用说明.md') -Destination (Join-Path $outputRoot 'README.md') -Force
 
 if ($FFmpegBin) {
     $resolvedFFmpeg = (Resolve-Path -LiteralPath $FFmpegBin).Path

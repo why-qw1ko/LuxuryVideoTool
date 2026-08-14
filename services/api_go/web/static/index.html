@@ -105,6 +105,12 @@
             <h2>大模型 API Key</h2>
             <p class="meta">只需输入抖音链接；服务端会自动下载视频、提取临时音频并上传硅基流动。阿里云作为可选备用，需要公网 HTTPS 地址。密钥加密保存且不会回显。</p>
             <form id="provider-form">
+              <label>当前转写模型
+                <input id="asr-model" list="asr-model-options" maxlength="256" placeholder="FunAudioLLM/SenseVoiceSmall">
+                <datalist id="asr-model-options">
+                  <option value="FunAudioLLM/SenseVoiceSmall"></option>
+                </datalist>
+              </label>
               <label>阿里云 DashScope API Key<input id="aliyun-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="当前状态：未配置"></label>
               <label class="check"><input id="clear-aliyun" type="checkbox">清除阿里云 Key</label>
               <label>硅基流动 API Key<input id="silicon-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="当前状态：未配置"></label>

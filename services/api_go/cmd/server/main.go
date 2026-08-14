@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/audit"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/asr"
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/audit"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/auth"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/cleanup"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/config"
@@ -43,34 +43,64 @@ func run() error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	slog.SetDefault(logger)
 	db, err := database.Open(context.Background(), cfg.DatabasePath)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer db.Close()
 	signingKey, err := os.ReadFile(cfg.JWTSigningKeyFile)
-	if err != nil { return errors.New("read JWT signing key file") }
+	if err != nil {
+		return errors.New("read JWT signing key file")
+	}
 	tokenManager, err := auth.NewTokenManager(signingKey, cfg.AccessTokenTTL)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	authService, err := auth.NewService(auth.NewSQLiteRepository(db), tokenManager, cfg.RefreshTokenTTL)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	safeClient := resolver.NewSafeClient(10*time.Second, 4<<20)
 	resolverService := resolver.NewService(resolver.NewDouyin(safeClient, resolver.NewTtwidManager(safeClient, cfg.DouyinTtwidFile, cfg.DouyinBrowserPath)), resolver.NewSQLiteCache(db), cfg.ResolverCacheTTL, resolver.DouyinResolverVersion)
-	jobRepository := jobs.NewSQLiteRepository(db); jobService := jobs.NewService(jobRepository, resolverService)
-	fileRepository := ownedfiles.NewRepository(db); storage, err := ownedfiles.NewStorage(cfg.DataDir); if err != nil { return err }
-	runtimeSettings, err := settings.New(db, signingKey); if err != nil { return err }
-	runtimeSettings.SetFallback(settings.AliyunKey, cfg.DashScopeAPIKey); runtimeSettings.SetFallback(settings.SiliconFlowKey, cfg.SiliconFlowAPIKey)
+	jobRepository := jobs.NewSQLiteRepository(db)
+	jobService := jobs.NewService(jobRepository, resolverService)
+	fileRepository := ownedfiles.NewRepository(db)
+	storage, err := ownedfiles.NewStorage(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	runtimeSettings, err := settings.New(db, signingKey)
+	if err != nil {
+		return err
+	}
+	runtimeSettings.SetFallback(settings.AliyunKey, cfg.DashScopeAPIKey)
+	runtimeSettings.SetFallback(settings.SiliconFlowKey, cfg.SiliconFlowAPIKey)
+	runtimeSettings.SetFallback(settings.ASRModel, cfg.ASRModel)
 	signer := ownedfiles.NewSigner(signingKey, cfg.PublicBaseURL)
 	asrService := asr.NewService(nil, nil, asr.NewRepository(db), asr.Budget{DailyCNY: cfg.DailyASRBudgetCNY, MonthlyCNY: cfg.MonthlyASRBudgetCNY, PricePerMinuteCNY: cfg.ASRPricePerMinuteCNY})
 	asrService.SetProviderFactory(func(ctx context.Context) (asr.Provider, asr.Provider) {
 		aliyunKey := runtimeSettings.Resolve(ctx, settings.AliyunKey, cfg.DashScopeAPIKey)
 		siliconKey := runtimeSettings.Resolve(ctx, settings.SiliconFlowKey, cfg.SiliconFlowAPIKey)
+		asrModel := runtimeSettings.Resolve(ctx, settings.ASRModel, cfg.ASRModel)
+		if asrModel == "" {
+			asrModel = cfg.ASRModel
+		}
 		var silicon, aliyun asr.Provider
-		if siliconKey != "" { silicon = asr.NewSiliconFlow(siliconKey, "", cfg.ASRModel) }
-		if aliyunKey != "" && cfg.PublicBaseURL != "" { provider := asr.NewParaformer(aliyunKey, cfg.DashScopeEndpoint, "paraformer-v2"); provider.VocabularyID = cfg.ASRVocabularyID; aliyun = provider }
-		if silicon == nil { return aliyun, nil }
+		if siliconKey != "" {
+			silicon = asr.NewSiliconFlow(siliconKey, "", asrModel)
+		}
+		if aliyunKey != "" && cfg.PublicBaseURL != "" {
+			provider := asr.NewParaformer(aliyunKey, cfg.DashScopeEndpoint, "paraformer-v2")
+			provider.VocabularyID = cfg.ASRVocabularyID
+			aliyun = provider
+		}
+		if silicon == nil {
+			return aliyun, nil
+		}
 		return silicon, aliyun
 	})
-	transcriber := &jobs.Transcriber{ASR: asrService, FFmpeg: media.FFmpeg{Path: cfg.FFmpegPath, Timeout: 30*time.Minute, LogLimit: 16*1024}, Probe: media.Probe{Path: cfg.FFprobePath, Timeout: time.Minute}, Signer: signer, FileRepo: fileRepository, Storage: storage, TempRetention: cfg.TempRetention}
+	transcriber := &jobs.Transcriber{ASR: asrService, FFmpeg: media.FFmpeg{Path: cfg.FFmpegPath, Timeout: 30 * time.Minute, LogLimit: 16 * 1024}, Probe: media.Probe{Path: cfg.FFprobePath, Timeout: time.Minute}, Signer: signer, FileRepo: fileRepository, Storage: storage, TempRetention: cfg.TempRetention}
 	worker := jobs.NewWorker(jobRepository, resolverService, media.NewHTTPDownloader(), fileRepository, storage, transcriber, jobs.WorkerConfig{
-		Owner: "server", Concurrency: cfg.WorkerConcurrency, Lease: 60*time.Second, Heartbeat: 15*time.Second,
+		Owner: "server", Concurrency: cfg.WorkerConcurrency, Lease: 60 * time.Second, Heartbeat: 15 * time.Second,
 		Poll: time.Second, MaxVideoBytes: cfg.MaxVideoBytes, VideoRetention: cfg.VideoRetention,
 	})
 	jobService.SetForceCancel(worker.Cancel)
@@ -82,7 +112,7 @@ func run() error {
 	}
 
 	server := &http.Server{
-		Addr:              cfg.HTTPAddr,
+		Addr: cfg.HTTPAddr,
 		Handler: httpapi.New(httpapi.Dependencies{
 			Build: version.Current(), Auth: authService, Jobs: jobService, Files: fileRepository, Storage: storage, ASRSigner: signer, Audit: audit.New(db, signingKey),
 			Ready: readiness, LoginRateLimit: cfg.LoginRateLimit, Settings: runtimeSettings, AliyunAvailable: cfg.PublicBaseURL != "",
@@ -95,7 +125,9 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	workerErr := make(chan error, 1); go func() { workerErr <- worker.Run(ctx) }(); go cleanupService.Run(ctx)
+	workerErr := make(chan error, 1)
+	go func() { workerErr <- worker.Run(ctx) }()
+	go cleanupService.Run(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -105,7 +137,10 @@ func run() error {
 
 	select {
 	case err := <-workerErr:
-		if err != nil { return err }; return nil
+		if err != nil {
+			return err
+		}
+		return nil
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
