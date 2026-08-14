@@ -251,11 +251,13 @@ function jobDetailHTML(job){
   const transcript=text?`<section class="detail-section"><div class="section-head"><h3>${icon('file-text',14)} 视频文案</h3><button type="button" class="copy-btn" data-copy title="复制全部文案">${icon('copy',13)} 复制</button></div><div class="result">${esc(text)}</div></section>`:'';
 
   const hasMedia=cover||w.authorName||metas.length;
-  const mediaBlock=hasMedia?`<div class="detail-media">${cover}<div class="detail-side">${metas.length?`<div class="detail-meta">${metas.join('')}</div>`:''}${tags?`<div class="tags">${tags}</div>`:''}${canonical}${actionGroups?`<div class="actions">${actionGroups}</div>`:''}</div></div>`:'';
+  const mediaBlock=hasMedia?`<div class="detail-media${cover?'':' no-cover'}">${cover}<div class="detail-side">${metas.length?`<div class="detail-meta">${metas.join('')}</div>`:''}${canonical}</div></div>`:'';
 
   return `<article class="job-detail" data-job="${esc(job.id)}">
     <div class="detail-head"><div><h2>${esc(title)}</h2><div class="badges">${badges.join('')}</div></div><span class="job-time" title="${esc(new Date(job.createdAt).toLocaleString())}">${fmtDate(job.createdAt)}</span></div>
     ${mediaBlock}
+    ${tags?`<div class="tags">${tags}</div>`:''}
+    ${actionGroups?`<div class="actions">${actionGroups}</div>`:''}
     ${error}
     ${progressBlock}
     ${statusText?`<p class="status-msg">${esc(statusText)}</p>`:''}
@@ -340,7 +342,7 @@ async function openPreview(fileId,name){
 }
 function closePreview(){
   const modal=$('#preview-modal');modal.classList.add('hidden');document.body.classList.remove('modal-open');
-  const video=$('#preview-video');video.pause();video.removeAttribute('src');
+  const video=$('#preview-video');video.pause();video.currentTime=0;video.removeAttribute('src');video.load();
   if(previewURL){URL.revokeObjectURL(previewURL);previewURL=null}
 }
 $('#preview-modal').addEventListener('click',e=>{if(e.target.closest('[data-close]'))closePreview()});

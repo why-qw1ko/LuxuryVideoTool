@@ -111,7 +111,8 @@ select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-i
 .search-wrap svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--text-tertiary);pointer-events:none}
 .search-wrap input{padding-left:38px}
 .filter-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
-.filter-row select{padding:9px 12px}
+.filter-row select{height:40px;padding:9px 38px 9px 12px;background-color:var(--card);box-shadow:none}
+.filter-row select:focus{box-shadow:0 0 0 3px var(--active)}
 #refresh{width:40px;padding:0}
 .job-list{display:flex;flex-direction:column;gap:8px;overflow-y:auto;flex:1;min-height:120px}
 .job-row{display:flex;flex-direction:column;gap:6px;padding:12px;border-radius:8px;border:1px solid transparent;cursor:pointer;transition:background .15s,border-color .15s}
@@ -152,6 +153,7 @@ select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-i
 .badge-action{background:var(--hover);color:var(--text-secondary)}
 .badge-note{background:var(--active);color:var(--primary)}
 .detail-media{display:grid;grid-template-columns:160px minmax(0,1fr);gap:24px;align-items:start;margin-bottom:16px}
+.detail-media.no-cover{grid-template-columns:minmax(0,1fr)}
 .detail-cover{width:100%;aspect-ratio:9/16;object-fit:cover;border-radius:8px;border:1px solid var(--border);background:var(--input);box-shadow:var(--shadow)}
 .detail-side{flex:1;min-width:0}
 .detail-meta{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--text-secondary)}
@@ -192,6 +194,13 @@ select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-i
 .actions .danger:hover{border-color:var(--danger);background:var(--danger-light)}
 .preview-btn{border-color:var(--border-focus);color:var(--primary)}
 .preview-btn:hover{border-color:var(--border-focus);color:var(--primary);background:var(--primary-light)!important}
+
+@media(min-width:621px){
+  .job-detail>.tags{display:flex!important;flex-direction:row!important;flex-wrap:wrap!important}
+  .job-detail>.tags .tag{width:auto!important;max-width:100%}
+  .job-detail>.actions{display:flex!important;flex-direction:row!important;align-items:center!important}
+  .job-detail>.actions .action-group{display:inline-flex!important;width:auto!important;flex-direction:row!important;align-items:center!important}
+}
 
 /* ================= 弹窗（预览 / 确认） ================= */
 .modal{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:20px}
