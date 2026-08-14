@@ -1,7 +1,10 @@
-name: Server
+name: Server Linux Package
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: read
@@ -26,19 +29,33 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
       - name: Test
         run: go test -race -coverprofile=coverage.out ./...
-      - name: Build linux targets
+      - name: Build Linux packages
         shell: bash
         run: |
           VERSION=$(cat ../../VERSION)
           COMMIT=${GITHUB_SHA::12}
           BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           LDFLAGS="-s -w -X github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/version.Version=$VERSION -X github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/version.Commit=$COMMIT -X github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/version.BuildTime=$BUILD_TIME"
-          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o bin/douyin-capture-linux-amd64 ./cmd/server
-          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o bin/douyin-capture-linux-arm64 ./cmd/server
-          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o bin/douyin-capture-admin-linux-amd64 ./cmd/admin
-          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o bin/douyin-capture-admin-linux-arm64 ./cmd/admin
-          sha256sum bin/* > bin/SHA256SUMS
+          rm -rf ../../dist
+          mkdir -p ../../dist
+          for ARCH in amd64 arm64; do
+            PACKAGE="douyin-capture-linux-$ARCH-$VERSION"
+            OUT="../../dist/$PACKAGE"
+            mkdir -p "$OUT"
+            GOOS=linux GOARCH="$ARCH" go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/douyin-capture-server" ./cmd/server
+            GOOS=linux GOARCH="$ARCH" go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/douyin-capture-admin" ./cmd/admin
+            cp ../../.env.example "$OUT/.env.example"
+            cp ../../scripts/linux/start-web.sh "$OUT/start-web.sh"
+            cp ../../scripts/linux/initialize-package.sh "$OUT/initialize-admin.sh"
+            cp ../../docs/operations/Linux服务器部署说明.md "$OUT/README.md"
+            chmod +x "$OUT/douyin-capture-server" "$OUT/douyin-capture-admin" "$OUT/start-web.sh" "$OUT/initialize-admin.sh"
+            tar -czf "../../dist/$PACKAGE.tar.gz" -C ../../dist "$PACKAGE"
+          done
+          cd ../../dist
+          sha256sum *.tar.gz > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: server-linux
-          path: services/api_go/bin/
+          name: server-linux-packages
+          path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS

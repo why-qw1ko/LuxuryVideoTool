@@ -7,8 +7,9 @@
 如果拿到的是已构建的 `douyin-capture-windows-<版本号>` 目录，不需要安装 Go、Flutter 或 FFmpeg：
 
 1. 运行 `initialize-admin.ps1`，输入至少 12 位密码。
-2. 运行 `start-web.ps1`。
-3. 浏览器会自动打开 <http://127.0.0.1:8080>，登录后配置硅基流动 API Key。
+2. 按需修改 `.env` 中的 `HTTP_ADDR`，例如服务器监听 `0.0.0.0:7788`。
+3. 运行 `start-web.ps1`。
+4. 浏览器会自动打开本机访问地址，登录后配置硅基流动 API Key。
 
 必须保留整个目录，不能只复制 EXE；`data`、`secrets` 和 `.env` 都属于本机运行数据。备份或迁移时应连同整个目录一起处理。
 

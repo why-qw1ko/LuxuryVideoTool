@@ -72,6 +72,12 @@ scripts/               Go 与 Flutter 一次性检查脚本
 
 ## 本地开发
 
+## Linux 服务器运行包
+
+GitHub Actions 可生成 Linux 服务端运行包，网页已嵌入 Go 服务端二进制；服务器无需放置源码。完整步骤见 [Linux 服务器部署说明](docs/operations/Linux服务器部署说明.md)。
+
+当前 GitHub 仅构建 Linux 服务端运行包，不构建 Windows 客户端或 Android APK。
+
 ## Windows 本地运行方案
 
 根据是否需要修改源码，可选择两种方式。

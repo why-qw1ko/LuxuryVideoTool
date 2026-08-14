@@ -1,52 +1,14 @@
-name: Client
+name: Client Disabled
 
 on:
-  push:
-    paths:
-      - apps/client_flutter/**
-      - VERSION
-      - .github/workflows/client.yml
-  pull_request:
-    paths:
-      - apps/client_flutter/**
-      - VERSION
-      - .github/workflows/client.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  verify:
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            target: apk
-          - os: windows-2025
-            target: windows
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        working-directory: apps/client_flutter
+  disabled:
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: 3.44.0
-          channel: stable
-          cache: true
-      - name: Resolve dependencies
-        run: flutter pub get
-      - name: Format
-        run: dart format --output=none --set-exit-if-changed lib test
-      - name: Analyze
-        run: flutter analyze
-      - name: Test
-        run: flutter test --coverage
-      - name: Build Android
-        if: matrix.target == 'apk'
-        run: flutter build apk --debug --dart-define=APP_VERSION=0.1.0-dev --dart-define=APP_COMMIT=${{ github.sha }}
-      - name: Build Windows
-        if: matrix.target == 'windows'
-        run: flutter build windows --debug --dart-define=APP_VERSION=0.1.0-dev --dart-define=APP_COMMIT=${{ github.sha }}
-
+      - name: Disabled
+        run: echo "Android and Windows client builds are disabled."

@@ -1,5 +1,9 @@
 $ErrorActionPreference = 'Stop'
 $packageRoot = $PSScriptRoot
+$environmentPath = Join-Path $packageRoot '.env'
+if (-not (Test-Path -LiteralPath $environmentPath)) {
+    Copy-Item -LiteralPath (Join-Path $packageRoot '.env.example') -Destination $environmentPath
+}
 $env:DATABASE_PATH = Join-Path $packageRoot 'data\app.db'
 $keyPath = Join-Path $packageRoot 'secrets\jwt.key'
 if (-not (Test-Path -LiteralPath $keyPath)) { New-Item -ItemType Directory -Path (Split-Path -Parent $keyPath) -Force | Out-Null; $key=New-Object byte[] 32; $random=[Security.Cryptography.RandomNumberGenerator]::Create(); try{$random.GetBytes($key)}finally{$random.Dispose()}; [IO.File]::WriteAllBytes($keyPath,$key) }
