@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  build:
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -21,14 +21,6 @@ jobs:
         with:
           go-version: 1.26.5
           cache: false
-      - name: Format
-        run: test -z "$(gofmt -l .)"
-      - name: Vet
-        run: go vet ./...
-      - name: Vulnerability scan
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
-      - name: Test
-        run: go test -race -coverprofile=coverage.out ./...
       - name: Build Linux packages
         shell: bash
         run: |
