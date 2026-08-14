@@ -155,14 +155,16 @@ select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-i
 .detail-cover{width:100%;aspect-ratio:9/16;object-fit:cover;border-radius:8px;border:1px solid var(--border);background:var(--input);box-shadow:var(--shadow)}
 .detail-side{flex:1;min-width:0}
 .detail-meta{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--text-secondary)}
-.tags{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
-.tag{font-size:12px;color:var(--text-secondary);background:var(--input);padding:2px 10px;border-radius:8px}
+.tags{display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0}
+.tag{display:inline-flex;align-items:center;min-height:24px;font-size:12px;font-weight:700;color:var(--primary);background:var(--primary-light);padding:2px 10px;border-radius:8px}
 .canonical-row{margin-top:12px;font-size:13px}
 .canonical-row a{color:var(--primary);text-decoration:none;display:inline-flex;align-items:center;gap:5px}
 .canonical-row a:hover{text-decoration:underline}
-.progress{height:7px;margin:14px 0 8px;background:var(--input);border-radius:99px;overflow:hidden}
+.progress-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;margin:16px 0 8px}
+.progress-row span{font-size:12px;font-weight:700;color:var(--text-secondary);font-variant-numeric:tabular-nums}
+.progress{height:8px;background:var(--input);border-radius:99px;overflow:hidden}
 .progress i{display:block;height:100%;background:var(--primary);border-radius:99px;transition:width .3s ease}
-.status-msg{margin:0 0 8px;font-size:13px;color:var(--text-secondary)}
+.status-msg{margin:10px 0 8px;font-size:13px;color:var(--text-secondary)}
 .error-box{display:flex;gap:10px;align-items:flex-start;margin:10px 0;padding:12px 14px;border-left:3px solid var(--danger);border-radius:10px;background:var(--danger-light)}
 .error-box>svg{color:var(--danger);margin-top:2px}
 .error-box strong{color:var(--danger);font-size:12px;letter-spacing:.5px}
@@ -179,10 +181,15 @@ select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-i
 .result{white-space:pre-wrap;padding:16px;background:var(--input);border:1px solid var(--border);border-radius:8px;max-height:420px;overflow:auto;font-size:13px;line-height:1.8}
 
 /* ================= 操作按钮 ================= */
-.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
-.btn,.actions button{padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--text);text-decoration:none;font-size:13px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:background .15s,border-color .15s,color .15s}
+.actions{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;margin-top:16px}
+.action-group{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+.action-group+.action-group{padding-left:12px;border-left:1px solid var(--border)}
+.btn,.actions button{min-height:36px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--text);text-decoration:none;font-size:13px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;transition:background .15s,border-color .15s,color .15s}
 .btn:hover,.actions button:hover:not(:disabled){background:var(--hover);text-decoration:none}
+.download{border-color:var(--border-focus);color:var(--primary);background:var(--primary-light)}
+.download:hover{border-color:var(--border-focus);color:var(--primary);background:var(--primary-light)!important}
 .actions .danger{color:var(--danger)}
+.actions .danger:hover{border-color:var(--danger);background:var(--danger-light)}
 .preview-btn{border-color:var(--border-focus);color:var(--primary)}
 .preview-btn:hover{border-color:var(--border-focus);color:var(--primary);background:var(--primary-light)!important}
 
@@ -196,10 +203,10 @@ select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-i
 .modal-close{border:0;background:transparent;color:var(--text-tertiary);cursor:pointer;padding:6px;border-radius:8px}
 .modal-close:hover{background:var(--hover);color:var(--text)}
 #preview-video{display:block;width:auto;height:auto;max-width:100%;max-height:78vh;margin:0 auto;background:#000}
-.confirm-card{max-width:min(92vw,420px)}
-.confirm-body{padding:22px 24px;font-size:14px;color:var(--text-secondary);line-height:1.7}
+.confirm-card{max-width:min(92vw,400px)}
+.confirm-body{padding:24px;font-size:14px;color:var(--text-secondary);line-height:1.7}
 .confirm-body p{margin:0}
-.confirm-actions{display:flex;justify-content:flex-end;gap:10px;padding:16px 20px;border-top:1px solid var(--border)}
+.confirm-actions{display:flex;justify-content:flex-end;gap:10px;padding:16px 20px;border-top:1px solid var(--border);background:var(--input)}
 
 /* ================= Toast 通知 ================= */
 .toasts{position:fixed;top:16px;right:16px;z-index:120;display:flex;flex-direction:column;gap:10px;max-width:min(92vw,380px)}
@@ -258,8 +265,10 @@ select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-i
   .detail-meta{display:grid;gap:4px}
   .filter-row{grid-template-columns:minmax(0,1fr) 40px}
   .toasts{left:12px;right:12px;max-width:none}
-  .actions{flex-direction:column;align-items:stretch}
-  .actions .btn,.actions button{justify-content:center}
+  .actions{flex-direction:column;align-items:stretch;gap:10px;margin-top:18px}
+  .action-group{display:grid;grid-template-columns:1fr;gap:10px;width:100%}
+  .action-group+.action-group{padding-left:0;padding-top:10px;border-left:0;border-top:1px solid var(--border)}
+  .actions .btn,.actions button{width:100%;min-height:44px;justify-content:center}
   .confirm-actions{flex-direction:column-reverse}
   .modal{padding:12px}
   #preview-video{max-height:70vh}

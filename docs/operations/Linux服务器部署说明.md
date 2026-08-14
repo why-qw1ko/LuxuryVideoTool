@@ -2,6 +2,8 @@
 
 本文适用于 GitHub Actions 生成的 Linux 运行包。
 
+本项目仅用于个人学习、技术测试与自托管验证。不得用于商业转售、公开 SaaS、批量采集、未经授权的内容传播或二次分发。
+
 ## 生成运行包
 
 在 GitHub 仓库页面：
@@ -47,6 +49,14 @@ which chromium-browser
 
 ## 解压运行包
 
+推荐放置目录：
+
+```bash
+sudo mkdir -p /opt/douyin-capture
+sudo chown -R $USER:$USER /opt/douyin-capture
+cd /opt/douyin-capture
+```
+
 ```bash
 tar -xzf douyin-capture-linux-amd64-0.1.0-dev.tar.gz
 cd douyin-capture-linux-amd64-0.1.0-dev
@@ -81,6 +91,8 @@ DOUYIN_BROWSER_PATH=/usr/bin/chromium
 
 ## 启动服务
 
+临时测试：
+
 ```bash
 ./start-web.sh
 ```
@@ -89,6 +101,46 @@ DOUYIN_BROWSER_PATH=/usr/bin/chromium
 
 ```text
 http://服务器IP:7788
+```
+
+长期运行建议使用 systemd：
+
+```bash
+sudo nano /etc/systemd/system/douyin-capture.service
+```
+
+示例：
+
+```ini
+[Unit]
+Description=Douyin Capture
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/douyin-capture/douyin-capture-linux-amd64-0.1.0-dev
+ExecStart=/opt/douyin-capture/douyin-capture-linux-amd64-0.1.0-dev/start-web.sh
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
+```
+
+启动并设置开机自启：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable douyin-capture
+sudo systemctl start douyin-capture
+```
+
+查看状态和日志：
+
+```bash
+sudo systemctl status douyin-capture
+journalctl -u douyin-capture -f
 ```
 
 ## 数据目录

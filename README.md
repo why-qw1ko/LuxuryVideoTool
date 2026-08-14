@@ -1,231 +1,229 @@
 # Douyin Capture
 
-一个面向 Android 与 Windows 的私有化抖音内容提取工具。用户可以粘贴抖音分享文本，或在 Android 分享面板中直接选择本应用，由自托管服务端完成作品解析、媒体下载、音频提取和口播文案转写，并在不同设备间同步任务与结果。
+Douyin Capture 是一个自托管的抖音内容解析、下载与转写工具。用户粘贴抖音分享文本后，由服务端完成作品解析、媒体下载、音频提取、ASR 转写与结果导出。
 
-仓库同时提供嵌入 Go 服务的轻量网页版；无需 Flutter，启动服务后可直接用 Windows 浏览器访问。
+当前部署重点是嵌入 Go 服务端的网页版。Android 与 Windows 客户端源码、设计和后续产物规划仍保留；只是当前 GitHub Actions 暂时只构建 Linux 服务端运行包，不自动构建 Android APK 或 Windows 客户端。
 
-> 当前状态：M0–M5 功能源码已实现，可进入双端联调；生产部署、安全加固和正式签名安装包属于 M6，项目尚未正式发布。
+## 技术测试与使用声明
 
-## 它能做什么
+本项目仅用于个人学习、技术测试与自托管验证，不以盈利为目的，不提供公开 SaaS 服务，不鼓励也不支持批量采集、未经授权的下载、传播或商业使用。
 
-- 解析抖音视频与图文作品，提取标题、作者、描述、封面和媒体信息。
+使用者必须自行确认其行为符合所在地法律法规、平台服务条款、版权规则和内容授权范围。不得将本项目用于绕过访问控制、侵犯版权、批量抓取、公开分发第三方内容或其他违法违规用途。
+
+本仓库未附带开源许可证。除作者明确书面授权外，禁止：
+
+- 二次修改、换皮、改名或基于本项目制作衍生版本。
+- 修改后发布、传播或提供下载。
+- 二次打包、二次分发或上传到第三方平台。
+- 商业销售、转售、代部署收费或作为付费服务提供。
+- 移除或修改项目名称、声明、版权与使用边界。
+- 将本项目用于公开、多租户或大规模采集服务。
+
+本声明不构成法律意见。任何部署、使用、传播行为及其后果由执行者自行承担。
+
+## 功能范围
+
+- 解析抖音视频与图文作品信息。
 - 下载无水印视频或图文资源。
-- 从视频中提取音频，默认通过硅基流动 SenseVoice 生成口播文案；可选阿里云 Paraformer 备用。
-- 导出 Markdown、TXT 和结构化 meta JSON 结果。
-- 展示排队、解析、下载、音频提取、转写和结果生成进度。
-- 支持任务取消、失败重试、历史搜索、筛选和删除。
-- Android 可从系统分享面板接收抖音文本，确认后再创建任务。
-- Android 与 Windows 共用账号、历史和结果，并提供本地完成/失败通知。
-- 网络中断时可查看最近 100 条本地缓存记录，恢复后继续同步。
+- 使用 FFmpeg / FFprobe 提取音频。
+- 默认通过硅基流动 SenseVoice 转写口播文案。
+- 可导出 TXT、Markdown 和 meta JSON。
+- 支持任务进度、历史记录、搜索、重试、取消和删除。
+- 支持管理员在网页中配置 API Key 与转写模型。
+- Android 与 Windows 客户端作为后续分发形态保留，当前服务器部署不依赖客户端产物。
 
-## 产品流程
-
-```mermaid
-flowchart LR
-    A["粘贴或分享抖音文本"] --> B["选择解析、下载或转写"]
-    B --> C["服务端持久化排队"]
-    C --> D["解析作品与下载媒体"]
-    D --> E["FFmpeg 提取并分段音频"]
-    E --> F["云端 ASR 转写"]
-    F --> G["生成 Markdown / TXT / meta"]
-    G --> H["客户端查看、复制或下载"]
-```
-
-所有抖音解析、媒体处理和 ASR 调用都在服务端执行。第三方 API Key 不进入客户端包、接口响应或业务日志。
-
-## 技术架构
-
-| 层级 | 技术与职责 |
-|---|---|
-| 客户端 | Flutter、Riverpod、Dio、go_router；共用 Android/Windows 业务和 UI |
-| API | Go REST API；认证、权限隔离、任务与文件接口 |
-| 任务系统 | SQLite 持久化队列、单 Worker、Lease、心跳、取消和故障恢复 |
-| 媒体处理 | 服务端下载、FFmpeg/FFprobe、音频分段与临时文件清理 |
-| 语音识别 | 服务端从抖音链接下载视频并提取音频，再上传硅基流动 SenseVoice；可选阿里云 Paraformer 备用 |
-| 存储 | SQLite 元数据及服务端文件目录，按用户和任务隔离 |
-| 安全 | SSRF 防护、短期 Access Token、Refresh Token 轮换、HMAC 签名取源、费用预算上限 |
+## 技术组成
 
 ```text
-apps/client_flutter/   Android + Windows Flutter 客户端
-services/api_go/       Go REST API、后台 Worker 与管理命令
-deploy/                Caddy、systemd 与可选 Docker 部署目录
-docs/                  API、运维、安全、ADR 与阶段验收文档
-scripts/               Go 与 Flutter 一次性检查脚本
+services/api_go/       Go REST API、内嵌网页版、后台 Worker
+services/api_go/web/   轻量网页版静态资源
+apps/client_flutter/   Android / Windows 客户端源码
+scripts/               本地启动、打包与部署辅助脚本
+docs/                  运维、API、ADR 与验收文档
+deploy/                Caddy、systemd、Docker 等部署草案
 ```
 
-完整设计和安全边界见 [产品技术设计](DouyinCapture_Product_Technical_Design.md)，接口契约见 [API 文档](docs/api/README.md)。
+服务端使用 SQLite 保存用户、任务、文件索引与运行配置；媒体文件、转写结果和临时文件保存在服务端数据目录中。
 
-## 当前完成度
+## Linux 服务器部署
 
-| 里程碑 | 内容 | 状态 |
-|---|---|---|
-| M0 | Monorepo、Go 服务与 Flutter 双端工程基线 | ✅ 代码完成 |
-| M1 | SQLite、用户认证、Token 轮换和设备会话 | ✅ 代码完成 |
-| M2 | 抖音链接解析、缓存和 SSRF 防护 | ✅ 代码完成 |
-| M3 | 持久化队列、媒体下载、FFmpeg 和文件管理 | ✅ 代码完成 |
-| M4 | ASR、费用预算、音频分段和结果生成 | ✅ 代码完成 |
-| M5 | Flutter 登录、提交、进度、结果、历史与设置 | ✅ 代码完成 |
-| M6 | 生产部署、安全验收和双端签名安装包 | ⏳ 待实施 |
-| M7 | 全文搜索、管理面板和可选增强功能 | 📋 规划中 |
+推荐通过 GitHub Actions 构建 Linux 服务端运行包。服务器无需放置源码。
 
-“代码完成”不代表已通过真实环境验收。本仓库当前环境没有执行 Flutter/Go 编译；Android 分享、Windows Toast、真实抖音解析和付费 ASR 仍需在具体设备与生产配置下验证。各阶段记录位于 [docs/acceptance](docs/acceptance)。
+1. 进入 GitHub 仓库 `Actions`。
+2. 选择 `Server Linux Package`。
+3. 点击 `Run workflow`。
+4. 下载构建产物 `server-linux-packages`。
+5. 根据服务器架构选择：
 
-## 本地开发
+```text
+douyin-capture-linux-amd64-<版本号>.tar.gz
+douyin-capture-linux-arm64-<版本号>.tar.gz
+```
 
-## Linux 服务器运行包
+普通 x86 云服务器通常使用 `amd64`。
 
-GitHub Actions 可生成 Linux 服务端运行包，网页已嵌入 Go 服务端二进制；服务器无需放置源码。完整步骤见 [Linux 服务器部署说明](docs/operations/Linux服务器部署说明.md)。
+服务器依赖：
 
-当前 GitHub 仅构建 Linux 服务端运行包，不构建 Windows 客户端或 Android APK。
+```bash
+sudo apt update
+sudo apt install -y ffmpeg chromium
+```
 
-## Windows 本地运行方案
+推荐部署目录：
 
-根据是否需要修改源码，可选择两种方式。
+```bash
+sudo mkdir -p /opt/douyin-capture
+sudo chown -R $USER:$USER /opt/douyin-capture
+```
 
-### 方式一：源码运行
+上传并解压：
 
-只使用网页版时需要 Go、FFmpeg/FFprobe 和硅基流动 API Key。首次执行：
+```bash
+cd /opt/douyin-capture
+tar -xzf douyin-capture-linux-amd64-<版本号>.tar.gz
+cd douyin-capture-linux-amd64-<版本号>
+```
+
+首次配置 `.env`：
+
+```env
+HTTP_ADDR=0.0.0.0:7788
+FFMPEG_PATH=ffmpeg
+FFPROBE_PATH=ffprobe
+DOUYIN_BROWSER_PATH=/usr/bin/chromium
+```
+
+初始化管理员并启动：
+
+```bash
+./initialize-admin.sh
+./start-web.sh
+```
+
+访问：
+
+```text
+http://服务器IP:7788
+```
+
+长期运行建议使用 systemd 托管，并通过 Nginx 或 Caddy 配置 HTTPS 反向代理。完整说明见 [Linux 服务器部署说明](docs/operations/Linux服务器部署说明.md)。
+
+## Windows 本地运行
+
+源码运行：
 
 ```powershell
 .\scripts\windows\initialize-local.ps1
 .\scripts\windows\start-web.ps1
 ```
 
-浏览器访问 <http://127.0.0.1:8080>，管理员登录后可在网页配置硅基流动 Key。用户输入的是抖音链接，服务端会自动下载视频、提取临时音频并转写。
-
-Android 与 Windows 客户端源码还需要 Flutter 3.44。Windows 构建需要 Visual Studio 2022 的“使用 C++ 的桌面开发”；Android 构建需要 Android Studio、Android SDK 和 JDK 17。执行 `flutter doctor` 可检查环境。
-
-Android Debug 已允许局域网 HTTP 联调。需要把 `.env` 中的监听地址改为：
-
-```env
-HTTP_ADDR=0.0.0.0:8080
-```
-
-然后仅在 Windows 防火墙“专用网络”中开放 8080，手机与电脑连接同一局域网，在客户端填写 `http://电脑局域网IP:8080`。Release 版本仍要求 HTTPS。
-
-### 方式二：生成免开发环境运行包
-
-在一台已安装 Go 的构建电脑上执行：
+生成 Windows 本地运行包：
 
 ```powershell
 .\scripts\windows\build-local-package.ps1 -FFmpegBin C:\ffmpeg\bin
 ```
 
-输出位于 `dist\douyin-capture-windows-<版本号>`。将整个目录复制给使用者后，对方不需要 Go、Flutter 或 FFmpeg 环境，只需依次运行：
+输出目录：
 
 ```text
-initialize-admin.ps1
-start-web.ps1
+dist\douyin-capture-windows-<版本号>
 ```
 
-如需同时构建客户端：
+运行包内执行：
 
 ```powershell
-.\scripts\windows\build-local-package.ps1 `
-  -FFmpegBin C:\ffmpeg\bin `
-  -IncludeWindowsClient `
-  -IncludeAndroidAPK
+.\initialize-admin.ps1
+.\start-web.ps1
 ```
 
-构建客户端的电脑仍需完整 Flutter/Visual Studio/Android 工具链。当前 Android Release 使用调试签名，只适合本地内测，不应作为正式发布包。
+更多说明见 [Windows 网页版使用说明](docs/operations/Windows网页版使用说明.md) 和 [启动与测试说明](docs/operations/启动与测试说明.md)。
 
-### 环境要求
+## Android 与 Windows 客户端
 
-- Go 1.26.5
-- Flutter 3.44.0 stable / Dart 3.10+
-- FFmpeg 与 FFprobe
-- Android API 26+、JDK 17，或 Windows 10 1809+/Windows 11
-- 硅基流动 API Key；可选阿里云 DashScope API Key
+仓库仍包含 Flutter 客户端源码：
 
-### 1. 配置服务端
-
-参考 [.env.example](.env.example) 将配置写入当前 Shell、IDE 或进程管理器。真实密钥、Token、`.env` 和签名文件不得提交到仓库。
-
-最少需要确认：
-
-- `DATABASE_PATH`、`DATA_DIR`
-- `JWT_SIGNING_KEY_FILE`：至少 32 个随机字节的私有文件
-- `SILICONFLOW_API_KEY`：也可由管理员在网页版安全配置
-- `PUBLIC_BASE_URL`、`ALIYUN_DASHSCOPE_API_KEY`：仅启用阿里云备用转写时需要
-- `ASR_PRICE_PER_MINUTE_CNY`、每日和每月预算上限
-- `FFMPEG_PATH`、`FFPROBE_PATH`
-
-启动服务：
-
-```powershell
-Set-Location services/api_go
-go run ./cmd/server
+```text
+apps/client_flutter/
 ```
 
-默认监听 `127.0.0.1:8080`，可通过 `GET /health/live` 和 `GET /health/ready` 检查状态。
+客户端目标：
 
-### 2. 创建账号
+- Android APK / AAB。
+- Windows 桌面客户端或安装包。
+- 与同一 Go 服务端账号、任务历史和结果数据联动。
 
-密码应写入仅当前用户可读的临时文件，避免出现在命令参数和 Shell 历史中：
+当前阶段 GitHub Actions 不自动构建这些客户端产物，避免服务器部署流程被 Flutter、Android SDK 和 Windows 构建环境阻塞。需要客户端产物时，应在具备 Flutter、Android Studio、JDK 和 Windows C++ 桌面工具链的构建环境中单独执行。
 
-```powershell
-Set-Location services/api_go
-go run ./cmd/admin create-user --username owner --display-name Owner --role admin --password-file <private-file>
-go run ./cmd/admin create-user --username collaborator --display-name Collaborator --role user --password-file <private-file>
+## 关键配置
+
+`.env` 中常用配置：
+
+```env
+HTTP_ADDR=127.0.0.1:8080
+DATABASE_PATH=./data/app.db
+DATA_DIR=./data
+JWT_SIGNING_KEY_FILE=./secrets/jwt.key
+FFMPEG_PATH=ffmpeg
+FFPROBE_PATH=ffprobe
+DOUYIN_BROWSER_PATH=
+ASR_PROVIDER=siliconflow_sensevoice
+ASR_MODEL=FunAudioLLM/SenseVoiceSmall
+SILICONFLOW_API_KEY=
+DAILY_ASR_BUDGET_CNY=5
+MONTHLY_ASR_BUDGET_CNY=20
 ```
 
-### 3. 运行客户端
+生产或公网环境至少应确认：
 
-只使用网页版时，在 Windows 项目根目录执行：
+- `HTTP_ADDR`：服务器端口，例如 `0.0.0.0:7788`。
+- `JWT_SIGNING_KEY_FILE`：至少 32 字节随机密钥文件。
+- `FFMPEG_PATH` / `FFPROBE_PATH`：媒体处理工具路径。
+- `DOUYIN_BROWSER_PATH`：Linux 服务器建议显式配置 Chromium 路径。
+- `SILICONFLOW_API_KEY`：也可由管理员登录网页后保存。
+- `DAILY_ASR_BUDGET_CNY` / `MONTHLY_ASR_BUDGET_CNY`：ASR 费用预算上限。
 
-```powershell
-.\scripts\windows\start-web.ps1
+真实密钥、`.env`、数据库和 `secrets/` 不得提交到仓库。
+
+## 数据与备份
+
+运行数据通常位于运行包目录内：
+
+```text
+.env
+data/
+secrets/
 ```
 
-然后访问 <http://127.0.0.1:8080>。完整说明见 [Windows 网页版使用说明](docs/operations/Windows网页版使用说明.md)。
+备份或迁移时应保留这些文件。删除 `data/` 会清空用户、任务记录和文件索引；删除 `secrets/` 会导致既有登录令牌失效。
 
-使用 Flutter 桌面或 Android 客户端时：
+## 技术测试状态
 
-```powershell
-Set-Location apps/client_flutter
-flutter pub get
-flutter run -d windows --dart-define=APP_VERSION=0.1.0-dev
+本项目处于技术测试阶段：
+
+- 真实抖音解析可能受平台页面结构、接口参数、Cookie、风控和 CDN 策略影响。
+- 云端 ASR 调用会产生第三方服务费用，应设置预算上限。
+- 公网部署必须自行配置 HTTPS、防火墙、安全组、备份和进程守护。
+- 当前不面向公开注册、多租户、大规模任务队列或商业化运营。
+
+如需验证服务状态：
+
+```bash
+curl http://127.0.0.1:7788/health/live
+curl http://127.0.0.1:7788/health/ready
 ```
 
-Android 使用 `flutter run -d <device-id>`。首次打开后，在设置页填写服务端地址；正式环境必须使用 HTTPS。
+## 安全边界
 
-### 4. 执行检查
+- 服务端仅应部署给少量可信用户使用。
+- 不提供开放下载代理能力。
+- 不应暴露数据库、数据目录、密钥文件或运行日志。
+- API Key 不应写入客户端包、公开配置或日志。
+- 公网访问建议只通过 HTTPS 入口暴露。
 
-```powershell
-./scripts/check.ps1
-```
+## 相关文档
 
-Linux/macOS 使用 `./scripts/check.sh`。检查包含 Go 格式、静态分析、测试以及 Flutter 格式、分析和测试，不会访问真实抖音或调用收费 ASR。
-
-更完整的开发说明见 [开发运行说明](docs/operations/开发运行说明.md)。
-
-## 数据与安全
-
-- 服务端只允许访问经过校验的抖音 HTTPS 域名，并逐跳验证重定向和公网 IP。
-- 用户只能访问自己的任务和文件，下载接口不接受任意远程 URL。
-- Access Token 默认 15 分钟，Refresh Token 默认 30 天并轮换，数据库只保存其哈希。
-- ASR 设置单次调用超时、重试上限以及每日/月度费用硬上限。
-- 视频和临时音频按保留策略清理；Markdown、TXT 和 meta 随任务保存，删除任务时一并删除。
-- 分享内容、Token、API Key、音频正文和供应商原始响应不得写入日志。
-
-## 已知限制
-
-- 尚未提供生产 Caddy/systemd、备份、监控和正式签名安装包。
-- 服务重启遇到已提交但未完成的 ASR 任务时，目前会停止自动重放并要求人工核对，避免重复计费；自动续查将在生产部署前补齐。
-- 抖音页面结构和 CDN 地址可能变化，真实可用性依赖持续维护解析器。
-- 本项目定位为少量可信用户的自托管工具，不包含公开注册、开放下载代理或大规模多租户能力。
-
-## 使用边界
-
-本项目仅用于处理用户有权访问和保存的内容。使用者应遵守平台条款、版权规则及所在地法律，不应将其用于绕过访问控制、批量采集或未经授权的内容分发。
-
-## 路线图
-
-下一阶段 M6 将完成：
-
-- Caddy HTTPS、systemd、备份与清理任务
-- 限流、监控、依赖扫描和灾难恢复演练
-- ASR 任务自动恢复
-- Android APK/AAB 与 Windows 安装包签名及真实设备验收
-
-后续可选增强包括全文搜索、管理员用量面板、自动更新、Obsidian 导出和 AI 摘要。
+- [Linux 服务器部署说明](docs/operations/Linux服务器部署说明.md)
+- [Windows 网页版使用说明](docs/operations/Windows网页版使用说明.md)
+- [启动与测试说明](docs/operations/启动与测试说明.md)
+- [开发运行说明](docs/operations/开发运行说明.md)
+- [API 文档](docs/api/README.md)

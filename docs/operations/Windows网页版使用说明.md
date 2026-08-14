@@ -2,6 +2,8 @@
 
 网页版已经嵌入 Go 服务，不需要 Node.js、Flutter 或单独的 Web 服务器。
 
+本项目仅用于个人学习、技术测试与自托管验证。不得用于商业转售、公开 SaaS、批量采集、未经授权的内容传播或二次分发。
+
 ## 最简单的运行包
 
 如果拿到的是已构建的 `douyin-capture-windows-<版本号>` 目录，不需要安装 Go、Flutter 或 FFmpeg：
@@ -47,4 +49,4 @@ go run .\cmd\admin create-user --username owner --display-name Owner --role admi
 - 第三方密钥可通过服务端 `.env` 配置：`SILICONFLOW_API_KEY`、可选 `ALIYUN_DASHSCOPE_API_KEY`、模型、端点、单价及预算；密钥不会写入浏览器。
 - 管理员也可在网页版“大模型 API Key”区域保存或清除密钥。浏览器只提交本次输入，服务端加密保存且不会回显；生产环境必须使用 HTTPS。
 - 只配置硅基流动即可在本地转写；同时配置两者且提供公网 `PUBLIC_BASE_URL` 时，硅基流动为主服务，只有可重试错误才切换至阿里云。
-- 生产 HTTPS、签名安装包、真实抖音/ASR 联调仍属于部署与验收工作，不能由源码代替。
+- 公网部署必须自行配置 HTTPS、防火墙、备份和进程守护。

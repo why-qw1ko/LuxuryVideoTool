@@ -136,7 +136,7 @@ $('#api-url').value=location.origin;
 if($('#current-api'))$('#current-api').textContent=location.origin;
 $('#api-form').addEventListener('submit',e=>{e.preventDefault();try{const target=normaliseAPI($('#api-url').value);if(target===location.origin)return toast('当前已连接此 API 服务');location.assign(`${target}/`)}catch(err){toast(err.message,'error')}});
 $('#login-form').addEventListener('submit',async e=>{e.preventDefault();try{const data=await api('/api/v1/auth/login',{method:'POST',body:JSON.stringify({username:$('#username').value.trim(),password:$('#password').value,device:{id:localStorage.dc_device||(localStorage.dc_device=uuidv4()),name:navigator.platform||'Web 浏览器',platform:'windows',appVersion:'web-0.1.0'}})},false);$('#password').value='';enter(data)}catch(err){toast(err.message,'error')}});
-$('#logout').addEventListener('click',async()=>{try{await api('/api/v1/auth/logout',{method:'POST'})}catch{}enter(null)});
+$('#logout').addEventListener('click',async()=>{if(!(await confirmDialog({title:'退出登录',message:'确认退出当前账号？',confirmText:'退出',danger:false})))return;try{await api('/api/v1/auth/logout',{method:'POST'})}catch{}enter(null)});
 
 /* ---------- API Key 设置 ---------- */
 async function loadProviders(){try{const data=await api('/api/v1/admin/settings/providers'),p=data.providers;$('#aliyun-key').placeholder=`当前状态：${p.aliyunConfigured?(p.aliyunAvailable?'已配置，可作备用':'已配置，但缺少公网地址'):'未配置'}`;$('#silicon-key').placeholder=`当前状态：${p.siliconFlowConfigured?'已配置，默认使用':'未配置'}`;if($('#asr-model')){$('#asr-model').value=p.asrModel||'FunAudioLLM/SenseVoiceSmall';$('#asr-model').placeholder=`当前模型：${p.asrModel||'FunAudioLLM/SenseVoiceSmall'}`}}catch(err){toast(err.message,'error')}}
@@ -235,26 +235,30 @@ function jobDetailHTML(job){
   const cover=w.coverUrl?`<img class="detail-cover" src="${esc(w.coverUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:'';
 
   const error=job.error?`<div class="error-box">${icon('alert-circle',14)}<div><strong>${esc(job.error.code)}</strong><p>${esc(job.error.message)}</p></div></div>`:'';
+  const progressPct=Math.max(0,Math.min(100,Math.round(Number(job.progress)||0)));
+  const progressBlock=!terminal?`<div class="progress-row"><div class="progress"><i style="width:${progressPct}%"></i></div><span>${progressPct}%</span></div>`:'';
+  const statusText=job.statusMessage||(['completed'].includes(job.status)?'处理完成':'');
 
-  const fileLinks=files.map(f=>`<a class="btn download" href="/api/v1/files/${encodeURIComponent(f.id)}" data-file="${esc(f.id)}" data-name="${esc(f.name)}">${icon('download',14)} ${esc(fileLabel(f))}</a>`).join('');
-  const ops=[];
-  if(videoFile)ops.push(`<button type="button" class="btn preview-btn" data-op="preview" data-fid="${esc(videoFile.id)}" data-name="${esc(videoFile.name)}">${icon('play',14)} 预览视频</button>`);
-  if(!terminal)ops.push(`<button type="button" data-op="cancel">${icon('circle-slash',14)} 取消</button>`);
-  if(job.status==='failed'||job.status==='cancelled')ops.push(`<button type="button" data-op="retry">${icon('rotate-ccw',14)} 重试</button>`);
-  if(terminal)ops.push(`<button type="button" data-op="delete" class="danger">${icon('trash',14)} 删除</button>`);
+  const fileLinks=files.map(f=>`<a class="btn download" href="/api/v1/files/${encodeURIComponent(f.id)}" data-file="${esc(f.id)}" data-name="${esc(f.name)}">${icon('download',14)} ${esc(fileLabel(f))}</a>`);
+  const viewOps=[],taskOps=[];
+  if(videoFile)viewOps.push(`<button type="button" class="btn preview-btn" data-op="preview" data-fid="${esc(videoFile.id)}" data-name="${esc(videoFile.name)}">${icon('play',14)} 预览视频</button>`);
+  if(!terminal)taskOps.push(`<button type="button" data-op="cancel">${icon('circle-slash',14)} 取消</button>`);
+  if(job.status==='failed'||job.status==='cancelled')taskOps.push(`<button type="button" data-op="retry">${icon('rotate-ccw',14)} 重试</button>`);
+  if(terminal)taskOps.push(`<button type="button" data-op="delete" class="danger">${icon('trash',14)} 删除</button>`);
+  const actionGroups=[viewOps,fileLinks,taskOps].filter(group=>group.length).map(group=>`<div class="action-group">${group.join('')}</div>`).join('');
 
   const canonical=w.canonicalUrl?`<div class="canonical-row"><a href="${esc(w.canonicalUrl)}" target="_blank" rel="noopener">${icon('arrow-up-right',14)} 查看原作品</a></div>`:'';
   const transcript=text?`<section class="detail-section"><div class="section-head"><h3>${icon('file-text',14)} 视频文案</h3><button type="button" class="copy-btn" data-copy title="复制全部文案">${icon('copy',13)} 复制</button></div><div class="result">${esc(text)}</div></section>`:'';
 
   const hasMedia=cover||w.authorName||metas.length;
-  const mediaBlock=hasMedia?`<div class="detail-media">${cover}<div class="detail-side">${metas.length?`<div class="detail-meta">${metas.join('')}</div>`:''}${tags?`<div class="tags">${tags}</div>`:''}${canonical}${(fileLinks||ops.length)?`<div class="actions">${fileLinks}${ops.join('')}</div>`:''}</div></div>`:'';
+  const mediaBlock=hasMedia?`<div class="detail-media">${cover}<div class="detail-side">${metas.length?`<div class="detail-meta">${metas.join('')}</div>`:''}${tags?`<div class="tags">${tags}</div>`:''}${canonical}${actionGroups?`<div class="actions">${actionGroups}</div>`:''}</div></div>`:'';
 
   return `<article class="job-detail" data-job="${esc(job.id)}">
     <div class="detail-head"><div><h2>${esc(title)}</h2><div class="badges">${badges.join('')}</div></div><span class="job-time" title="${esc(new Date(job.createdAt).toLocaleString())}">${fmtDate(job.createdAt)}</span></div>
     ${mediaBlock}
     ${error}
-    <div class="progress"><i style="width:${Number(job.progress)||0}%"></i></div>
-    <p class="status-msg">${esc(job.statusMessage||'')}</p>
+    ${progressBlock}
+    ${statusText?`<p class="status-msg">${esc(statusText)}</p>`:''}
     ${transcript}
   </article>`;
 }
@@ -306,7 +310,7 @@ async function operate(id,op){
     if(op==='retry')toast('已重新开始');
   }catch(err){toast(err.message,'error')}
 }
-async function download(link){try{const response=await fetch(link.href,{headers:{Authorization:`Bearer ${session.accessToken}`}});if(!response.ok)throw new Error('下载失败');const blob=await response.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=link.dataset.name;a.click();URL.revokeObjectURL(url)}catch(err){toast(err.message,'error')}}
+async function download(link){try{const response=await fetch(link.href,{headers:{Authorization:`Bearer ${session.accessToken}`}});if(!response.ok)throw new Error('下载失败');const blob=await response.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=link.dataset.name;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000)}catch(err){toast(err.message,'error')}}
 async function copyText(btn){
   const section=btn.closest('.detail-section')||btn.closest('.result-details');
   const text=(section&&section.querySelector('.result')||{}).textContent||'';
