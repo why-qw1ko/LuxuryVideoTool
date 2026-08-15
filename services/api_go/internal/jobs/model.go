@@ -116,4 +116,4 @@ type Repository interface {
 	DeleteFilesByKind(ctx context.Context, jobID, kind string) error
 }
 
-type JobFile struct { ID string `json:"id"`; Kind string `json:"kind"`; Name string `json:"name"`; MIMEType string `json:"mimeType"`; SizeBytes int64 `json:"sizeBytes"` }
+type JobFile struct { ID string `json:"id"`; Kind string `json:"kind"`; Name string `json:"name"`; MIMEType string `json:"mimeType"`; SizeBytes int64 `json:"sizeBytes"`; ExpiresAt *time.Time `json:"expiresAt,omitempty"`; PreviewURL string `json:"previewUrl,omitempty"` }

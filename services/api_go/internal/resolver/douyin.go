@@ -43,11 +43,15 @@ func (d *Douyin) Resolve(ctx context.Context, shareText string) (Work, error) {
 	// 主路径：aweme/v1/web/aweme/detail 详情 API（a_bogus 签名 + ttwid cookie）。
 	// 抖音已全局移除分享页 SSR 内嵌数据（videoInfoRes），这是当前唯一稳定取数方式。
 	workID := input.WorkID
+	workType := input.WorkType
 	if workID == "" {
-		// 短链（v.douyin.com/xxx）需先跟随跳转拿到作品 ID。
+		// 短链（v.douyin.com/xxx）需先跟随跳转拿到作品 ID。跳转目标可能是
+		// /share/video/{id}（视频）或 /share/note/{id}（图文/动图），两者都要能识别，
+		// 否则图文/动图链接会因提取不到 ID 而跳过 detail API，落入失效的分享页解析。
 		if _, finalURL, redirectErr := d.client.Get(ctx, input.URL); redirectErr == nil {
 			if resolvedInput, parseErr := ExtractInput(finalURL.String()); parseErr == nil && resolvedInput.WorkID != "" {
 				workID = resolvedInput.WorkID
+				workType = resolvedInput.WorkType
 			}
 		}
 	}
@@ -55,7 +59,7 @@ func (d *Douyin) Resolve(ctx context.Context, shareText string) (Work, error) {
 	if workID != "" {
 		var work Work
 		var ok bool
-		work, ok, detailErr = d.resolveViaDetailAPI(ctx, workID)
+		work, ok, detailErr = d.resolveViaDetailAPI(ctx, workID, workType)
 		if ok {
 			return work, nil
 		}
@@ -67,7 +71,11 @@ func (d *Douyin) Resolve(ctx context.Context, shareText string) (Work, error) {
 		return Work{}, err
 	}
 	if resolvedInput, inputErr := ExtractInput(finalURL.String()); inputErr == nil && resolvedInput.WorkID != "" {
-		shareURL, _ := url.Parse("https://www.iesdouyin.com/share/video/" + resolvedInput.WorkID)
+		kind := "video"
+		if resolvedInput.WorkType == "note" {
+			kind = "note"
+		}
+		shareURL, _ := url.Parse("https://www.iesdouyin.com/share/" + kind + "/" + resolvedInput.WorkID)
 		if shareBody, shareFinalURL, shareErr := d.client.Get(ctx, shareURL); shareErr == nil {
 			body, finalURL = shareBody, shareFinalURL
 		}
@@ -120,18 +128,24 @@ func isEmptyShell(w Work) bool {
 
 // resolveViaDetailAPI 调用 aweme/v1/web/aweme/detail 获取作品数据。
 // 返回 (work, true, nil) 表示成功；(_, false, err) 表示该路径不可用。
-func (d *Douyin) resolveViaDetailAPI(ctx context.Context, workID string) (Work, bool, error) {
+func (d *Douyin) resolveViaDetailAPI(ctx context.Context, workID, workType string) (Work, bool, error) {
 	if d.ttwid == nil {
 		return Work{}, false, fmt.Errorf("ttwid manager not configured")
 	}
-	// 引导 ttwid 时需要导航到作品页（首页不生成 ttwid）。
-	ttwidValue, err := d.ttwid.Get(ctx, "https://www.douyin.com/video/"+workID)
+	// 图文/动图作品使用 /note/ 应用页；其余按视频处理。引导 ttwid 与 Referer
+	// 都应指向对应的应用页（首页不生成 ttwid，且需与作品类型一致）。
+	kind := "video"
+	if workType == "note" {
+		kind = "note"
+	}
+	pageURL := "https://www.douyin.com/" + kind + "/" + workID
+	ttwidValue, err := d.ttwid.Get(ctx, pageURL)
 	if err != nil {
 		return Work{}, false, fmt.Errorf("ttwid unavailable: %w", err)
 	}
 	headers := map[string]string{
 		"User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-		"Referer":         "https://www.douyin.com/video/" + workID,
+		"Referer":         pageURL,
 		"Accept":          "application/json, text/plain, */*",
 		"Accept-Language": "zh-CN,zh;q=0.9",
 		"Cookie":          "ttwid=" + ttwidValue,
@@ -278,7 +292,13 @@ func parseWorkObject(object map[string]any) (Work, bool) {
 					image = nested
 				}
 				if imageURL := findURL(image, "url_list", "urlList", "download_url_list", "downloadUrlList"); imageURL != "" {
-					work.Images = append(work.Images, Image{URL: imageURL, Width: int(firstNumber(image, "width")), Height: int(firstNumber(image, "height"))})
+					entry := Image{URL: imageURL, Width: int(firstNumber(image, "width")), Height: int(firstNumber(image, "height"))}
+					// 动图（live photo）：images[i].video 内带动态版 MP4 地址。
+					// 优先取 CDN play_addr（直接文件、可靠），download_addr 是会 302 的签名接口。
+					if video := firstMap(image, "video"); video != nil {
+						entry.AnimatedURL = withoutWatermark(findURL(video, "play_addr", "playAddr", "download_addr", "downloadAddr"))
+					}
+					work.Images = append(work.Images, entry)
 				}
 			}
 		}
@@ -288,6 +308,22 @@ func parseWorkObject(object map[string]any) (Work, bool) {
 		work.PublishedAt = &value
 	}
 	work.Hashtags = hashtags(object)
+	// 作品背景音乐：music.play_url.url_list[0] + title + artists[0].name。
+	// 图文/动图作品通常配有一首背景音乐，查看时随画面播放。
+	if music := firstMap(object, "music"); music != nil {
+		work.MusicURL = findURL(music, "play_url", "playUrl")
+		work.MusicTitle = firstString(music, "title")
+		if artists := firstSlice(music, "artists"); len(artists) > 0 {
+			if artist, ok := artists[0].(map[string]any); ok {
+				work.MusicArtist = firstString(artist, "name")
+			}
+		}
+		if work.MusicArtist == "" {
+			if author := firstMap(music, "author"); author != nil {
+				work.MusicArtist = firstString(author, "nickname", "name")
+			}
+		}
+	}
 	return work, true
 }
 

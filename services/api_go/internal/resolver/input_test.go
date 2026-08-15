@@ -6,9 +6,21 @@ import (
 )
 
 func TestExtractInput(t *testing.T) {
-	input, err := ExtractInput("复制打开抖音 https://evil.example/x 再看 https://www.douyin.com/note/1234567890/?x=1")
-	if err != nil { t.Fatal(err) }
-	if input.WorkID != "1234567890" || input.WorkType != "note" { t.Fatalf("input = %#v", input) }
+	cases := []struct {
+		text     string
+		id       string
+		workType string
+	}{
+		{"复制打开抖音 https://evil.example/x 再看 https://www.douyin.com/note/1234567890/?x=1", "1234567890", "note"},
+		{"https://www.iesdouyin.com/share/video/2222222222222222222/", "2222222222222222222", "video"},
+		{"https://www.iesdouyin.com/share/note/3333333333333333333/?region=CN", "3333333333333333333", "note"},
+		{"https://www.iesdouyin.com/share/slides/4444444444444444444/?is_slides=1", "4444444444444444444", "note"},
+	}
+	for _, c := range cases {
+		input, err := ExtractInput(c.text)
+		if err != nil { t.Fatalf("%q: %v", c.text, err) }
+		if input.WorkID != c.id || input.WorkType != c.workType { t.Fatalf("%q: input = %#v, want id=%s type=%s", c.text, input, c.id, c.workType) }
+	}
 }
 
 func TestExtractInputRejectsHTTPAndLookalikeHost(t *testing.T) {

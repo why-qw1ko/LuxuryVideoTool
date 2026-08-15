@@ -89,7 +89,7 @@ func (s *Service) Delete(ctx context.Context, userID, jobID string) error {
 func (s *Service) Cancel(ctx context.Context, userID, jobID string) (Job, error) {
 	_, err := s.repo.Cancel(ctx, userID, jobID, s.now().UTC())
 	if errors.Is(err, ErrNotCancellable) && s.forceCancel != nil && s.forceCancel(jobID) {
-		deadline := time.NewTimer(2*time.Second); defer deadline.Stop(); ticker := time.NewTicker(20*time.Millisecond); defer ticker.Stop()
+		deadline := time.NewTimer(5*time.Second); defer deadline.Stop(); ticker := time.NewTicker(50*time.Millisecond); defer ticker.Stop()
 		for { select { case <-ctx.Done(): return Job{}, ctx.Err(); case <-deadline.C: return Job{}, ErrNotCancellable; case <-ticker.C: current, findErr := s.repo.FindByID(ctx, userID, jobID); if findErr == nil && current.Status == "cancelled" { return current, nil } } }
 	}
 	if err != nil { return Job{}, err }; return s.repo.FindByID(ctx, userID, jobID)

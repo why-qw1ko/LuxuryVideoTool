@@ -27,6 +27,8 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 - `POST /api/v1/jobs/{id}/cancel`：立即取消排队任务；本进程处理中任务协作终止下载/解析并持久化取消状态。
 - `POST /api/v1/jobs/{id}/retry`：将失败或已取消的任务重新入队。
 - `GET /api/v1/files/{id}`：鉴权、归属校验后流式返回文件，支持 Range。
+- `GET /api/v1/jobs/{id}/images/archive`：鉴权后将该任务的全部配图/动图打包为 ZIP 流式返回（无此类文件返回 404）。
+- `GET /api/v1/media-preview/{id}?expires=&signature=`：同源签名的媒体预览地址（HMAC 签名，约 24 小时有效），供 `<img>`/`<video>` 直接加载，无需 Authorization 头；仅限 image/animated/video 类型。
 
 创建示例：
 
@@ -40,9 +42,11 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 
 解析结果缓存默认 6 小时，可用 `RESOLVER_CACHE_TTL` 调整。服务端仅访问 HTTPS 抖音白名单域名，重定向逐跳校验且最多 5 跳，DNS 返回任何非公网地址时拒绝请求。
 
-`download` 请求立即返回 `queued`；后台 Worker 默认单并发，持久化 Lease 为 60 秒、心跳为 15 秒，服务重启后重新领取过期任务。媒体临时写入后原子改名，登记 SHA-256、MIME 和字节数；视频默认保留 168 小时。
+`download` 请求立即返回 `queued`；后台 Worker 默认单并发，持久化 Lease 为 60 秒、心跳为 15 秒，服务重启后重新领取过期任务。媒体临时写入后原子改名，登记 SHA-256、MIME 和字节数；视频与图文/动图配图默认保留 168 小时（`RETENTION_VIDEO_HOURS`），由后台每小时自动清理，删除任务会同时删除其媒体。
 
 `transcribe/full` 依次执行解析、下载、MP3 提取、9 分钟分段（重叠 1 秒）、ASR 与结果生成。默认使用 `siliconflow_sensevoice/FunAudioLLM/SenseVoiceSmall`，由服务端直接上传本地音频，不需要公网地址。配置阿里云 Key 和 `PUBLIC_BASE_URL` 后，硅基流动出现可重试服务错误、超时或限流时可切换至阿里 Paraformer；认证、输入和预算错误不会切换。
+
+**图文/动图（note）作品**：无需 ASR。进入 worker 的操作（`download`/`transcribe`/`full`）都会下载全部配图（动图下载动态版 MP4），并以作品配文（desc）作为文案生成结果；网页端提供逐图下载与打包 ZIP。纯解析（`info`）为同步路径，不下载媒体。
 
 Access Token 默认 15 分钟有效；Refresh Token 默认 30 天有效且数据库只保存 SHA-256 哈希。登录按“来源 IP + 规范化用户名”限制为默认每分钟 5 次。
 

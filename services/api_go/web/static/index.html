@@ -15,6 +15,7 @@
 
   <header class="topbar">
     <div class="topbar-inner">
+      <button id="sidebar-toggle" class="ghost icon-btn" type="button" aria-label="菜单" title="菜单" aria-expanded="false"></button>
       <div class="brand">
         <span class="brand-mark" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="3.5"/><path d="m10.5 9 5.5 3-5.5 3Z"/></svg></span>
         <span class="brand-text">
@@ -28,6 +29,7 @@
       </div>
     </div>
   </header>
+  <div id="sidebar-backdrop" class="sidebar-backdrop hidden"></div>
 
   <div class="shell">
     <section id="login" class="panel narrow">
@@ -43,14 +45,18 @@
       <div class="divider"><span>账号登录</span></div>
       <form id="login-form">
         <label>用户名<input id="username" autocomplete="username" maxlength="64" required></label>
-        <label>密码<input id="password" type="password" autocomplete="current-password" maxlength="1024" required></label>
-        <button type="submit">登录</button>
+        <label>密码<span class="password-wrap"><input id="password" type="password" autocomplete="current-password" maxlength="1024" required><button id="toggle-password" class="password-eye" type="button" aria-label="显示密码" title="显示密码"></button></span></label>
+        <button type="submit" class="btn-primary">登录</button>
       </form>
     </section>
 
     <div id="app" class="hidden">
       <div class="layout master">
         <aside class="master-list">
+          <div class="sidebar-brand">
+            <span class="brand-mark" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="3.5"/><path d="m10.5 9 5.5 3-5.5 3Z"/></svg></span>
+            <span class="brand-text"><strong>Douyin Capture</strong><small>私有化抖音内容提取</small></span>
+          </div>
           <button id="new-task-btn" class="btn-primary new-btn" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>新建任务</button>
           <form id="search-form" class="master-filter">
             <div class="search-wrap">
@@ -85,18 +91,11 @@
         <main class="content">
           <section id="view-new" class="panel">
             <h2>新建任务</h2>
-            <p class="meta">粘贴抖音分享文本或作品链接，选择要执行的操作。任务创建后实时显示在左侧列表，点击即可查看进度与结果。</p>
+            <p class="meta">粘贴抖音分享文本或作品链接，点击提取。视频会自动下载并转写口播；图文/动图会下载全部配图并生成配文。</p>
             <form id="capture-form">
               <label>抖音分享文本<textarea id="share-text" rows="4" maxlength="4096" placeholder="复制抖音里的「分享」文案并整段粘贴，例如：8.88 复制打开抖音，看看【某作者】的作品…#话题" required></textarea></label>
-              <div class="row">
-                <label>我要做什么<select id="action">
-                  <option value="info">解析作品信息</option>
-                  <option value="download">下载无水印视频</option>
-                  <option value="transcribe">提取视频文案（不保留视频）</option>
-                  <option value="full">提取视频文案并下载视频</option>
-                </select></label>
-                <button id="submit-task" type="submit">解析作品信息</button>
-              </div>
+              <label class="check"><input id="info-only" type="checkbox">仅解析信息（不下载媒体）</label>
+              <button id="submit-task" class="btn-primary" type="submit">提取内容</button>
             </form>
           </section>
 
@@ -118,7 +117,7 @@
               <label class="check"><input id="clear-aliyun" type="checkbox">清除阿里云 Key</label>
               <label>硅基流动 API Key<input id="silicon-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="当前状态：未配置"></label>
               <label class="check"><input id="clear-silicon" type="checkbox">清除硅基流动 Key</label>
-              <button type="submit">安全保存</button>
+              <button type="submit" class="btn-primary">安全保存</button>
             </form>
           </section>
         </main>
@@ -129,8 +128,17 @@
   <div id="preview-modal" class="modal hidden">
     <div class="modal-backdrop" data-close></div>
     <div class="modal-card">
-      <div class="modal-head"><strong id="preview-title">视频预览</strong><button type="button" class="modal-close" data-close aria-label="关闭"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
-      <video id="preview-video" controls playsinline></video>
+      <div class="modal-head">
+        <strong id="preview-title">视频预览</strong>
+        <div class="modal-actions">
+          <button id="preview-sound" class="ghost icon-btn hidden" type="button" aria-label="静音" title="静音"></button>
+          <button type="button" class="modal-close" data-close aria-label="关闭"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+        </div>
+      </div>
+      <div id="preview-source-row" class="preview-source-row hidden"><button id="preview-source" type="button" title="切换声音来源">♪ 背景音乐</button></div>
+      <video id="preview-video" class="hidden" controls playsinline></video>
+      <img id="preview-image" class="hidden preview-image" alt="">
+      <audio id="preview-audio" loop></audio>
     </div>
   </div>
 
@@ -146,6 +154,7 @@
     </div>
   </div>
 
+  <button id="back-top" class="back-top hidden" type="button" aria-label="返回顶部" title="返回顶部"></button>
   <script src="/app.js" defer></script>
 </body>
 </html>

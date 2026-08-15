@@ -30,6 +30,7 @@ type Config struct {
 	VideoRetention    time.Duration
 	TempRetention     time.Duration
 	PublicBaseURL     string
+	AllowInsecureProviderSettings bool
 	ASRProvider       string
 	ASRModel          string
 	DashScopeAPIKey   string
@@ -95,6 +96,7 @@ func Load() (Config, error) {
 		VideoRetention:    time.Duration(videoHours)*time.Hour,
 		TempRetention:     time.Duration(tempHours)*time.Hour,
 		PublicBaseURL:     strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")), "/"),
+		AllowInsecureProviderSettings: boolEnv("ALLOW_INSECURE_PROVIDER_SETTINGS", false),
 		ASRProvider:       stringEnv("ASR_PROVIDER", "siliconflow_sensevoice"),
 		ASRModel:          stringEnv("ASR_MODEL", "FunAudioLLM/SenseVoiceSmall"),
 		DashScopeAPIKey:   strings.TrimSpace(os.Getenv("ALIYUN_DASHSCOPE_API_KEY")),
@@ -150,3 +152,13 @@ func positiveIntEnv(name string, fallback int) (int, error) {
 func boundedIntEnv(name string, fallback, minValue, maxValue int) (int, error) { value, err := positiveIntEnv(name, fallback); if err != nil { return 0, err }; if value < minValue || value > maxValue { return 0, fmt.Errorf("%s must be between %d and %d", name, minValue, maxValue) }; return value, nil }
 func positiveInt64Env(name string, fallback int64) (int64, error) { raw := strings.TrimSpace(os.Getenv(name)); if raw == "" { return fallback, nil }; value, err := strconv.ParseInt(raw, 10, 64); if err != nil || value <= 0 { return 0, fmt.Errorf("%s must be a positive integer", name) }; return value, nil }
 func nonNegativeFloatEnv(name string, fallback float64) (float64, error) { raw := strings.TrimSpace(os.Getenv(name)); if raw == "" { return fallback, nil }; value, err := strconv.ParseFloat(raw, 64); if err != nil || value < 0 { return 0, fmt.Errorf("%s must be a non-negative number", name) }; return value, nil }
+func boolEnv(name string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
+}

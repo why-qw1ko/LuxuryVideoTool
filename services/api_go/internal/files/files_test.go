@@ -3,6 +3,7 @@ package files
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -15,5 +16,6 @@ func TestStorageTargetUsesPrivateDirectory(t *testing.T) {
 	storage, err := NewStorage(t.TempDir()); if err != nil { t.Fatal(err) }
 	relative, temporary, final, err := storage.NewTarget("user-1", "job-1", ".mp4"); if err != nil { t.Fatal(err) }
 	if relative == "" || temporary != final+".part" { t.Fatalf("paths = %q %q %q", relative, temporary, final) }
+	if runtime.GOOS == "windows" { t.Skip("Windows 不反映 Unix 目录权限位") }
 	info, err := os.Stat(filepath.Dir(final)); if err != nil { t.Fatal(err) }; if info.Mode().Perm()&0o077 != 0 { t.Fatalf("directory permissions = %o", info.Mode().Perm()) }
 }

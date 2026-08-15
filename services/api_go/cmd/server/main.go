@@ -115,7 +115,7 @@ func run() error {
 		Addr: cfg.HTTPAddr,
 		Handler: httpapi.New(httpapi.Dependencies{
 			Build: version.Current(), Auth: authService, Jobs: jobService, Files: fileRepository, Storage: storage, ASRSigner: signer, Audit: audit.New(db, signingKey),
-			Ready: readiness, LoginRateLimit: cfg.LoginRateLimit, Settings: runtimeSettings, AliyunAvailable: cfg.PublicBaseURL != "",
+			Ready: readiness, LoginRateLimit: cfg.LoginRateLimit, Settings: runtimeSettings, AliyunAvailable: cfg.PublicBaseURL != "", AllowInsecureProviderSettings: cfg.AllowInsecureProviderSettings,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,

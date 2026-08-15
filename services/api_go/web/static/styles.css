@@ -59,11 +59,18 @@ body.modal-open{overflow:hidden}
 .header-actions #logout svg{flex-shrink:0}
 
 /* ================= 按钮 ================= */
-button{font:inherit;border-radius:8px;padding:10px 16px;border:1px solid transparent;background:var(--primary);color:var(--on-primary);font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:background .15s,color .15s,border-color .15s,box-shadow .15s,transform .05s}
-button:hover:not(:disabled){background:var(--primary-hover)}
+/* 基础按钮为中性样式（透明底 + 边框 + 灰悬停）；蓝色只属于 .btn-primary，避免悬停蓝色泄漏到所有按钮 */
+button{font:inherit;border-radius:8px;padding:10px 16px;border:1px solid var(--border);background:transparent;color:var(--text);font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:background .15s,color .15s,border-color .15s,box-shadow .15s,transform .05s}
+button:hover:not(:disabled){background:var(--hover)}
 button:active:not(:disabled){transform:translateY(1px)}
 button:disabled{opacity:.55;cursor:not-allowed}
-.btn-primary{background:var(--primary);color:var(--on-primary);box-shadow:none}
+button:focus{outline:none}
+button:focus-visible{outline:2px solid var(--border);outline-offset:2px}
+button{-webkit-tap-highlight-color:transparent}
+#sidebar-toggle{display:none}
+.back-top{position:fixed;right:20px;bottom:20px;z-index:60;width:44px;height:44px;padding:0;border-radius:50%;background:var(--primary);color:var(--on-primary);box-shadow:var(--shadow-lg)}
+.back-top:hover:not(:disabled){background:var(--primary-hover)}
+.btn-primary{background:var(--primary);color:var(--on-primary);border-color:transparent;box-shadow:none}
 .btn-primary:hover:not(:disabled){background:var(--primary-hover);box-shadow:none}
 .ghost{border-color:var(--border);background:transparent;color:var(--text)}
 .ghost:hover:not(:disabled){background:var(--hover);color:var(--text)}
@@ -78,6 +85,14 @@ label{display:grid;gap:7px;font-size:13px;font-weight:600;color:var(--text)}
 .check input{width:auto}
 input,textarea,select{font:inherit;width:100%;min-width:0;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--input);color:var(--text);outline:none;transition:border-color .15s,box-shadow .15s,background .15s}
 input:focus,textarea:focus,select:focus{border-color:var(--border-focus);box-shadow:0 0 0 3px var(--active);background:var(--card)}
+.password-wrap{position:relative;display:block}
+.password-wrap input{padding-right:40px}
+.password-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:none;background:transparent;color:var(--text-tertiary);cursor:pointer;border-radius:8px}
+.password-eye:hover{color:var(--text);background:var(--hover)}
+.password-eye.on{color:var(--primary)}
+.retention-note{display:flex;align-items:center;gap:6px;margin:12px 0 0;font-size:12px;color:var(--text-tertiary)}
+.music-row{display:flex;align-items:center;gap:6px;margin:12px 0 0;font-size:13px;color:var(--primary)}
+.music-row svg{flex-shrink:0}
 input::placeholder,textarea::placeholder{color:var(--text-tertiary)}
 textarea{resize:vertical;line-height:1.6}
 select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-image:var(--chevron);background-repeat:no-repeat;background-position:right 12px center;background-size:16px;padding-right:38px;cursor:pointer}
@@ -100,6 +115,10 @@ select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-i
 /* ================= 主从式布局 ================= */
 .layout{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:24px;align-items:start}
 .master-list{grid-column:span 4}
+.sidebar-brand{display:none;align-items:center;gap:10px;padding:2px 2px 14px;border-bottom:1px solid var(--border)}
+.sidebar-brand .brand-mark{width:38px;height:38px}
+.sidebar-brand .brand-text strong{display:block;font-size:16px;letter-spacing:0}
+.sidebar-brand .brand-text small{display:block;font-size:12px;color:var(--text-tertiary);margin-top:2px}
 .content{grid-column:span 8;display:grid;gap:24px;min-width:0}
 
 /* ---- 左侧：新建按钮 + 筛选 + 任务列表 ---- */
@@ -139,7 +158,8 @@ select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-i
 .dot-muted{background:var(--text-tertiary)}
 
 /* ================= 任务详情 ================= */
-.job-detail{padding:32px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow)}
+.job-detail{padding:32px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow);scroll-margin-top:100px}
+#view-detail{scroll-margin-top:100px}
 .detail-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:16px;flex-wrap:wrap}
 .detail-head h2{margin:0 0 12px;font-size:26px;line-height:1.25;word-break:break-word;letter-spacing:0}
 .job-time{font-size:12px;color:var(--text-tertiary);white-space:nowrap;margin-top:3px}
@@ -157,6 +177,15 @@ select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-i
 .detail-cover{width:100%;aspect-ratio:9/16;object-fit:cover;border-radius:8px;border:1px solid var(--border);background:var(--input);box-shadow:var(--shadow)}
 .detail-side{flex:1;min-width:0}
 .detail-meta{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--text-secondary)}
+.note-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px;margin-bottom:16px}
+.gallery-item{position:relative;margin:0;overflow:hidden;border:1px solid var(--border);border-radius:8px;background:var(--card);cursor:zoom-in;display:flex;flex-direction:column}
+.gallery-media{position:relative;aspect-ratio:1/1;overflow:hidden;background:var(--input)}
+.gallery-media img,.gallery-media video{width:100%;height:100%;object-fit:cover;display:block}
+.gallery-foot{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 8px;border-top:1px solid var(--border)}
+.gallery-badge{background:var(--primary-light);color:var(--primary);font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px}
+.gallery-dl{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;color:var(--text-tertiary);text-decoration:none;background:transparent}
+.gallery-dl:hover{background:var(--hover);color:var(--primary)}
+.preview-image{display:block;max-width:min(86vw,900px);max-height:76vh;margin:0 auto;border-radius:8px}
 .tags{display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0}
 .tag{display:inline-flex;align-items:center;min-height:24px;font-size:12px;font-weight:700;color:var(--primary);background:var(--primary-light);padding:2px 10px;border-radius:8px}
 .canonical-row{margin-top:12px;font-size:13px}
@@ -209,7 +238,11 @@ select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-i
 @keyframes modalIn{from{opacity:0;transform:scale(.96) translateY(6px)}to{opacity:1;transform:none}}
 .modal-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 18px;border-bottom:1px solid var(--border)}
 .modal-head strong{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.modal-close{border:0;background:transparent;color:var(--text-tertiary);cursor:pointer;padding:6px;border-radius:8px}
+.modal-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.preview-source-row{padding:10px 18px 0}
+#preview-source{border:0;background:var(--primary-light);color:var(--primary);font-size:12px;font-weight:700;padding:5px 12px;border-radius:999px;min-height:0;white-space:nowrap}
+#preview-source:hover{background:var(--active)}
+.modal-close{border:0;background:transparent;color:var(--text-tertiary);cursor:pointer;width:40px;height:40px;padding:0;border-radius:8px}
 .modal-close:hover{background:var(--hover);color:var(--text)}
 #preview-video{display:block;width:auto;height:auto;max-width:100%;max-height:78vh;margin:0 auto;background:#000}
 .confirm-card{max-width:min(92vw,400px)}
@@ -243,12 +276,17 @@ select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-i
 }
 @media(max-width:960px){
   .shell{padding:16px 16px 40px}
-  .topbar-inner{padding:12px 16px;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
-  .topbar .brand{grid-column:span 2}
-  .header-actions{grid-column:span 2}
+  .topbar-inner{padding:12px 16px;grid-template-columns:40px minmax(0,1fr) auto;gap:8px}
+  .topbar .brand{grid-column:auto;justify-self:center;text-align:center}
+  .topbar .brand-mark{display:none}
+  .header-actions{grid-column:auto}
+  .sidebar-brand{display:flex}
   .layout{grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
-  .master-list{grid-column:1/-1;position:static;top:auto;order:2;max-height:none}
-  .content{grid-column:1/-1;order:1;gap:16px}
+  #sidebar-toggle{display:inline-flex}
+  .sidebar-backdrop{position:fixed;inset:0;z-index:54;background:rgba(15,18,25,.45)}
+  .master-list{position:fixed;top:0;bottom:0;left:0;z-index:55;width:min(320px,85vw);transform:translateX(-100%);visibility:hidden;transition:transform .22s ease,visibility .22s;border-radius:0;border:0;border-right:1px solid var(--border);max-height:none;overflow-y:auto}
+  .master-list.open{transform:translateX(0);visibility:visible}
+  .content{grid-column:1/-1;gap:16px}
   .job-list{max-height:none}
   .panel,.job-detail{padding:24px}
   .panel h2,.detail-head h2{font-size:24px}

@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -39,6 +41,9 @@ type Dependencies struct {
 	LoginRateLimit  int
 	Settings        *settings.Service
 	AliyunAvailable bool
+	// AllowInsecureProviderSettings 允许在纯 HTTP（无 TLS）下配置 API Key。
+	// 仅用于自托管的内网/私有部署；公网必须保持默认的 HTTPS 校验。
+	AllowInsecureProviderSettings bool
 }
 
 type healthResponse struct {
@@ -184,8 +189,8 @@ func New(deps Dependencies) http.Handler {
 			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "仅管理员可修改 API 配置", false)
 			return
 		}
-		if !secureSettingsRequest(r) {
-			writeError(w, r, http.StatusForbidden, "HTTPS_REQUIRED", "远程配置 API Key 必须使用 HTTPS", false)
+		if !secureSettingsRequest(r) && !deps.AllowInsecureProviderSettings {
+			writeError(w, r, http.StatusForbidden, "HTTPS_REQUIRED", "远程配置 API Key 必须使用 HTTPS（自托管内网可设置环境变量 ALLOW_INSECURE_PROVIDER_SETTINGS=1 放行）", false)
 			return
 		}
 		if deps.Settings == nil {
@@ -282,6 +287,7 @@ func New(deps Dependencies) http.Handler {
 			return
 		}
 		recordJobAudit(deps.Audit, r, principal.UserID, job.ID, reused, job.Status)
+		withMediaPreviews([]jobs.Job{job}, deps.ASRSigner, time.Now())
 		writeJSON(w, http.StatusAccepted, map[string]any{"job": job, "reused": reused, "requestId": RequestID(r.Context())})
 	})
 	protected.HandleFunc("GET /api/v1/jobs", func(w http.ResponseWriter, r *http.Request) {
@@ -302,6 +308,7 @@ func New(deps Dependencies) http.Handler {
 			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取历史记录", true)
 			return
 		}
+		withMediaPreviews(page.Items, deps.ASRSigner, time.Now())
 		writeJSON(w, http.StatusOK, map[string]any{"jobs": page.Items, "total": page.Total, "limit": page.Limit, "offset": page.Offset, "requestId": RequestID(r.Context())})
 	})
 	protected.HandleFunc("POST /api/v1/jobs/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
@@ -410,6 +417,20 @@ func New(deps Dependencies) http.Handler {
 		}
 		handleFileDownload(deps.Storage, file, w, r)
 	})
+	// 媒体预览：同源签名地址，供 <img>/<video> 直接加载（无需 Authorization 头），
+	// 避免外部 CDN 防盗链/区域受限导致预览图加载失败。
+	mux.HandleFunc("GET /api/v1/media-preview/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if deps.Files == nil || deps.Storage == nil || deps.ASRSigner == nil || !deps.ASRSigner.Validate(r.PathValue("id"), r.URL.Query().Get("expires"), r.URL.Query().Get("signature"), time.Now()) {
+			http.NotFound(w, r)
+			return
+		}
+		file, err := deps.Files.FindByID(r.Context(), r.PathValue("id"))
+		if err != nil || (file.Kind != "image" && file.Kind != "animated" && file.Kind != "video") {
+			http.NotFound(w, r)
+			return
+		}
+		handleInlinePreview(deps.Storage, file, w, r)
+	})
 	protected.HandleFunc("GET /api/v1/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if deps.Jobs == nil {
 			writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true)
@@ -425,7 +446,66 @@ func New(deps Dependencies) http.Handler {
 			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务", true)
 			return
 		}
+		withMediaPreviews([]jobs.Job{job}, deps.ASRSigner, time.Now())
 		writeJSON(w, http.StatusOK, map[string]any{"job": job, "requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("GET /api/v1/jobs/{id}/images/archive", func(w http.ResponseWriter, r *http.Request) {
+		if deps.Jobs == nil || deps.Files == nil || deps.Storage == nil {
+			writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true)
+			return
+		}
+		principal, _ := Principal(r.Context())
+		job, err := deps.Jobs.Get(r.Context(), principal.UserID, r.PathValue("id"))
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在", false)
+			return
+		}
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务", true)
+			return
+		}
+		owned, err := deps.Files.ListByJob(r.Context(), principal.UserID, r.PathValue("id"))
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取媒体文件", true)
+			return
+		}
+		var media []ownedfiles.File
+		for _, file := range owned {
+			if file.Kind == "image" || file.Kind == "animated" {
+				media = append(media, file)
+			}
+		}
+		if len(media) == 0 {
+			writeError(w, r, http.StatusNotFound, "FILES_NOT_FOUND", "该任务没有可打包的配图", false)
+			return
+		}
+		base := jobWorkID(job)
+		filename := base + "_images.zip"
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(filename))
+		zw := zip.NewWriter(w)
+		writeZipEntry := func(entryName string, file ownedfiles.File) error {
+			handle, err := deps.Storage.Open(file)
+			if err != nil {
+				return err
+			}
+			defer handle.Close()
+			entry, err := zw.Create(entryName)
+			if err != nil {
+				return err
+			}
+			_, err = io.Copy(entry, handle)
+			return err
+		}
+		for index, file := range media {
+			name := fmt.Sprintf("%02d_%s", index+1, url.PathEscape(file.OriginalName))
+			if err := writeZipEntry(name, file); err != nil {
+				_ = zw.Close()
+				return
+			}
+		}
+		_ = zw.Close()
 	})
 	if deps.Auth != nil {
 		mux.Handle("POST /api/v1/auth/logout", requireAuth(deps.Auth, protected))
@@ -437,12 +517,20 @@ func New(deps Dependencies) http.Handler {
 		mux.Handle("POST /api/v1/jobs", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/jobs", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/jobs/{id}", requireAuth(deps.Auth, protected))
+		mux.Handle("GET /api/v1/jobs/{id}/images/archive", requireAuth(deps.Auth, protected))
 		mux.Handle("DELETE /api/v1/jobs/{id}", requireAuth(deps.Auth, protected))
 		mux.Handle("POST /api/v1/jobs/{id}/cancel", requireAuth(deps.Auth, protected))
 		mux.Handle("POST /api/v1/jobs/{id}/retry", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/files/{id}", requireAuth(deps.Auth, protected))
 	}
 	return requestMiddleware(deps.Build.Version, mux)
+}
+
+func jobWorkID(job jobs.Job) string {
+	if job.Work != nil && job.Work.DouyinWorkID != "" {
+		return job.Work.DouyinWorkID
+	}
+	return job.ID
 }
 
 func queryInt(r *http.Request, name string, fallback int) (int, error) {
@@ -474,6 +562,49 @@ func handleFileDownload(storage *ownedfiles.Storage, file ownedfiles.File, w htt
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(file.OriginalName))
 	http.ServeContent(w, r, file.OriginalName, stat.ModTime(), handle)
+}
+
+func handleInlinePreview(storage *ownedfiles.Storage, file ownedfiles.File, w http.ResponseWriter, r *http.Request) {
+	handle, err := storage.Open(file)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer handle.Close()
+	stat, err := handle.Stat()
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", file.MIMEType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", "inline; filename*=UTF-8''"+url.PathEscape(file.OriginalName))
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	http.ServeContent(w, r, file.OriginalName, stat.ModTime(), handle)
+}
+
+// withMediaPreviews 为图文/动图媒体文件注入同源预览地址（外部 CDN 不可用时的兜底显示来源）。
+func withMediaPreviews(items []jobs.Job, signer *ownedfiles.Signer, now time.Time) {
+	if signer == nil || len(items) == 0 {
+		return
+	}
+	expires := now.Add(24 * time.Hour)
+	for i := range items {
+		result, ok := items[i].Result.(map[string]any)
+		if !ok {
+			continue
+		}
+		files, ok := result["files"].([]jobs.JobFile)
+		if !ok {
+			continue
+		}
+		for j := range files {
+			if files[j].Kind == "image" || files[j].Kind == "animated" {
+				files[j].PreviewURL = signer.PreviewURL(files[j].ID, expires)
+			}
+		}
+		result["files"] = files
+	}
 }
 
 func recordJobAudit(recorder *audit.Recorder, r *http.Request, userID, jobID string, reused bool, status string) {

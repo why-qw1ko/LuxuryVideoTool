@@ -239,16 +239,20 @@ func scanJob(row scanner) (Job, error) {
 			work.PublishedAt = &value
 		}
 		var extra struct {
-			VideoURL   string           `json:"videoUrl"`
-			DurationMS int64            `json:"durationMs"`
-			Width      int              `json:"width"`
-			Height     int              `json:"height"`
-			Images     []resolver.Image `json:"images"`
-			Hashtags   []string         `json:"hashtags"`
+			VideoURL    string           `json:"videoUrl"`
+			DurationMS  int64            `json:"durationMs"`
+			Width       int              `json:"width"`
+			Height      int              `json:"height"`
+			Images      []resolver.Image `json:"images"`
+			Hashtags    []string         `json:"hashtags"`
+			MusicURL    string           `json:"musicUrl"`
+			MusicTitle  string           `json:"musicTitle"`
+			MusicArtist string           `json:"musicArtist"`
 		}
 		if metadata.Valid && json.Unmarshal([]byte(metadata.String), &extra) == nil {
 			work.VideoURL, work.DurationMS, work.Width, work.Height = extra.VideoURL, extra.DurationMS, extra.Width, extra.Height
 			work.Images, work.Hashtags = extra.Images, extra.Hashtags
+			work.MusicURL, work.MusicTitle, work.MusicArtist = extra.MusicURL, extra.MusicTitle, extra.MusicArtist
 		}
 		job.Work = &work
 		if job.Status == "completed" && job.Result == nil {
@@ -472,7 +476,7 @@ func (r *SQLiteRepository) FinishStep(ctx context.Context, stepID, status, code,
 }
 
 func (r *SQLiteRepository) FindFiles(ctx context.Context, userID, jobID string) ([]JobFile, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id, kind, original_name, mime_type, size_bytes FROM files WHERE user_id = ? AND job_id = ? AND deleted_at IS NULL ORDER BY created_at`, userID, jobID)
+	rows, err := r.db.QueryContext(ctx, `SELECT id, kind, original_name, mime_type, size_bytes, expires_at FROM files WHERE user_id = ? AND job_id = ? AND deleted_at IS NULL ORDER BY created_at`, userID, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("find job files: %w", err)
 	}
@@ -480,8 +484,13 @@ func (r *SQLiteRepository) FindFiles(ctx context.Context, userID, jobID string) 
 	var items []JobFile
 	for rows.Next() {
 		var item JobFile
-		if err := rows.Scan(&item.ID, &item.Kind, &item.Name, &item.MIMEType, &item.SizeBytes); err != nil {
+		var expires sql.NullInt64
+		if err := rows.Scan(&item.ID, &item.Kind, &item.Name, &item.MIMEType, &item.SizeBytes, &expires); err != nil {
 			return nil, err
+		}
+		if expires.Valid {
+			value := time.UnixMilli(expires.Int64).UTC()
+			item.ExpiresAt = &value
 		}
 		items = append(items, item)
 	}

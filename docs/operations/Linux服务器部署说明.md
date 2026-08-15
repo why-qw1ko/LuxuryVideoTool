@@ -79,6 +79,19 @@ DOUYIN_BROWSER_PATH=/usr/bin/chromium
 
 如果浏览器路径是 `/usr/bin/chromium-browser`，按实际结果填写。
 
+### 纯 HTTP 部署时配置 API Key
+
+默认情况下，从远程（非本机）通过纯 HTTP 配置大模型 API Key 会被拒绝，提示"远程配置 API Key 必须使用 HTTPS"。这是防止密钥在明文链路上被截获的安全限制。
+
+- **推荐**：使用 Nginx/Caddy 配置 HTTPS 反向代理后，即可正常配置。
+- **自托管内网/私有部署**：若确实需要用纯 HTTP 远程配置，可显式放行：
+
+```env
+ALLOW_INSECURE_PROVIDER_SETTINGS=1
+```
+
+> ⚠️ 该开关会让 API Key 通过明文 HTTP 传输，仅限可信的内网环境；公网务必保持关闭并走 HTTPS。
+
 ## 初始化管理员
 
 全新目录首次执行：

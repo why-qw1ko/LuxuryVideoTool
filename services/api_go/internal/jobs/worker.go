@@ -16,6 +16,7 @@ import (
 	ownedfiles "github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/files"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/media"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/resolver"
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/results"
 )
 
 type WorkerConfig struct {
@@ -140,6 +141,9 @@ func (w *Worker) process(ctx context.Context, owner string, job Job) (resultErr 
 		return err
 	}
 	if work.Type != "video" || work.VideoURL == "" {
+		if work.Type == "note" {
+			return w.processNote(jobCtx, owner, job, work)
+		}
 		return w.failed(job, owner, resolver.ErrVideoRequired)
 	}
 	stepID, err := auth.NewID(w.now())
@@ -194,6 +198,104 @@ func (w *Worker) process(ctx context.Context, owner string, job Job) (resultErr 
 		_ = w.fileRepo.MarkDeleted(context.Background(), file.ID, w.now().UTC())
 	}
 	return nil
+}
+
+// processNote 处理图文/动图作品。统一行为：凡是进入 worker 的操作（download/transcribe/full）
+// 都下载配图（动图下载动态版 MP4）并以配文（desc）生成结果，无需 ASR；
+// 纯解析（info）走同步路径，不经过这里。
+func (w *Worker) processNote(ctx context.Context, owner string, job Job, work resolver.Work) error {
+	job.Work = &work
+	now := w.now().UTC()
+	if len(work.Images) > 0 {
+		stepID, err := auth.NewID(now)
+		if err != nil {
+			return err
+		}
+		if err := w.repo.BeginStep(ctx, Step{ID: stepID, JobID: job.ID, Name: "download", Attempt: job.AttemptCount, StartedAt: now, Details: map[string]any{}}); err != nil {
+			return err
+		}
+		expires := now.Add(w.config.VideoRetention)
+		downloaded := 0
+		for index, img := range work.Images {
+			if ctx.Err() != nil {
+				_ = w.repo.FinishStep(context.Background(), stepID, "cancelled", "", "任务已取消", map[string]any{}, now)
+				return ctx.Err()
+			}
+			url, ext, kind, name := img.URL, ".jpg", "image", fmt.Sprintf("image-%02d.jpg", index+1)
+			if img.AnimatedURL != "" {
+				url, ext, kind, name = img.AnimatedURL, ".mp4", "animated", fmt.Sprintf("image-%02d.mp4", index+1)
+			}
+			if url == "" {
+				continue
+			}
+			if err := w.repo.SetStage(ctx, job.ID, owner, "downloading", 30+index*45/len(work.Images), fmt.Sprintf("正在下载配图 %d/%d", index+1, len(work.Images)), now); err != nil {
+				return err
+			}
+			relative, temporary, final, err := w.storage.NewScopedTarget("images", job.UserID, job.ID, ext)
+			if err != nil {
+				continue
+			}
+			// 单张配图较短超时，避免外部 CDN 卡死导致任务一直挂着；失败跳过，全部失败才报错。
+			fileCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			result, err := w.downloader.Download(fileCtx, url, temporary, final, w.config.MaxVideoBytes)
+			cancel()
+			if err != nil {
+				_ = w.storage.Remove(ownedfiles.File{RelativePath: relative})
+				if ctx.Err() != nil {
+					_ = w.repo.FinishStep(context.Background(), stepID, "cancelled", "", "任务已取消", map[string]any{}, now)
+					return ctx.Err()
+				}
+				slog.WarnContext(ctx, "note image download failed, skipping", "job_id", job.ID, "index", index+1, "error", err)
+				continue
+			}
+			// 每张图用递增时间戳创建文件记录，确保按图片顺序返回（created_at + ULID 均可排序）。
+			file, err := ownedfiles.NewFile(now.Add(time.Duration(index)*time.Millisecond), job.UserID, job.ID, kind, relative, name, result.MIMEType, result.SHA256, result.SizeBytes, &expires)
+			if err != nil {
+				_ = w.storage.Remove(ownedfiles.File{RelativePath: relative})
+				continue
+			}
+			if err := w.fileRepo.Create(ctx, file); err != nil {
+				_ = w.storage.Remove(ownedfiles.File{RelativePath: relative})
+				continue
+			}
+			downloaded++
+		}
+		if downloaded == 0 {
+			return w.finishFailed(job, owner, stepID, media.ErrDownload)
+		}
+		if err := w.repo.FinishStep(ctx, stepID, "completed", "", "", map[string]any{"files": downloaded}, now); err != nil {
+			return err
+		}
+	}
+	if w.transcriber == nil {
+		return w.failed(job, owner, asr.ErrAuth)
+	}
+	if err := w.repo.SetStage(ctx, job.ID, owner, "postprocessing", 90, "正在生成结果文件", now); err != nil {
+		return err
+	}
+	text := asr.Normalize(work.Description)
+	if text == "" {
+		text = asr.Normalize(work.Title)
+	}
+	bundle, err := results.BuildNote(work, now)
+	if err != nil {
+		return err
+	}
+	files := []struct{ name string; body []byte; mime, kind string }{
+		{"result.md", []byte(bundle.Markdown), "text/markdown; charset=utf-8", "result_markdown"},
+		{"result.txt", []byte(bundle.Text), "text/plain; charset=utf-8", "result_text"},
+		{"meta.json", bundle.Meta, "application/json", "result_meta"},
+	}
+	resultFiles := make([]JobFile, 0, len(files))
+	for _, content := range files {
+		file, err := w.transcriber.writeResult(ctx, job, content.name, content.kind, content.mime, content.body)
+		if err != nil {
+			return err
+		}
+		resultFiles = append(resultFiles, JobFile{ID: file.ID, Kind: file.Kind, Name: file.OriginalName, MIMEType: file.MIMEType, SizeBytes: file.SizeBytes})
+	}
+	result := map[string]any{"rawText": text, "normalizedText": text, "files": resultFiles}
+	return w.repo.CompleteTranscription(ctx, job.ID, owner, result, now)
 }
 
 func (w *Worker) Cancel(jobID string) bool {

@@ -9,7 +9,7 @@ import (
 
 var (
 	httpsURLPattern = regexp.MustCompile(`https://[^\s<>"'，。；！？、]+`)
-	workPathPattern = regexp.MustCompile(`^/(?:video|note|share/video)/(\d+)(?:/|$)`)
+	workPathPattern = regexp.MustCompile(`^/(?:video|note|share/(?:video|note|slides))/(\d+)(?:/|$)`)
 )
 
 var allowedHosts = map[string]bool{
@@ -33,7 +33,12 @@ func ExtractInput(text string) (Input, error) {
 		input := Input{URL: u}
 		if match := workPathPattern.FindStringSubmatch(u.EscapedPath()); len(match) == 2 {
 			input.WorkID = match[1]
-			if strings.Contains(u.Path, "/note/") { input.WorkType = "note" } else { input.WorkType = "video" }
+			// note 与 slides（轮播图文）都是图文/动图类作品，统一按 note 处理。
+			if strings.Contains(u.Path, "/note/") || strings.Contains(u.Path, "/slides/") {
+				input.WorkType = "note"
+			} else {
+				input.WorkType = "video"
+			}
 		}
 		return input, nil
 	}

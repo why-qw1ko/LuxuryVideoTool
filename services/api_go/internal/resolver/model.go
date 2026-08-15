@@ -18,6 +18,9 @@ type Image struct {
 	URL    string `json:"url"`
 	Width  int    `json:"width,omitempty"`
 	Height int    `json:"height,omitempty"`
+	// AnimatedURL 是动图（live photo）的动态版地址，通常为 MP4 片段；
+	// 仅动图类图片有值，普通配图为空。
+	AnimatedURL string `json:"animatedUrl,omitempty"`
 }
 
 type Work struct {
@@ -37,6 +40,9 @@ type Work struct {
 	Images          []Image        `json:"images,omitempty"`
 	Hashtags        []string       `json:"hashtags,omitempty"`
 	PublishedAt     *time.Time     `json:"publishedAt,omitempty"`
+	MusicURL        string         `json:"musicUrl,omitempty"`
+	MusicTitle      string         `json:"musicTitle,omitempty"`
+	MusicArtist     string         `json:"musicArtist,omitempty"`
 	ResolverName    string         `json:"resolverName"`
 	ResolverVersion string         `json:"resolverVersion"`
 	ResolvedAt      time.Time      `json:"resolvedAt"`

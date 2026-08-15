@@ -14,6 +14,7 @@ class _LoginPageState extends State<LoginPage> {
   final _password = TextEditingController();
   AppFailure? _failure;
   bool _submitting = false;
+  bool _obscurePassword = true;
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -26,7 +27,15 @@ class _LoginPageState extends State<LoginPage> {
         const SizedBox(height: 28),
         TextField(controller: _username, enabled: !_submitting, autofillHints: const <String>[AutofillHints.username], textInputAction: TextInputAction.next, decoration: const InputDecoration(labelText: '用户名', border: OutlineInputBorder())),
         const SizedBox(height: 12),
-        TextField(controller: _password, enabled: !_submitting, obscureText: true, autofillHints: const <String>[AutofillHints.password], onSubmitted: (_) => _login(), decoration: const InputDecoration(labelText: '密码', border: OutlineInputBorder())),
+        TextField(controller: _password, enabled: !_submitting, obscureText: _obscurePassword, autofillHints: const <String>[AutofillHints.password], onSubmitted: (_) => _login(), decoration: InputDecoration(
+          labelText: '密码',
+          border: const OutlineInputBorder(),
+          suffixIcon: IconButton(
+            icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility),
+            tooltip: _obscurePassword ? '显示密码' : '隐藏密码',
+            onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+          ),
+        )),
         if (_failure != null) Padding(padding: const EdgeInsets.only(top: 12), child: FailureView(failure: _failure!)),
         const SizedBox(height: 18), FilledButton(onPressed: _submitting ? null : _login, child: _submitting ? const SizedBox.square(dimension: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('登录')),
         const SizedBox(height: 12), Text('服务器：${widget.state.settings.serverUrl}', textAlign: TextAlign.center),
