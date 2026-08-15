@@ -87,7 +87,7 @@ input,textarea,select{font:inherit;width:100%;min-width:0;padding:10px 12px;bord
 input:focus,textarea:focus,select:focus{border-color:var(--border-focus);box-shadow:0 0 0 3px var(--active);background:var(--card)}
 .password-wrap{position:relative;display:block}
 .password-wrap input{padding-right:40px}
-.password-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:none;background:transparent;color:var(--text-tertiary);cursor:pointer;border-radius:8px}
+.password-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border:none;background:transparent;color:var(--text-tertiary);cursor:pointer;border-radius:8px}
 .password-eye:hover{color:var(--text);background:var(--hover)}
 .password-eye.on{color:var(--primary)}
 .retention-note{display:flex;align-items:center;gap:6px;margin:12px 0 0;font-size:12px;color:var(--text-tertiary)}
@@ -302,6 +302,11 @@ select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-i
   .header-actions #logout .btn-label{display:none}
   .panel,.job-detail{padding:20px}
   .narrow{margin:32px auto}
+  /* 表单控件 >=16px，避免 iOS Safari 聚焦时整页自动放大 */
+  input,textarea,select{font-size:16px}
+  /* 手机端小眼睛加大点击区域，输入框右侧留出对应空间 */
+  .password-wrap input{padding-right:46px}
+  .password-eye{width:36px;height:36px}
   .row,.api-form{grid-template-columns:1fr;align-items:stretch}
   .row button,.api-form button,#login-form button,#provider-form button{width:100%}
   textarea{min-height:168px}
