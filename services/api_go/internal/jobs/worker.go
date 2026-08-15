@@ -206,6 +206,14 @@ func (w *Worker) process(ctx context.Context, owner string, job Job) (resultErr 
 func (w *Worker) processNote(ctx context.Context, owner string, job Job, work resolver.Work) error {
 	job.Work = &work
 	now := w.now().UTC()
+	// 上一尝试（失败/取消/失租）可能残留配图与结果文件；先清空，避免重试后画廊、ZIP、下载链接混入过期副本。
+	// 用 Background context，确保即使本次已取消也能完成清理。
+	if stale, err := w.fileRepo.ListByJob(context.Background(), job.UserID, job.ID); err == nil {
+		for _, file := range stale {
+			_ = w.storage.Remove(file)
+			_ = w.repo.DeleteFileRecord(context.Background(), file.ID)
+		}
+	}
 	if len(work.Images) > 0 {
 		stepID, err := auth.NewID(now)
 		if err != nil {
@@ -229,7 +237,12 @@ func (w *Worker) processNote(ctx context.Context, owner string, job Job, work re
 				continue
 			}
 			if err := w.repo.SetStage(ctx, job.ID, owner, "downloading", 30+index*45/len(work.Images), fmt.Sprintf("正在下载配图 %d/%d", index+1, len(work.Images)), now); err != nil {
-				// 中途失租/取消时收尾 download 步骤，避免留下永久 running 的行。
+				if ctx.Err() != nil {
+					// 取消竞态（循环顶部检查之后才取消）：步骤标 cancelled 而非 failed，与任务状态一致。
+					_ = w.repo.FinishStep(context.Background(), stepID, "cancelled", "", "任务已取消", map[string]any{}, now)
+					return ctx.Err()
+				}
+				// 中途失租/其他错误时收尾 download 步骤，避免留下永久 running 的行。
 				return w.finishFailed(job, owner, stepID, err)
 			}
 			relative, temporary, final, err := w.storage.NewScopedTarget("images", job.UserID, job.ID, ext)
@@ -294,7 +307,7 @@ func (w *Worker) processNote(ctx context.Context, owner string, job Job, work re
 		resultFiles = append(resultFiles, JobFile{ID: file.ID, Kind: file.Kind, Name: file.OriginalName, MIMEType: file.MIMEType, SizeBytes: file.SizeBytes})
 	}
 	result := map[string]any{"rawText": text, "normalizedText": text, "files": resultFiles}
-	return w.repo.CompleteTranscription(ctx, job.ID, owner, result, now)
+	return w.repo.CompleteTranscription(ctx, job.ID, owner, result, "配图下载与文案生成完成", now)
 }
 
 func (w *Worker) Cancel(jobID string) bool {

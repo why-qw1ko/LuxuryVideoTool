@@ -288,6 +288,13 @@ func New(deps Dependencies) http.Handler {
 			return
 		}
 		recordJobAudit(deps.Audit, r, principal.UserID, job.ID, reused, job.Status)
+		// 幂等键复用且任务已完成时，files 是 result_json 解码的 []any（无 expiresAt/预览地址），
+		// 重新走一次 FindByID 注入类型化文件，保证保留期提示与预览地址与 GET 一致。
+		if reused && job.Status == "completed" {
+			if fresh, getErr := deps.Jobs.Get(r.Context(), principal.UserID, job.ID); getErr == nil {
+				job = fresh
+			}
+		}
 		withMediaPreviews([]jobs.Job{job}, deps.ASRSigner, time.Now())
 		writeJSON(w, http.StatusAccepted, map[string]any{"job": job, "reused": reused, "requestId": RequestID(r.Context())})
 	})
@@ -463,6 +470,10 @@ func New(deps Dependencies) http.Handler {
 		}
 		if err != nil {
 			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务", true)
+			return
+		}
+		if job.Status != "completed" {
+			writeError(w, r, http.StatusConflict, "JOB_NOT_READY", "任务尚未完成，暂不能打包配图", false)
 			return
 		}
 		owned, err := deps.Files.ListByJob(r.Context(), principal.UserID, r.PathValue("id"))

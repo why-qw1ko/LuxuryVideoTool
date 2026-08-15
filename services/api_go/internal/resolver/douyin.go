@@ -288,14 +288,16 @@ func parseWorkObject(object map[string]any) (Work, bool) {
 		work.VideoURL = ""
 		for _, item := range images {
 			if image, ok := item.(map[string]any); ok {
+				// 动图（live photo）的动态版 MP4 在 images[i].video，是 display_image 的兄弟节点，
+				// 必须先保留原 map 引用，rebind 到 display_image 后再取 video 会永远取不到。
+				source := image
 				if nested := firstMap(image, "display_image", "displayImage"); nested != nil {
 					image = nested
 				}
 				if imageURL := findURL(image, "url_list", "urlList", "download_url_list", "downloadUrlList"); imageURL != "" {
 					entry := Image{URL: imageURL, Width: int(firstNumber(image, "width")), Height: int(firstNumber(image, "height"))}
-					// 动图（live photo）：images[i].video 内带动态版 MP4 地址。
 					// 优先取 CDN play_addr（直接文件、可靠），download_addr 是会 302 的签名接口。
-					if video := firstMap(image, "video"); video != nil {
+					if video := firstMap(source, "video"); video != nil {
 						entry.AnimatedURL = withoutWatermark(findURL(video, "play_addr", "playAddr", "download_addr", "downloadAddr"))
 					}
 					work.Images = append(work.Images, entry)

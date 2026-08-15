@@ -153,12 +153,17 @@ func boundedIntEnv(name string, fallback, minValue, maxValue int) (int, error) {
 func positiveInt64Env(name string, fallback int64) (int64, error) { raw := strings.TrimSpace(os.Getenv(name)); if raw == "" { return fallback, nil }; value, err := strconv.ParseInt(raw, 10, 64); if err != nil || value <= 0 { return 0, fmt.Errorf("%s must be a positive integer", name) }; return value, nil }
 func nonNegativeFloatEnv(name string, fallback float64) (float64, error) { raw := strings.TrimSpace(os.Getenv(name)); if raw == "" { return fallback, nil }; value, err := strconv.ParseFloat(raw, 64); if err != nil || value < 0 { return 0, fmt.Errorf("%s must be a non-negative number", name) }; return value, nil }
 func boolEnv(name string, fallback bool) bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	switch strings.ToLower(raw) {
 	case "1", "true", "yes", "on":
 		return true
 	case "0", "false", "no", "off":
 		return false
 	default:
+		// 未设置（空）静默走默认值；设置了但无法识别时打警告，避免拼写错误被无声吞掉。
+		if raw != "" {
+			slog.Warn("env var has unrecognized boolean value, using default", "name", name, "value", raw, "default", fallback)
+		}
 		return fallback
 	}
 }

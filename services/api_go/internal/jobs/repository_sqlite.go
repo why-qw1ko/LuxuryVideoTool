@@ -332,12 +332,12 @@ func (r *SQLiteRepository) CompleteDownload(ctx context.Context, jobID, owner, f
 	}
 	return nil
 }
-func (r *SQLiteRepository) CompleteTranscription(ctx context.Context, jobID, owner string, result map[string]any, at time.Time) error {
+func (r *SQLiteRepository) CompleteTranscription(ctx context.Context, jobID, owner string, result map[string]any, message string, at time.Time) error {
 	encoded, err := json.Marshal(result)
 	if err != nil {
 		return err
 	}
-	dbResult, err := r.db.ExecContext(ctx, `UPDATE jobs SET status='completed', progress=100, status_message='转写与结果生成完成', result_json=?, completed_at=?, updated_at=?, lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL, error_code=NULL, error_message=NULL WHERE id=? AND lease_owner=? AND status='postprocessing'`, string(encoded), at.UnixMilli(), at.UnixMilli(), jobID, owner)
+	dbResult, err := r.db.ExecContext(ctx, `UPDATE jobs SET status='completed', progress=100, status_message=?, result_json=?, completed_at=?, updated_at=?, lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL, error_code=NULL, error_message=NULL WHERE id=? AND lease_owner=? AND status='postprocessing'`, message, string(encoded), at.UnixMilli(), at.UnixMilli(), jobID, owner)
 	if err != nil {
 		return err
 	}

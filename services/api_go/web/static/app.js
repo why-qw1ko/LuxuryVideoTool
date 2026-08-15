@@ -312,19 +312,21 @@ function jobDetailHTML(job){
   const mediaFileForImage=i=>mediaFiles.find(f=>(f.name||'').indexOf(`image-${String(i+1).padStart(2,'0')}`)===0)||null;
   const galleryItems=noteImages.map((img,i)=>{
     const file=mediaFileForImage(i);
-    const previewSrc=file&&file.previewUrl?file.previewUrl:(img.animatedUrl||img.url);
+    const cdnSrc=img.animatedUrl||img.url;
+    // 签名预览地址 24h 有效：可用时优先（跨区域稳定），过期则退回 CDN 原址，避免 404 黑框。
+    const viewerSrc=(file&&file.previewUrl&&previewUsable(file.previewUrl))?file.previewUrl:cdnSrc;
     const dl=file?`<a class="gallery-dl" href="/api/v1/files/${encodeURIComponent(file.id)}" data-file data-name="${esc(file.name||'image')}" data-preview="${esc(file.previewUrl||'')}" title="下载">${icon('download',14)}</a>`:'';
     const badge=`<span class="gallery-badge">${img.animatedUrl?'动图':'图片'}</span>`;
-    // 动图：video 内联自动循环（与查看器同一地址，浏览器缓存后打开不再重新加载）；普通配图：缩略图用 CDN 小图，加载失败回退服务器本地文件。
-    const onerr=file&&file.previewUrl?`this.onerror=null;this.src='${esc(file.previewUrl)}'`:`this.style.display='none'`;
+    // 静态图：CDN 失败 → 回退签名地址（未过期时）；动图：签名地址失败 → 回退 CDN 原址。
+    const onerr=(file&&file.previewUrl&&previewUsable(file.previewUrl))?`this.onerror=null;this.src='${esc(file.previewUrl)}'`:`this.style.display='none'`;
     const media=img.animatedUrl
-      ?`<video class="gallery-anim" src="${esc(previewSrc)}" autoplay muted loop playsinline preload="metadata"></video>`
+      ?`<video class="gallery-anim" src="${esc(viewerSrc)}" autoplay muted loop playsinline preload="metadata" onerror="this.onerror=null;this.src='${esc(cdnSrc)}'"></video>`
       :`<img src="${esc(img.url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="${onerr}">`;
     const foot=(badge||dl)?`<div class="gallery-foot">${badge}${dl}</div>`:'';
-    return `<figure class="gallery-item" data-preview="${esc(previewSrc)}" data-animated="${img.animatedUrl?'1':'0'}" data-title="${esc((stripHashtags(w.title,w.hashtags)||'预览').slice(0,40))}" data-music="${esc(w.musicUrl||'')}"><div class="gallery-media">${media}</div>${foot}</figure>`;
+    return `<figure class="gallery-item" data-preview="${esc(viewerSrc)}" data-fallback="${esc(cdnSrc)}" data-animated="${img.animatedUrl?'1':'0'}" data-title="${esc((stripHashtags(w.title,w.hashtags)||'预览').slice(0,40))}" data-music="${esc(w.musicUrl||'')}"><div class="gallery-media">${media}</div>${foot}</figure>`;
   }).join('');
   const noteGallery=isNote&&noteImages.length?`<div class="note-gallery">${galleryItems}</div>`:'';
-  const zipLink=(isNote&&mediaFiles.length)?`<a class="btn" href="/api/v1/jobs/${encodeURIComponent(job.id)}/images/archive" data-file data-name="${esc((job.work&&job.work.douyinWorkId)||job.id)}_images.zip">${icon('download',14)} 打包下载全部</a>`:'';
+  const zipLink=(isNote&&mediaFiles.length&&job.status==='completed')?`<a class="btn" href="/api/v1/jobs/${encodeURIComponent(job.id)}/images/archive" data-file data-name="${esc((job.work&&job.work.douyinWorkId)||job.id)}_images.zip">${icon('download',14)} 打包下载全部</a>`:'';
 
   const musicRow=isNote&&w.musicUrl?`<div class="music-row">${icon('music',13)} ${esc(w.musicTitle||'背景音乐')}${w.musicArtist?' · '+esc(w.musicArtist):''}</div>`:'';
   const hasMedia=cover||w.authorName||metas.length;
@@ -361,7 +363,7 @@ $('#app').addEventListener('click',e=>{
   const row=e.target.closest('.job-row');
   if(row){selectJob(row.dataset.id);return}
   const gItem=e.target.closest('.gallery-item');
-  if(gItem&&!e.target.closest('.gallery-dl')){openMediaPreview(gItem.dataset.preview,gItem.dataset.animated,gItem.dataset.title,gItem.dataset.music);return}
+  if(gItem&&!e.target.closest('.gallery-dl')){openMediaPreview(gItem.dataset.preview,gItem.dataset.animated,gItem.dataset.title,gItem.dataset.music,gItem.dataset.fallback);return}
   const btn=e.target.closest('[data-op],a[data-file],[data-copy]');
   if(!btn)return;
   if(btn.dataset.op==='preview'){e.preventDefault();openPreview(btn.dataset.fid,btn.dataset.name,btn.dataset.preview);return}
@@ -493,12 +495,14 @@ async function openPreview(fileId,name,previewUrl){
 }
 // 画廊点击查看。动图：视频静音作画面，声音默认取作品背景音乐，可切到原声；
 // 静态配图：显示大图，有背景音乐则随画面播放。
-function openMediaPreview(src,animated,title,musicUrl){
+function openMediaPreview(src,animated,title,musicUrl,fallback){
   const modal=$('#preview-modal'),video=$('#preview-video'),img=$('#preview-image'),sound=$('#preview-sound');
   $('#preview-title').textContent=title||'预览';
   modal.classList.remove('hidden');
   document.body.classList.add('modal-open');
   previewBgmURL=musicUrl||'';
+  // 签名预览地址可能在渲染后过期（已完成任务不会重渲染），点开时再兜底到 CDN 原址。
+  if(!previewUsable(src)&&fallback)src=fallback;
   sound.classList.remove('hidden');
   if(animated==='1'){
     img.classList.add('hidden');img.removeAttribute('src');
