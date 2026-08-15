@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"net/url"
 	"strconv"
 	"strings"
@@ -481,10 +482,17 @@ func New(deps Dependencies) http.Handler {
 		}
 		base := jobWorkID(job)
 		filename := base + "_images.zip"
-		w.Header().Set("Content-Type", "application/zip")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(filename))
-		zw := zip.NewWriter(w)
+		// 先写入临时文件，全部成功后再流式返回；中途任何错误都能正常返回 5xx，
+		// 避免已返回 200 后才发现 zip 写入失败，客户端拿到截断的坏包。
+		tmp, err := os.CreateTemp("", "douyin-images-*.zip")
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法创建打包临时文件", true)
+			return
+		}
+		tmpPath := tmp.Name()
+		defer os.Remove(tmpPath)
+		defer tmp.Close()
+		zw := zip.NewWriter(tmp)
 		writeZipEntry := func(entryName string, file ownedfiles.File) error {
 			handle, err := deps.Storage.Open(file)
 			if err != nil {
@@ -502,10 +510,22 @@ func New(deps Dependencies) http.Handler {
 			name := fmt.Sprintf("%02d_%s", index+1, url.PathEscape(file.OriginalName))
 			if err := writeZipEntry(name, file); err != nil {
 				_ = zw.Close()
+				writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "打包配图失败", true)
 				return
 			}
 		}
-		_ = zw.Close()
+		if err := zw.Close(); err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "打包配图失败", true)
+			return
+		}
+		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "打包配图失败", true)
+			return
+		}
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(filename))
+		http.ServeContent(w, r, filename, time.Now(), tmp)
 	})
 	if deps.Auth != nil {
 		mux.Handle("POST /api/v1/auth/logout", requireAuth(deps.Auth, protected))
@@ -594,16 +614,33 @@ func withMediaPreviews(items []jobs.Job, signer *ownedfiles.Signer, now time.Tim
 		if !ok {
 			continue
 		}
-		files, ok := result["files"].([]jobs.JobFile)
-		if !ok {
-			continue
-		}
-		for j := range files {
-			if files[j].Kind == "image" || files[j].Kind == "animated" {
-				files[j].PreviewURL = signer.PreviewURL(files[j].ID, expires)
+		switch files := result["files"].(type) {
+		case []jobs.JobFile:
+			for j := range files {
+				// video 也注入：视频预览/下载走同源签名地址直接流式传输，避免前端 fetch 整文件缓冲导致"半天才弹出"。
+				if files[j].Kind == "image" || files[j].Kind == "animated" || files[j].Kind == "video" {
+					files[j].PreviewURL = signer.PreviewURL(files[j].ID, expires)
+				}
+			}
+			result["files"] = files
+		case []any:
+			// 复用 Idempotency-Key 时 result 从 result_json 解码为 []any，逐项注入预览地址。
+			for _, entry := range files {
+				m, ok := entry.(map[string]any)
+				if !ok {
+					continue
+				}
+				kind, _ := m["kind"].(string)
+				if kind != "image" && kind != "animated" && kind != "video" {
+					continue
+				}
+				id, _ := m["id"].(string)
+				if id == "" {
+					continue
+				}
+				m["previewUrl"] = signer.PreviewURL(id, expires)
 			}
 		}
-		result["files"] = files
 	}
 }
 

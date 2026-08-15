@@ -229,7 +229,8 @@ func (w *Worker) processNote(ctx context.Context, owner string, job Job, work re
 				continue
 			}
 			if err := w.repo.SetStage(ctx, job.ID, owner, "downloading", 30+index*45/len(work.Images), fmt.Sprintf("正在下载配图 %d/%d", index+1, len(work.Images)), now); err != nil {
-				return err
+				// 中途失租/取消时收尾 download 步骤，避免留下永久 running 的行。
+				return w.finishFailed(job, owner, stepID, err)
 			}
 			relative, temporary, final, err := w.storage.NewScopedTarget("images", job.UserID, job.ID, ext)
 			if err != nil {
@@ -267,9 +268,7 @@ func (w *Worker) processNote(ctx context.Context, owner string, job Job, work re
 			return err
 		}
 	}
-	if w.transcriber == nil {
-		return w.failed(job, owner, asr.ErrAuth)
-	}
+	// note 路径无需 ASR：仅需结果文件落盘（Storage/FileRepo），不依赖 transcriber。
 	if err := w.repo.SetStage(ctx, job.ID, owner, "postprocessing", 90, "正在生成结果文件", now); err != nil {
 		return err
 	}
@@ -288,7 +287,7 @@ func (w *Worker) processNote(ctx context.Context, owner string, job Job, work re
 	}
 	resultFiles := make([]JobFile, 0, len(files))
 	for _, content := range files {
-		file, err := w.transcriber.writeResult(ctx, job, content.name, content.kind, content.mime, content.body)
+		file, err := writeResult(w.storage, w.fileRepo, ctx, job, content.name, content.kind, content.mime, content.body)
 		if err != nil {
 			return err
 		}

@@ -193,7 +193,7 @@ async function loadJobs(){if(!session)return;try{const q=new URLSearchParams({q:
 
 /* ---------- 渲染 ---------- */
 function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function stripHashtags(title,hashtags){let t=String(title||'');(hashtags||[]).forEach(h=>{if(h)t=t.split('#'+h).join(' ')});return t.replace(/[#＃]\S*/g,'').replace(/\s{2,}/g,' ').replace(/^\s+|\s+$/g,'')}
+function stripHashtags(title,hashtags){let t=String(title||'');(hashtags||[]).forEach(h=>{if(h)t=t.split('#'+h).join(' ')});const out=t.replace(/[#＃]\S*/g,'').replace(/\s{2,}/g,' ').replace(/^\s+|\s+$/g,'');return out||t.trim()}
 function fmtDuration(ms){if(!ms)return'';const s=Math.max(1,Math.round(ms/1000)),h=Math.floor(s/3600),m=Math.floor(s%3600/60),ss=s%60;return h?`${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`:`${m}:${String(ss).padStart(2,'0')}`}
 function fmtDate(iso){if(!iso)return'';const d=new Date(iso);return isNaN(d)?'':d.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false})}
 function fmtShort(iso){if(!iso)return'';const d=new Date(iso);if(isNaN(d))return'';return `${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`}
@@ -292,9 +292,10 @@ function jobDetailHTML(job){
 
   const isNote=w.type==='note';
   const linkFiles=isNote?files.filter(f=>f.kind!=='image'&&f.kind!=='animated'):files;
-  const fileLinks=linkFiles.map(f=>`<a class="btn download" href="/api/v1/files/${encodeURIComponent(f.id)}" data-file="${esc(f.id)}" data-name="${esc(f.name)}">${icon('download',14)} ${esc(fileLabel(f))}</a>`);
+  // data-preview 携带同源签名流式地址：视频/配图下载直接用 <a download> 流式落盘，不再 fetch 整文件缓冲。
+  const fileLinks=linkFiles.map(f=>`<a class="btn download" href="/api/v1/files/${encodeURIComponent(f.id)}" data-file="${esc(f.id)}" data-name="${esc(f.name)}" data-preview="${esc(f.previewUrl||'')}">${icon('download',14)} ${esc(fileLabel(f))}</a>`);
   const viewOps=[],taskOps=[];
-  if(videoFile)viewOps.push(`<button type="button" class="btn preview-btn" data-op="preview" data-fid="${esc(videoFile.id)}" data-name="${esc(videoFile.name)}">${icon('play',14)} 预览视频</button>`);
+  if(videoFile)viewOps.push(`<button type="button" class="btn preview-btn" data-op="preview" data-fid="${esc(videoFile.id)}" data-name="${esc(videoFile.name)}" data-preview="${esc(videoFile.previewUrl||'')}">${icon('play',14)} 预览视频</button>`);
   if(!terminal)taskOps.push(`<button type="button" data-op="cancel">${icon('circle-slash',14)} 取消</button>`);
   if(job.status==='failed'||job.status==='cancelled')taskOps.push(`<button type="button" data-op="retry">${icon('rotate-ccw',14)} 重试</button>`);
   if(terminal)taskOps.push(`<button type="button" data-op="delete" class="danger">${icon('trash',14)} 删除</button>`);
@@ -307,10 +308,12 @@ function jobDetailHTML(job){
   // 图文/动图：图片画廊。动图缩略图直接用动态本体内联动（点开是全屏查看器，非视频播放器）。
   const mediaFiles=files.filter(f=>f.kind==='image'||f.kind==='animated');
   const noteImages=w.images||[];
+  // 按文件名前缀（image-NN）匹配配图，避免某张图下载失败被跳过导致数组下标错位、文件张冠李戴。
+  const mediaFileForImage=i=>mediaFiles.find(f=>(f.name||'').indexOf(`image-${String(i+1).padStart(2,'0')}`)===0)||null;
   const galleryItems=noteImages.map((img,i)=>{
-    const file=mediaFiles[i];
+    const file=mediaFileForImage(i);
     const previewSrc=file&&file.previewUrl?file.previewUrl:(img.animatedUrl||img.url);
-    const dl=file?`<a class="gallery-dl" href="/api/v1/files/${encodeURIComponent(file.id)}" data-file data-name="${esc(file.name||'image')}" title="下载">${icon('download',14)}</a>`:'';
+    const dl=file?`<a class="gallery-dl" href="/api/v1/files/${encodeURIComponent(file.id)}" data-file data-name="${esc(file.name||'image')}" data-preview="${esc(file.previewUrl||'')}" title="下载">${icon('download',14)}</a>`:'';
     const badge=`<span class="gallery-badge">${img.animatedUrl?'动图':'图片'}</span>`;
     // 动图：video 内联自动循环（与查看器同一地址，浏览器缓存后打开不再重新加载）；普通配图：缩略图用 CDN 小图，加载失败回退服务器本地文件。
     const onerr=file&&file.previewUrl?`this.onerror=null;this.src='${esc(file.previewUrl)}'`:`this.style.display='none'`;
@@ -361,7 +364,7 @@ $('#app').addEventListener('click',e=>{
   if(gItem&&!e.target.closest('.gallery-dl')){openMediaPreview(gItem.dataset.preview,gItem.dataset.animated,gItem.dataset.title,gItem.dataset.music);return}
   const btn=e.target.closest('[data-op],a[data-file],[data-copy]');
   if(!btn)return;
-  if(btn.dataset.op==='preview'){e.preventDefault();openPreview(btn.dataset.fid,btn.dataset.name);return}
+  if(btn.dataset.op==='preview'){e.preventDefault();openPreview(btn.dataset.fid,btn.dataset.name,btn.dataset.preview);return}
   if(btn.hasAttribute('data-file')){e.preventDefault();download(btn);return}
   if(btn.hasAttribute('data-copy')){e.preventDefault();e.stopPropagation();copyText(btn);return}
   if(btn.dataset.op){const job=btn.closest('[data-job]');if(job)operate(job.dataset.job,btn.dataset.op)}
@@ -395,7 +398,22 @@ async function operate(id,op){
     if(op==='retry')toast('已重新开始');
   }catch(err){toast(err.message,'error')}
 }
-async function download(link){try{const response=await fetch(link.href,{headers:{Authorization:`Bearer ${session.accessToken}`}});if(!response.ok)throw new Error('下载失败');const blob=await response.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=link.dataset.name;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000)}catch(err){toast(err.message,'error')}}
+// 签名预览地址带 expires（Unix 秒）；页面停留超过有效期后点击应回退 fetch+鉴权，避免拿到已过期的地址。
+function previewUsable(url){
+  if(!url)return false;
+  const m=/[?&]expires=(\d+)/.exec(url);
+  if(!m)return true;
+  return Number(m[1])*1000>Date.now();
+}
+async function download(link){
+  // 媒体文件有同源签名流式地址：直接用 <a download>，浏览器流式写入磁盘、立即开始，不用 fetch 整文件。
+  const preview=previewUsable(link.dataset.preview)?link.dataset.preview:'';
+  if(preview){
+    const a=document.createElement('a');a.href=preview;a.download=link.dataset.name||'download';a.rel='noopener';document.body.appendChild(a);a.click();a.remove();
+    return;
+  }
+  try{const response=await fetch(link.href,{headers:{Authorization:`Bearer ${session.accessToken}`}});if(!response.ok)throw new Error('下载失败');const blob=await response.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=link.dataset.name;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000)}catch(err){toast(err.message,'error')}
+}
 async function copyText(btn){
   const section=btn.closest('.detail-section')||btn.closest('.result-details');
   const text=(section&&section.querySelector('.result')||{}).textContent||'';
@@ -444,7 +462,7 @@ $('#preview-source').addEventListener('click',e=>{
   previewSound=previewSound==='audio'?'clip':'audio';
   applySound();
 });
-async function openPreview(fileId,name){
+async function openPreview(fileId,name,previewUrl){
   const modal=$('#preview-modal'),video=$('#preview-video'),img=$('#preview-image');
   $('#preview-title').textContent=name||'视频预览';
   modal.classList.remove('hidden');
@@ -456,6 +474,13 @@ async function openPreview(fileId,name){
   $('#preview-sound').classList.add('hidden');
   $('#preview-source-row').classList.add('hidden');
   video.removeAttribute('src');
+  if(previewURL){URL.revokeObjectURL(previewURL);previewURL=null}
+  // 优先用同源签名地址直接流式播放（支持 Range，秒开），不再把整个视频 fetch 进内存再播。
+  if(previewUsable(previewUrl)){
+    video.src=previewUrl;
+    video.play().catch(()=>{});
+    return;
+  }
   try{
     const r=await fetch(`/api/v1/files/${encodeURIComponent(fileId)}`,{headers:{Authorization:`Bearer ${session.accessToken}`}});
     if(!r.ok)throw new Error('视频加载失败');
@@ -488,7 +513,8 @@ function openMediaPreview(src,animated,title,musicUrl){
     video.pause();video.removeAttribute('src');video.load();video.classList.add('hidden');
     img.classList.remove('hidden');img.src=src;
     if(previewBgmURL){
-      previewSound='audio';$('#preview-source-row').classList.remove('hidden');applySound();
+      // 静态图没有原声可切，隐藏"原声"切换，只保留背景音乐静音按钮。
+      previewSound='audio';$('#preview-source-row').classList.add('hidden');applySound();
     }else{
       // 静态图且无背景音乐：没有任何声音可控制，隐藏声音按钮与来源切换。
       $('#preview-source-row').classList.add('hidden');
