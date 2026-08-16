@@ -290,10 +290,14 @@ func New(deps Dependencies) http.Handler {
 		recordJobAudit(deps.Audit, r, principal.UserID, job.ID, reused, job.Status)
 		// 幂等键复用且任务已完成时，files 是 result_json 解码的 []any（无 expiresAt/预览地址），
 		// 重新走一次 FindByID 注入类型化文件，保证保留期提示与预览地址与 GET 一致。
+		// 重查失败直接报错，而不是静默返回缺 expiresAt/类型化形状的不一致响应。
 		if reused && job.Status == "completed" {
-			if fresh, getErr := deps.Jobs.Get(r.Context(), principal.UserID, job.ID); getErr == nil {
-				job = fresh
+			fresh, getErr := deps.Jobs.Get(r.Context(), principal.UserID, job.ID)
+			if getErr != nil {
+				writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务", true)
+				return
 			}
+			job = fresh
 		}
 		withMediaPreviews([]jobs.Job{job}, deps.ASRSigner, time.Now())
 		writeJSON(w, http.StatusAccepted, map[string]any{"job": job, "reused": reused, "requestId": RequestID(r.Context())})
@@ -615,6 +619,8 @@ func handleInlinePreview(storage *ownedfiles.Storage, file ownedfiles.File, w ht
 }
 
 // withMediaPreviews 为图文/动图媒体文件注入同源预览地址（外部 CDN 不可用时的兜底显示来源）。
+// files 只可能是 []jobs.JobFile：GET/List 通过 FindByID/FindFiles 注入类型化文件，复用幂等键的
+// POST 也先重查一次，因此 result_json 解码出的 []any 分支在这里不可达。
 func withMediaPreviews(items []jobs.Job, signer *ownedfiles.Signer, now time.Time) {
 	if signer == nil || len(items) == 0 {
 		return
@@ -625,33 +631,17 @@ func withMediaPreviews(items []jobs.Job, signer *ownedfiles.Signer, now time.Tim
 		if !ok {
 			continue
 		}
-		switch files := result["files"].(type) {
-		case []jobs.JobFile:
-			for j := range files {
-				// video 也注入：视频预览/下载走同源签名地址直接流式传输，避免前端 fetch 整文件缓冲导致"半天才弹出"。
-				if files[j].Kind == "image" || files[j].Kind == "animated" || files[j].Kind == "video" {
-					files[j].PreviewURL = signer.PreviewURL(files[j].ID, expires)
-				}
-			}
-			result["files"] = files
-		case []any:
-			// 复用 Idempotency-Key 时 result 从 result_json 解码为 []any，逐项注入预览地址。
-			for _, entry := range files {
-				m, ok := entry.(map[string]any)
-				if !ok {
-					continue
-				}
-				kind, _ := m["kind"].(string)
-				if kind != "image" && kind != "animated" && kind != "video" {
-					continue
-				}
-				id, _ := m["id"].(string)
-				if id == "" {
-					continue
-				}
-				m["previewUrl"] = signer.PreviewURL(id, expires)
+		files, ok := result["files"].([]jobs.JobFile)
+		if !ok {
+			continue
+		}
+		for j := range files {
+			// video 也注入：视频预览/下载走同源签名地址直接流式传输，避免前端 fetch 整文件缓冲导致"半天才弹出"。
+			if files[j].Kind == "image" || files[j].Kind == "animated" || files[j].Kind == "video" {
+				files[j].PreviewURL = signer.PreviewURL(files[j].ID, expires)
 			}
 		}
+		result["files"] = files
 	}
 }
 

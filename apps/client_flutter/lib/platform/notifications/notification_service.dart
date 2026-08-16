@@ -5,7 +5,7 @@ class NotificationService {
   Future<void> initialise(void Function(String jobId) onJobSelected) async {
     const settings = InitializationSettings(
       android: AndroidInitializationSettings('ic_launcher'),
-      windows: WindowsInitializationSettings(appName: 'Douyin Capture', appUserModelId: 'WhySoftware.DouyinCapture', guid: 'b16b55f2-25b2-4df6-b65d-7edfd4534190'),
+      windows: WindowsInitializationSettings(appName: 'Luxury Capture', appUserModelId: 'WhySoftware.DouyinCapture', guid: 'b16b55f2-25b2-4df6-b65d-7edfd4534190'),
     );
     await _plugin.initialize(settings: settings, onDidReceiveNotificationResponse: (response) { final payload = response.payload; if (payload != null) onJobSelected(payload); });
   }

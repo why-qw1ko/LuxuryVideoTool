@@ -21,11 +21,11 @@ VS_VERSION_INFO VERSIONINFO
     BLOCK "040904e4"
     BEGIN
       VALUE "CompanyName", "whysoftware" "\0"
-      VALUE "FileDescription", "Douyin Capture" "\0"
+      VALUE "FileDescription", "Luxury Capture" "\0"
       VALUE "FileVersion", FLUTTER_VERSION "\0"
       VALUE "InternalName", "douyin_capture" "\0"
       VALUE "OriginalFilename", "douyin_capture.exe" "\0"
-      VALUE "ProductName", "Douyin Capture" "\0"
+      VALUE "ProductName", "Luxury Capture" "\0"
       VALUE "ProductVersion", FLUTTER_VERSION "\0"
     END
   END

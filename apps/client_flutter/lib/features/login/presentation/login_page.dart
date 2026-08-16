@@ -22,7 +22,7 @@ class _LoginPageState extends State<LoginPage> {
       constraints: const BoxConstraints(maxWidth: 420),
       child: AutofillGroup(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: <Widget>[
         Icon(Icons.video_library_rounded, size: 72, color: Theme.of(context).colorScheme.primary),
-        const SizedBox(height: 20), Text('Douyin Capture', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineMedium),
+        const SizedBox(height: 20), Text('Luxury Capture', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineMedium),
         const SizedBox(height: 8), Text('登录后在 Android 与 Windows 同步任务和结果', textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodyMedium),
         const SizedBox(height: 28),
         TextField(controller: _username, enabled: !_submitting, autofillHints: const <String>[AutofillHints.username], textInputAction: TextInputAction.next, decoration: const InputDecoration(labelText: '用户名', border: OutlineInputBorder())),

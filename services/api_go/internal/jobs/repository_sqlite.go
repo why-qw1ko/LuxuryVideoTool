@@ -501,6 +501,15 @@ func (r *SQLiteRepository) DeleteFileRecord(ctx context.Context, fileID string) 
 	_, err := r.db.ExecContext(ctx, `DELETE FROM files WHERE id = ?`, fileID)
 	return err
 }
+// DeleteFilesByJob 批量删除任务的全部文件索引记录（物理文件由调用方 best-effort 清理）。
+// 用于重试前的过期副本清理：单条 SQL 替代逐条 DeleteFileRecord，避免大量顺序往返。
+func (r *SQLiteRepository) DeleteFilesByJob(ctx context.Context, userID, jobID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM files WHERE job_id = ? AND user_id = ?`, jobID, userID)
+	if err != nil {
+		return fmt.Errorf("delete job files: %w", err)
+	}
+	return nil
+}
 func (r *SQLiteRepository) DeleteFilesByKind(ctx context.Context, jobID, kind string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM files WHERE job_id = ? AND kind = ? AND deleted_at IS NOT NULL`, jobID, kind)
 	return err

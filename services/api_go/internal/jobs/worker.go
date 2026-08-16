@@ -146,6 +146,20 @@ func (w *Worker) process(ctx context.Context, owner string, job Job) (resultErr 
 		}
 		return w.failed(job, owner, resolver.ErrVideoRequired)
 	}
+	// 视频路径与 processNote 有同样的崩溃重试泄漏：worker 在 fileRepo.Create 之后、CompleteDownload 之前被杀，
+	// Recover 重放会再创建一条视频文件记录，旧记录残留导致完成后出现重复/过期的下载链接。重试前统一清空。
+	// 记录删除失败时保留磁盘文件（避免脏行），与 processNote 清理保持一致。
+	if stale, err := w.fileRepo.ListByJob(context.Background(), job.UserID, job.ID); err == nil && len(stale) > 0 {
+		if err := w.repo.DeleteFilesByJob(context.Background(), job.UserID, job.ID); err != nil {
+			slog.ErrorContext(ctx, "cleanup stale video files: delete records failed, keeping files", "job_id", job.ID, "count", len(stale), "error", err)
+		} else {
+			for _, file := range stale {
+				if err := w.storage.Remove(file); err != nil {
+					slog.WarnContext(ctx, "cleanup stale video file: storage remove failed", "job_id", job.ID, "file_id", file.ID, "error", err)
+				}
+			}
+		}
+	}
 	stepID, err := auth.NewID(w.now())
 	if err != nil {
 		return err
@@ -176,12 +190,12 @@ func (w *Worker) process(ctx context.Context, owner string, job Job) (resultErr 
 		return w.finishFailed(job, owner, stepID, err)
 	}
 	if err := w.repo.FinishStep(jobCtx, stepID, "completed", "", "", map[string]any{"fileId": file.ID, "sizeBytes": file.SizeBytes, "sha256": file.SHA256}, now); err != nil {
-		w.rollbackFile(file)
+		w.rollbackFile(jobCtx, file)
 		return err
 	}
 	if job.Action == "download" {
 		if err := w.repo.CompleteDownload(jobCtx, job.ID, owner, file.ID, now); err != nil {
-			w.rollbackFile(file)
+			w.rollbackFile(jobCtx, file)
 			return err
 		}
 		return nil
@@ -208,11 +222,22 @@ func (w *Worker) processNote(ctx context.Context, owner string, job Job, work re
 	now := w.now().UTC()
 	// 上一尝试（失败/取消/失租）可能残留配图与结果文件；先清空，避免重试后画廊、ZIP、下载链接混入过期副本。
 	// 用 Background context，确保即使本次已取消也能完成清理。
+	// 文件索引记录用一条批量 DELETE 清掉（避免逐条往返）；记录删除成功后再逐个删磁盘文件。
+	// 记录删除失败时必须保留磁盘文件并记日志：否则 files 表会残留指向已删磁盘文件的脏行，画廊/ZIP/下载会永久 404。
 	if stale, err := w.fileRepo.ListByJob(context.Background(), job.UserID, job.ID); err == nil {
-		for _, file := range stale {
-			_ = w.storage.Remove(file)
-			_ = w.repo.DeleteFileRecord(context.Background(), file.ID)
+		if len(stale) > 0 {
+			if err := w.repo.DeleteFilesByJob(context.Background(), job.UserID, job.ID); err != nil {
+				slog.ErrorContext(ctx, "cleanup stale note files: delete records failed, keeping files", "job_id", job.ID, "count", len(stale), "error", err)
+			} else {
+				for _, file := range stale {
+					if err := w.storage.Remove(file); err != nil {
+						slog.WarnContext(ctx, "cleanup stale note file: storage remove failed", "job_id", job.ID, "file_id", file.ID, "error", err)
+					}
+				}
+			}
 		}
+	} else {
+		slog.WarnContext(ctx, "cleanup stale note files: list failed", "job_id", job.ID, "error", err)
 	}
 	if len(work.Images) > 0 {
 		stepID, err := auth.NewID(now)
@@ -377,9 +402,15 @@ func (w *Worker) failedWith(job Job, owner, code, message string, cause error) e
 	return cause
 }
 
-func (w *Worker) rollbackFile(file ownedfiles.File) {
-	_ = w.storage.Remove(file)
-	_ = w.repo.DeleteFileRecord(context.Background(), file.ID)
+func (w *Worker) rollbackFile(ctx context.Context, file ownedfiles.File) {
+	// 先删记录再删磁盘文件：记录删除失败时保留文件，避免留下指向已删磁盘文件的脏行（永久 404）。
+	if err := w.repo.DeleteFileRecord(context.Background(), file.ID); err != nil {
+		slog.ErrorContext(ctx, "rollback file: delete record failed, keeping file", "file_id", file.ID, "error", err)
+		return
+	}
+	if err := w.storage.Remove(file); err != nil {
+		slog.WarnContext(ctx, "rollback file: storage remove failed", "file_id", file.ID, "error", err)
+	}
 }
 
 func mediaError(err error) (string, string) {

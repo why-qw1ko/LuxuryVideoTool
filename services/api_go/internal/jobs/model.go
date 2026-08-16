@@ -111,6 +111,7 @@ type Repository interface {
 	FinishStep(ctx context.Context, stepID, status, code, message string, details map[string]any, at time.Time) error
 	FindFiles(ctx context.Context, userID, jobID string) ([]JobFile, error)
 	DeleteFileRecord(ctx context.Context, fileID string) error
+	DeleteFilesByJob(ctx context.Context, userID, jobID string) error
 	FailExhaustedQueued(ctx context.Context, at time.Time) (int64, error)
 	CompleteTranscription(ctx context.Context, jobID, owner string, result map[string]any, message string, at time.Time) error
 	DeleteFilesByKind(ctx context.Context, jobID, kind string) error

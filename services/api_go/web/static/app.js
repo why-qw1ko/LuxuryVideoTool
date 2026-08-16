@@ -317,11 +317,12 @@ function jobDetailHTML(job){
     const viewerSrc=(file&&file.previewUrl&&previewUsable(file.previewUrl))?file.previewUrl:cdnSrc;
     const dl=file?`<a class="gallery-dl" href="/api/v1/files/${encodeURIComponent(file.id)}" data-file data-name="${esc(file.name||'image')}" data-preview="${esc(file.previewUrl||'')}" title="下载">${icon('download',14)}</a>`:'';
     const badge=`<span class="gallery-badge">${img.animatedUrl?'动图':'图片'}</span>`;
-    // 静态图：CDN 失败 → 回退签名地址（未过期时）；动图：签名地址失败 → 回退 CDN 原址。
-    const onerr=(file&&file.previewUrl&&previewUsable(file.previewUrl))?`this.onerror=null;this.src='${esc(file.previewUrl)}'`:`this.style.display='none'`;
+    // 回退链在错误发生时现查（不烘焙渲染时的判断），避免页面停留超过 24h 后签名地址过期、
+    // 或客户端时钟偏差把新鲜地址误判为过期时，图片/动图永久无法恢复。mediaFallback 每项只尝试一次。
+    const preview=file&&file.previewUrl?file.previewUrl:'';
     const media=img.animatedUrl
-      ?`<video class="gallery-anim" src="${esc(viewerSrc)}" autoplay muted loop playsinline preload="metadata" onerror="this.onerror=null;this.src='${esc(cdnSrc)}'"></video>`
-      :`<img src="${esc(img.url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="${onerr}">`;
+      ?`<video class="gallery-anim" src="${esc(viewerSrc)}" autoplay muted loop playsinline preload="metadata"${viewerSrc===cdnSrc?` data-preview="${esc(preview)}"`:` data-fallback="${esc(cdnSrc)}"`} onerror="mediaFallback(this)"></video>`
+      :`<img src="${esc(img.url)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-preview="${esc(preview)}" onerror="mediaFallback(this)">`;
     const foot=(badge||dl)?`<div class="gallery-foot">${badge}${dl}</div>`:'';
     return `<figure class="gallery-item" data-preview="${esc(viewerSrc)}" data-fallback="${esc(cdnSrc)}" data-animated="${img.animatedUrl?'1':'0'}" data-title="${esc((stripHashtags(w.title,w.hashtags)||'预览').slice(0,40))}" data-music="${esc(w.musicUrl||'')}"><div class="gallery-media">${media}</div>${foot}</figure>`;
   }).join('');
@@ -401,11 +402,23 @@ async function operate(id,op){
   }catch(err){toast(err.message,'error')}
 }
 // 签名预览地址带 expires（Unix 秒）；页面停留超过有效期后点击应回退 fetch+鉴权，避免拿到已过期的地址。
+// 客户端时钟可能领先服务端（校时错误/双系统），加 1 小时容差，避免把刚签发的地址误判为已过期、
+// 从而退回可能被地域/防盗链拦截的 CDN 原址。
+const PREVIEW_SKEW_MS=60*60*1000;
 function previewUsable(url){
   if(!url)return false;
   const m=/[?&]expires=(\d+)/.exec(url);
   if(!m)return true;
-  return Number(m[1])*1000>Date.now();
+  return Number(m[1])*1000+PREVIEW_SKEW_MS>Date.now();
+}
+// 媒体加载失败兜底：按 data-preview（同源签名地址）→ data-fallback（CDN 原址）依次尝试，
+// 每项只试一次（试完清除该属性），全部失败则隐藏元素。判断发生在错误时刻而非渲染时刻。
+function mediaFallback(el){
+  const preview=el.dataset.preview;
+  if(preview){el.dataset.preview='';el.src=preview;return;}
+  const fallback=el.dataset.fallback;
+  if(fallback){el.dataset.fallback='';el.src=fallback;return;}
+  el.style.display='none';
 }
 async function download(link){
   // 媒体文件有同源签名流式地址：直接用 <a download>，浏览器流式写入磁盘、立即开始，不用 fetch 整文件。
@@ -433,7 +446,13 @@ function currentMuted(){
 }
 function setActiveMuted(muted){
   const v=$('#preview-video'),a=$('#preview-audio');
-  if(previewSound==='audio')a.muted=muted;else v.muted=muted;
+  if(previewSound==='audio'){
+    a.muted=muted;
+    // 静态图默认静音打开（未开始播放）；取消静音时补一次 play，否则只改 muted 不会有声音。
+    if(!muted&&a.paused)a.play().catch(()=>{});
+  }else{
+    v.muted=muted;
+  }
 }
 function updateSoundUI(){
   const sound=$('#preview-sound'),source=$('#preview-source');
@@ -443,11 +462,13 @@ function updateSoundUI(){
   sound.title=muted?'取消静音':'静音';
   source.textContent='♪ '+(previewSound==='audio'?'背景音乐':'原声');
 }
-function applySound(){
+function applySound(initialMuted){
   const v=$('#preview-video'),a=$('#preview-audio');
   if(previewSound==='audio'&&previewBgmURL){
     v.muted=true;
-    a.src=previewBgmURL;a.muted=false;a.play().catch(()=>{});
+    a.src=previewBgmURL;a.muted=!!initialMuted;
+    // 动图（live photo）打开即播放背景音乐；静态图默认静音，由用户点按钮开启。
+    if(!initialMuted)a.play().catch(()=>{});
   }else{
     a.pause();a.removeAttribute('src');a.load();
     v.muted=false;v.play().catch(()=>{});
@@ -494,7 +515,7 @@ async function openPreview(fileId,name,previewUrl){
   }catch(err){closePreview();toast(err.message,'error')}
 }
 // 画廊点击查看。动图：视频静音作画面，声音默认取作品背景音乐，可切到原声；
-// 静态配图：显示大图，有背景音乐则随画面播放。
+// 静态配图：显示大图，背景音乐默认静音不自动播放，用户可点声音按钮开启。
 function openMediaPreview(src,animated,title,musicUrl,fallback){
   const modal=$('#preview-modal'),video=$('#preview-video'),img=$('#preview-image'),sound=$('#preview-sound');
   $('#preview-title').textContent=title||'预览';
@@ -517,8 +538,8 @@ function openMediaPreview(src,animated,title,musicUrl,fallback){
     video.pause();video.removeAttribute('src');video.load();video.classList.add('hidden');
     img.classList.remove('hidden');img.src=src;
     if(previewBgmURL){
-      // 静态图没有原声可切，隐藏"原声"切换，只保留背景音乐静音按钮。
-      previewSound='audio';$('#preview-source-row').classList.add('hidden');applySound();
+      // 静态图没有原声可切，隐藏"原声"切换；背景音乐默认静音不自动播放，用户可点声音按钮开启。
+      previewSound='audio';$('#preview-source-row').classList.add('hidden');applySound(true);
     }else{
       // 静态图且无背景音乐：没有任何声音可控制，隐藏声音按钮与来源切换。
       $('#preview-source-row').classList.add('hidden');

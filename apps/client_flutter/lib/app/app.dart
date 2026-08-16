@@ -18,7 +18,7 @@ class _DouyinCaptureAppState extends State<DouyinCaptureApp> {
   @override Widget build(BuildContext context) {
     final mode = switch (_state.settings.themeMode) { AppThemeMode.light => ThemeMode.light, AppThemeMode.dark => ThemeMode.dark, AppThemeMode.system => ThemeMode.system };
     if (_state.initialising) return MaterialApp(debugShowCheckedModeBanner: false, theme: buildLightTheme(), darkTheme: buildDarkTheme(), home: const BootstrapPage(version: AppVersion.current));
-    return MaterialApp.router(title: 'Douyin Capture', debugShowCheckedModeBanner: false, theme: buildLightTheme(), darkTheme: buildDarkTheme(), themeMode: mode, routerConfig: _router);
+    return MaterialApp.router(title: 'Luxury Capture', debugShowCheckedModeBanner: false, theme: buildLightTheme(), darkTheme: buildDarkTheme(), themeMode: mode, routerConfig: _router);
   }
   @override void dispose() { _state.removeListener(_changed); _state.dispose(); super.dispose(); }
 }

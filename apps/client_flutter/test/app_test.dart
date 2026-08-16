@@ -6,7 +6,7 @@ void main() {
   testWidgets('renders the M5 bootstrap while stores initialise', (WidgetTester tester) async {
     await tester.pumpWidget(const MaterialApp(home: BootstrapPage(version: 'test')));
 
-    expect(find.text('Douyin Capture'), findsOneWidget);
+    expect(find.text('Luxury Capture'), findsOneWidget);
   });
 }
 

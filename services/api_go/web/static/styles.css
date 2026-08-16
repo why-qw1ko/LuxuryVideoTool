@@ -308,7 +308,9 @@ select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-i
   .password-wrap input{padding-right:46px}
   .password-eye{width:36px;height:36px}
   .row,.api-form{grid-template-columns:1fr;align-items:stretch}
-  .row button,.api-form button,#login-form button,#provider-form button{width:100%}
+  /* #login-form button{width:100%} 会把密码框内的小眼睛也撑满整行（选择器优先级压过 .password-eye 的 36px），
+     挡住密码输入框；这里排除 .password-eye，让它保持右上角小按钮。 */
+  .row button,.api-form button,#login-form button:not(.password-eye),#provider-form button{width:100%}
   textarea{min-height:168px}
   .detail-head{display:grid;gap:12px}
   .job-time{white-space:normal;margin:0}

@@ -8,7 +8,7 @@ class BootstrapPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Douyin Capture')),
+      appBar: AppBar(title: const Text('Luxury Capture')),
       body: Center(
         child: Semantics(
           label: '应用工程基线已就绪',

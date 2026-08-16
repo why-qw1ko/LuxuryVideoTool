@@ -297,7 +297,13 @@ func parseWorkObject(object map[string]any) (Work, bool) {
 				if imageURL := findURL(image, "url_list", "urlList", "download_url_list", "downloadUrlList"); imageURL != "" {
 					entry := Image{URL: imageURL, Width: int(firstNumber(image, "width")), Height: int(firstNumber(image, "height"))}
 					// 优先取 CDN play_addr（直接文件、可靠），download_addr 是会 302 的签名接口。
-					if video := firstMap(source, "video"); video != nil {
+					// 动图动态版 MP4 通常位于 images[i].video（display_image 的兄弟节点）；个别接口变体会把
+					// video 嵌进 display_image 内部，两种形状都兜底取用，避免漏掉 AnimatedURL。
+					video := firstMap(source, "video")
+					if video == nil {
+						video = firstMap(image, "video")
+					}
+					if video != nil {
 						entry.AnimatedURL = withoutWatermark(findURL(video, "play_addr", "playAddr", "download_addr", "downloadAddr"))
 					}
 					work.Images = append(work.Images, entry)

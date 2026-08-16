@@ -1,6 +1,6 @@
-# Douyin Capture
+# Luxury Capture
 
-Douyin Capture 是一个自托管的抖音内容解析、下载与转写工具。用户粘贴抖音分享文本后，由服务端完成作品解析、媒体下载、音频提取、ASR 转写与结果导出。
+Luxury Capture 是一个自托管的抖音内容解析、下载与转写工具。用户粘贴抖音分享文本后，由服务端完成作品解析、媒体下载、音频提取、ASR 转写与结果导出。
 
 当前部署重点是嵌入 Go 服务端的网页版。Android 与 Windows 客户端源码、设计和后续产物规划仍保留；只是当前 GitHub Actions 暂时只构建 Linux 服务端运行包，不自动构建 Android APK 或 Windows 客户端。
 
