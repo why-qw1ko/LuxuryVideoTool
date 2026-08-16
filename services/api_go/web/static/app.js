@@ -120,9 +120,21 @@ $('#sidebar-toggle').addEventListener('click',()=>setSidebar(!$('.master-list').
 $('#sidebar-backdrop').addEventListener('click',()=>setSidebar(false));
 
 /* ---------- 返回顶部 ---------- */
+// PC 应用壳下页面不整体滚动，真正的滚动容器是右侧 .content；移动端仍是 window。
+function mainScroller(){
+  if(matchMedia('(min-width:961px)').matches&&document.querySelector('.content'))return document.querySelector('.content');
+  return window;
+}
+function updateBackTop(){
+  const s=mainScroller();
+  const y=s===window?window.scrollY:s.scrollTop;
+  $('#back-top').classList.toggle('hidden',y<400);
+}
 $('#back-top').innerHTML=icon('arrow-up',18);
-$('#back-top').addEventListener('click',()=>window.scrollTo({top:0,behavior:'smooth'}));
-window.addEventListener('scroll',()=>{$('#back-top').classList.toggle('hidden',window.scrollY<400)},{passive:true});
+$('#back-top').addEventListener('click',()=>mainScroller().scrollTo({top:0,behavior:'smooth'}));
+window.addEventListener('scroll',updateBackTop,{passive:true});
+const __contentEl=document.querySelector('.content');
+if(__contentEl)__contentEl.addEventListener('scroll',updateBackTop,{passive:true});
 
 /* ---------- 视图 / 选中 ---------- */
 function showView(name){
@@ -146,7 +158,8 @@ function enter(value){
   save(value);
   show('#login',!value);show('#app',!!value);show('#logout',!!value);
   // 未登录时隐藏左上角菜单按钮：导航抽屉是登录后的功能，登录页点了只会打开空的抽屉。
-  show('#sidebar-toggle',!!value);
+  // 用 visibility 而非 display，保留其在顶栏网格中的 40px 占位，避免品牌文字被顶位裁剪。
+  $('#sidebar-toggle').classList.toggle('nav-hidden',!value);
   document.querySelectorAll('.admin-only').forEach(el=>el.classList.toggle('hidden',value?.user?.role!=='admin'));
   if(value){
     selectJob(null);
