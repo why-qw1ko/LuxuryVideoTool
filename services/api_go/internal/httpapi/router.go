@@ -576,7 +576,8 @@ func queryInt(r *http.Request, name string, fallback int) (int, error) {
 	return strconv.Atoi(value)
 }
 func validJobFilter(status, action string) bool {
-	statuses := map[string]bool{"": true, "queued": true, "resolving": true, "downloading": true, "extracting": true, "transcribing": true, "postprocessing": true, "retry_wait": true, "completed": true, "failed": true, "cancelled": true}
+	// "processing" 是前端合并的筛选组（命中全部瞬态处理阶段）；单个真实状态仍允许，兼容旧 API 调用。
+	statuses := map[string]bool{"": true, "processing": true, "queued": true, "resolving": true, "downloading": true, "extracting": true, "transcribing": true, "postprocessing": true, "retry_wait": true, "completed": true, "failed": true, "cancelled": true}
 	actions := map[string]bool{"": true, "info": true, "download": true, "transcribe": true, "full": true}
 	return statuses[status] && actions[action]
 }

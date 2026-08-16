@@ -44,8 +44,13 @@ func (r *SQLiteRepository) List(ctx context.Context, input ListInput) (JobPage, 
 	where := []string{"j.user_id = ?"}
 	args := []any{input.UserID}
 	if input.Status != "" {
-		where = append(where, "j.status = ?")
-		args = append(args, input.Status)
+		// "processing" 是前端合并后的筛选组：命中所有瞬态处理阶段。
+		if input.Status == "processing" {
+			where = append(where, "j.status IN ('resolving','downloading','extracting','transcribing','postprocessing')")
+		} else {
+			where = append(where, "j.status = ?")
+			args = append(args, input.Status)
+		}
 	}
 	if input.Action != "" {
 		where = append(where, "j.action = ?")
