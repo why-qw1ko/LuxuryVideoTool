@@ -145,13 +145,18 @@ $('#settings-link').addEventListener('click',e=>{e.preventDefault();selectJob(nu
 function enter(value){
   save(value);
   show('#login',!value);show('#app',!!value);show('#logout',!!value);
+  // 未登录时隐藏左上角菜单按钮：导航抽屉是登录后的功能，登录页点了只会打开空的抽屉。
+  show('#sidebar-toggle',!!value);
   document.querySelectorAll('.admin-only').forEach(el=>el.classList.toggle('hidden',value?.user?.role!=='admin'));
   if(value){
     selectJob(null);
     if(value.user?.role==='admin')loadProviders();
     loadJobs();
     poll=setInterval(loadJobs,5000);
-  }else{clearInterval(poll)}
+  }else{
+    clearInterval(poll);
+    setSidebar(false); // 退出登录时若抽屉还开着，一并收起
+  }
 }
 
 /* ---------- 登录 / 退出 / 连接 ---------- */
