@@ -122,7 +122,10 @@ select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-i
 .content{grid-column:span 8;display:grid;gap:24px;min-width:0}
 
 /* ---- 左侧：新建按钮 + 筛选 + 任务列表 ---- */
-.master-list{position:sticky;top:88px;display:flex;flex-direction:column;gap:16px;padding:16px;background:var(--sidebar);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow);max-height:calc(100vh - 112px)}
+/* 侧边栏恒定占满顶栏下方剩余高度，上下各留 24px 间隙。
+   top:110px = 顶栏(≈86) + shell 上边距(24)，等于自然流位置，吸顶后不跳动；
+   高度 calc(100vh - 134px) = 上沿 110 + 下沿 24。高度随视口自适应，非固定值。 */
+.master-list{position:sticky;top:110px;display:flex;flex-direction:column;gap:16px;padding:16px;background:var(--sidebar);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow);min-height:calc(100vh - 134px);max-height:calc(100vh - 134px)}
 .new-btn{width:100%;padding:12px 14px;font-size:14px}
 .new-btn.active{box-shadow:0 0 0 3px var(--active)}
 .master-filter{display:grid;gap:10px}
@@ -141,7 +144,7 @@ select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-i
 .row-title{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .row-time{font-size:11px;color:var(--text-tertiary);white-space:nowrap;flex-shrink:0}
 .row-meta{font-size:12px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.empty-state{display:flex;flex-direction:column;align-items:center;gap:4px;padding:40px 12px;color:var(--text-tertiary);text-align:center}
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:4px;padding:40px 12px;color:var(--text-tertiary);text-align:center}
 .empty-state svg{opacity:.45}
 .empty-state p{margin:8px 0 0;font-size:14px;font-weight:600;color:var(--text-secondary)}
 .empty-state span{font-size:12px}
@@ -284,7 +287,7 @@ select{appearance:none;-webkit-appearance:none;-moz-appearance:none;background-i
   .layout{grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
   #sidebar-toggle{display:inline-flex}
   .sidebar-backdrop{position:fixed;inset:0;z-index:54;background:rgba(15,18,25,.45)}
-  .master-list{position:fixed;top:0;bottom:0;left:0;z-index:55;width:min(320px,85vw);transform:translateX(-100%);visibility:hidden;transition:transform .22s ease,visibility .22s;border-radius:0;border:0;border-right:1px solid var(--border);max-height:none;overflow-y:auto}
+  .master-list{position:fixed;top:0;bottom:0;left:0;z-index:55;width:min(320px,85vw);transform:translateX(-100%);visibility:hidden;transition:transform .22s ease,visibility .22s;border-radius:0;border:0;border-right:1px solid var(--border);max-height:none;min-height:0;overflow-y:auto}
   .master-list.open{transform:translateX(0);visibility:visible}
   .content{grid-column:1/-1;gap:16px}
   .job-list{max-height:none}
