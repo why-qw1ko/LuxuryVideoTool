@@ -21,6 +21,8 @@ var (
 type Job struct {
 	ID             string         `json:"id"`
 	UserID         string         `json:"-"`
+	OwnerUsername  string         `json:"ownerUsername,omitempty"`
+	OwnerDisplayName string       `json:"ownerDisplayName,omitempty"`
 	Work           *resolver.Work `json:"work,omitempty"`
 	InputText      string         `json:"-"`
 	InputURL       string         `json:"-"`
@@ -75,6 +77,18 @@ type JobPage struct {
 	Offset int `json:"offset"`
 }
 
+type DayCount struct {
+	Day string `json:"day"`
+	Count int `json:"count"`
+}
+
+type Stats struct {
+	Total int `json:"totalJobs"`
+	Today int `json:"todayJobs"`
+	ByStatus map[string]int `json:"byStatus"`
+	ByDay []DayCount `json:"byDay"`
+}
+
 type Step struct {
 	ID string
 	JobID string
@@ -94,7 +108,10 @@ type Repository interface {
 	CompleteInfo(ctx context.Context, jobID string, work resolver.Work, at time.Time) error
 	Fail(ctx context.Context, jobID, code, message string, at time.Time) error
 	FindByID(ctx context.Context, userID, jobID string) (Job, error)
+	FindAnyByID(ctx context.Context, jobID string) (Job, error)
 	List(ctx context.Context, input ListInput) (JobPage, error)
+	ListAll(ctx context.Context, input ListInput) (JobPage, error)
+	Stats(ctx context.Context, now time.Time) (Stats, error)
 	Delete(ctx context.Context, userID, jobID string) error
 	CreateQueued(ctx context.Context, job Job) error
 	ClaimNext(ctx context.Context, owner string, now time.Time, lease time.Duration) (Job, error)

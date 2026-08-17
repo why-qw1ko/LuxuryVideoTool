@@ -25,6 +25,7 @@
         </span>
       </div>
       <div class="header-actions">
+        <button id="admin-console-btn" class="ghost admin-only hidden" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg><span class="btn-label">管理后台</span></button>
         <button id="theme-toggle" class="ghost icon-btn" type="button" aria-label="切换主题"></button>
         <button id="logout" class="ghost hidden" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg><span class="btn-label">退出</span></button>
       </div>
@@ -78,6 +79,7 @@
             </div>
           </form>
           <div id="job-list" class="job-list"></div>
+          <div id="job-pager" class="pager"></div>
           <div class="master-foot">
             <span id="job-total"></span>
             <span class="foot-api">API <span id="current-api"></span></span>
@@ -120,6 +122,107 @@
         </main>
       </div>
     </div>
+
+    <div id="admin-console" class="hidden">
+      <aside class="admin-sidebar">
+        <div class="admin-sidebar-head">
+          <span class="brand-mark" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg></span>
+          <div class="brand-text"><strong>Luxury Admin</strong><small>后台管理系统</small></div>
+        </div>
+        <nav class="admin-nav">
+          <button type="button" data-admin-view="dashboard" class="active"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>仪表盘</button>
+          <button type="button" data-admin-view="jobs"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>任务管理</button>
+          <button type="button" data-admin-view="users"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>用户管理</button>
+        </nav>
+        <div class="admin-sidebar-foot">
+          <div class="admin-user"><span class="admin-user-avatar" id="admin-user-avatar" aria-hidden="true"></span><span class="admin-user-info"><strong id="admin-user-name"></strong><small id="admin-user-role"></small></span></div>
+          <button id="admin-back-front" type="button" class="ghost"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>返回前台</button>
+        </div>
+      </aside>
+      <main class="admin-content">
+        <section id="admin-view-dashboard" class="admin-view">
+          <div class="admin-head">
+            <div>
+              <h2>仪表盘</h2>
+              <p class="meta">用户与任务运行概览</p>
+            </div>
+            <button id="admin-refresh-stats" class="ghost" type="button"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>刷新</button>
+          </div>
+          <div id="admin-stats-cards" class="admin-cards"></div>
+          <div class="admin-charts">
+            <div class="chart-card">
+              <div class="chart-head"><h3>任务状态分布</h3></div>
+              <div id="chart-status" class="chart"></div>
+            </div>
+            <div class="chart-card">
+              <div class="chart-head"><h3>近 14 天任务趋势</h3></div>
+              <div id="chart-trend" class="chart"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="admin-view-jobs" class="admin-view panel hidden">
+          <div class="admin-head">
+            <div>
+              <h2>任务管理</h2>
+              <p class="meta">查看和管理所有用户的任务（跨用户操作会记录审计日志）。</p>
+            </div>
+            <span id="admin-jobs-total" class="meta"></span>
+          </div>
+          <form id="admin-jobs-form" class="admin-filter">
+            <div class="search-wrap">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <input id="admin-jobs-q" placeholder="搜索标题 / 作者 / 链接">
+            </div>
+            <select id="admin-jobs-status">
+              <option value="">全部状态</option>
+              <option value="queued">排队中</option>
+              <option value="processing">处理中</option>
+              <option value="retry_wait">等待重试</option>
+              <option value="completed">已完成</option>
+              <option value="failed">失败</option>
+              <option value="cancelled">已取消</option>
+            </select>
+            <select id="admin-jobs-user"><option value="">全部用户</option></select>
+            <button type="submit" class="ghost">筛选</button>
+          </form>
+          <div id="admin-jobs-list" class="admin-list"></div>
+          <div id="admin-jobs-pager" class="pager"></div>
+        </section>
+
+        <section id="admin-view-users" class="admin-view panel hidden">
+          <div class="admin-head">
+            <div>
+              <h2>用户管理</h2>
+              <p class="meta">创建用户、重置密码、启用/禁用账号，并管理其设备会话。</p>
+            </div>
+          </div>
+          <form id="user-create-form" class="admin-form">
+            <input id="user-username" placeholder="用户名" maxlength="64" required autocomplete="off">
+            <input id="user-display" placeholder="显示名" maxlength="100" required autocomplete="off">
+            <input id="user-password" type="password" placeholder="初始密码（至少 12 位）" minlength="12" maxlength="1024" required autocomplete="new-password">
+            <select id="user-role">
+              <option value="user">普通用户</option>
+              <option value="admin">管理员</option>
+            </select>
+            <button type="submit" class="btn-primary">创建用户</button>
+          </form>
+          <div id="admin-users-list" class="admin-list"></div>
+          <div id="admin-user-sessions" class="panel sub hidden"></div>
+        </section>
+
+        <section id="admin-view-detail" class="admin-view hidden">
+          <div class="admin-head">
+            <div>
+              <h2>任务详情</h2>
+              <p class="meta">管理员视角，可取消、重试或删除任意用户的任务。</p>
+            </div>
+            <button id="admin-detail-back" class="ghost" type="button"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>返回任务列表</button>
+          </div>
+          <div id="admin-detail"></div>
+        </section>
+      </main>
+    </div>
   </div>
 
   <div id="preview-modal" class="modal hidden">
@@ -133,6 +236,7 @@
       </div>
       <button class="preview-nav preview-prev hidden" type="button" data-preview-nav="-1" aria-label="上一张" title="上一张"></button>
       <button class="preview-nav preview-next hidden" type="button" data-preview-nav="1" aria-label="下一张" title="下一张"></button>
+      <button id="preview-sound-toggle" class="preview-sound hidden" type="button" aria-label="切换原声" title="播放/关闭动图原声"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" x2="16" y1="9" y2="15"/><line x1="16" x2="22" y1="9" y2="15"/></svg>原声</button>
       <video id="preview-video" class="hidden" controls playsinline></video>
       <img id="preview-image" class="hidden preview-image" alt="">
     </div>
@@ -151,6 +255,7 @@
   </div>
 
   <button id="back-top" class="back-top hidden" type="button" aria-label="返回顶部" title="返回顶部"></button>
+  <script src="/vendor/echarts.min.js" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>

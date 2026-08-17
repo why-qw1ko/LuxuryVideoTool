@@ -27,6 +27,8 @@ import (
 )
 
 const maxAuthBodyBytes = 16 * 1024
+const refreshCookieName = "dc_refresh"
+const webAppVersionPrefix = "web-"
 
 type Readiness func() error
 
@@ -61,10 +63,72 @@ type userResponse struct {
 type tokenResponse struct {
 	AccessToken           string       `json:"accessToken"`
 	AccessTokenExpiresAt  time.Time    `json:"accessTokenExpiresAt"`
-	RefreshToken          string       `json:"refreshToken"`
-	RefreshTokenExpiresAt time.Time    `json:"refreshTokenExpiresAt"`
+	RefreshToken          string       `json:"refreshToken,omitempty"`
+	RefreshTokenExpiresAt time.Time    `json:"refreshTokenExpiresAt,omitempty"`
 	User                  userResponse `json:"user"`
 	RequestID             string       `json:"requestId"`
+}
+
+// isWebClient 识别网页版登录（网页端固定 platform=windows、appVersion 以 web- 开头）。
+// 网页端的 refresh token 不返回给 JS，而是写入 httpOnly Cookie；原生客户端保持 JSON 返回。
+func isWebClient(platform, appVersion string) bool {
+	return platform == "windows" && strings.HasPrefix(strings.ToLower(strings.TrimSpace(appVersion)), webAppVersionPrefix)
+}
+
+func requestScheme(r *http.Request) string {
+	if r.TLS != nil {
+		return "https"
+	}
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
+		return "https"
+	}
+	return "http"
+}
+
+func cookieSecure(r *http.Request) bool {
+	if requestScheme(r) == "https" {
+		return true
+	}
+	address := net.ParseIP(remoteIP(r.RemoteAddr))
+	return address != nil && address.IsLoopback()
+}
+
+// sameOrigin 校验 Origin 头与请求目标同源，作为 Cookie 认证下的 CSRF 纵深防御。
+// 旧浏览器可能不带 Origin，此时依赖 SameSite=Strict 阻止跨站携带 Cookie。
+func sameOrigin(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return parsed.Scheme == requestScheme(r) && parsed.Host == r.Host
+}
+
+func setRefreshCookie(w http.ResponseWriter, r *http.Request, token string, ttl time.Duration) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     refreshCookieName,
+		Value:    token,
+		Path:     "/api/v1/auth",
+		MaxAge:   int(ttl.Seconds()),
+		HttpOnly: true,
+		Secure:   cookieSecure(r),
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+func clearRefreshCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     refreshCookieName,
+		Value:    "",
+		Path:     "/api/v1/auth",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   cookieSecure(r),
+		SameSite: http.SameSiteStrictMode,
+	})
 }
 
 func New(deps Dependencies) http.Handler {
@@ -95,27 +159,45 @@ func New(deps Dependencies) http.Handler {
 			writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true)
 			return
 		}
-		var input struct {
-			RefreshToken string `json:"refreshToken"`
+		// 网页端：refresh token 只存在于 httpOnly Cookie，登录态恢复与续期都走 Cookie；
+		// 原生客户端仍通过请求体携带 refresh token。
+		cookie, cookieErr := r.Cookie(refreshCookieName)
+		web := cookieErr == nil && cookie.Value != ""
+		var refreshToken string
+		if web {
+			if !sameOrigin(r) {
+				writeError(w, r, http.StatusForbidden, "CSRF_REJECTED", "拒绝跨站会话刷新", false)
+				return
+			}
+			refreshToken = cookie.Value
+		} else {
+			var input struct {
+				RefreshToken string `json:"refreshToken"`
+			}
+			if err := decodeJSON(w, r, &input); err != nil {
+				return
+			}
+			if input.RefreshToken == "" || len(input.RefreshToken) > 512 {
+				writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "请求格式不正确", false)
+				return
+			}
+			refreshToken = input.RefreshToken
 		}
-		if err := decodeJSON(w, r, &input); err != nil {
-			return
-		}
-		if input.RefreshToken == "" || len(input.RefreshToken) > 512 {
-			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "请求格式不正确", false)
-			return
-		}
-		pair, err := deps.Auth.Refresh(r.Context(), input.RefreshToken)
+		pair, err := deps.Auth.Refresh(r.Context(), refreshToken)
 		if err != nil {
 			writeError(w, r, http.StatusUnauthorized, "AUTH_SESSION_REVOKED", "会话已失效，请重新登录", false)
 			return
 		}
+		if web {
+			setRefreshCookie(w, r, pair.RefreshToken, time.Until(pair.RefreshTokenExpires))
+		}
 		recordAudit(deps.Audit, r, pair.User.ID, "auth.refresh", pair.SessionID, nil)
-		writeJSON(w, http.StatusOK, tokenPayload(pair, RequestID(r.Context())))
+		writeJSON(w, http.StatusOK, tokenPayload(pair, RequestID(r.Context()), web))
 	})
 
 	protected := http.NewServeMux()
 	protected.HandleFunc("POST /api/v1/auth/logout", func(w http.ResponseWriter, r *http.Request) {
+		clearRefreshCookie(w, r)
 		principal, _ := Principal(r.Context())
 		if err := deps.Auth.Logout(r.Context(), principal.UserID, principal.SessionID); err != nil {
 			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "退出登录失败", true)
@@ -232,6 +314,359 @@ func New(deps Dependencies) http.Handler {
 		status, _ := deps.Settings.Status(r.Context())
 		status.AliyunAvailable = deps.AliyunAvailable
 		writeJSON(w, http.StatusOK, map[string]any{"providers": status, "requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("GET /api/v1/admin/stats", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context())
+		if !adminAllowed(principal, w, r) {
+			return
+		}
+		users, activeUsers := 0, 0
+		if deps.Auth != nil {
+			userList, err := deps.Auth.ListUsers(r.Context())
+			if err != nil {
+				writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取统计信息", true)
+				return
+			}
+			users = len(userList)
+			for _, user := range userList {
+				if user.IsActive {
+					activeUsers++
+				}
+			}
+		}
+		stats := jobs.Stats{ByStatus: map[string]int{}, ByDay: []jobs.DayCount{}}
+		if deps.Jobs != nil {
+			var err error
+			stats, err = deps.Jobs.Stats(r.Context())
+			if err != nil {
+				writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取统计信息", true)
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"stats": map[string]any{
+				"users": users, "activeUsers": activeUsers,
+				"totalJobs": stats.Total, "todayJobs": stats.Today,
+				"byStatus": stats.ByStatus, "byDay": stats.ByDay,
+			},
+			"requestId": RequestID(r.Context()),
+		})
+	})
+	protected.HandleFunc("GET /api/v1/admin/users", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context())
+		if !adminAllowed(principal, w, r) {
+			return
+		}
+		if deps.Auth == nil {
+			writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true)
+			return
+		}
+		users, err := deps.Auth.ListUsers(r.Context())
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取用户列表", true)
+			return
+		}
+		type item struct {
+			ID          string     `json:"id"`
+			Username    string     `json:"username"`
+			DisplayName string     `json:"displayName"`
+			Role        auth.Role  `json:"role"`
+			IsActive    bool       `json:"isActive"`
+			CreatedAt   time.Time  `json:"createdAt"`
+			UpdatedAt   time.Time  `json:"updatedAt"`
+			LastLoginAt *time.Time `json:"lastLoginAt,omitempty"`
+		}
+		items := make([]item, 0, len(users))
+		for _, user := range users {
+			items = append(items, item{ID: user.ID, Username: user.UsernameNormalized, DisplayName: user.DisplayName, Role: user.Role, IsActive: user.IsActive, CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt, LastLoginAt: user.LastLoginAt})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"users": items, "requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("POST /api/v1/admin/users", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context())
+		if !adminAllowed(principal, w, r) {
+			return
+		}
+		var input struct {
+			Username    string    `json:"username"`
+			DisplayName string    `json:"displayName"`
+			Password    string    `json:"password"`
+			Role        auth.Role `json:"role"`
+		}
+		if err := decodeJSON(w, r, &input); err != nil {
+			return
+		}
+		if input.Role != auth.RoleAdmin && input.Role != auth.RoleUser {
+			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "角色必须是 admin 或 user", false)
+			return
+		}
+		if len(input.Password) < 12 {
+			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "密码至少需要 12 位", false)
+			return
+		}
+		user, err := deps.Auth.CreateUser(r.Context(), input.Username, input.DisplayName, input.Password, input.Role)
+		if errors.Is(err, auth.ErrUsernameTaken) {
+			writeError(w, r, http.StatusConflict, "USERNAME_TAKEN", "用户名已存在", false)
+			return
+		}
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "创建用户失败，请检查用户名、显示名是否合法", false)
+			return
+		}
+		recordAudit(deps.Audit, r, principal.UserID, "admin.user.create", user.ID, map[string]any{"role": string(user.Role)})
+		writeJSON(w, http.StatusCreated, map[string]any{"user": userResponse{ID: user.ID, DisplayName: user.DisplayName, Role: user.Role}, "requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("POST /api/v1/admin/users/{id}/password", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context())
+		if !adminAllowed(principal, w, r) {
+			return
+		}
+		var input struct {
+			Password string `json:"password"`
+		}
+		if err := decodeJSON(w, r, &input); err != nil {
+			return
+		}
+		if len(input.Password) < 12 {
+			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "密码至少需要 12 位", false)
+			return
+		}
+		targetID := r.PathValue("id")
+		if err := deps.Auth.ResetPassword(r.Context(), targetID, input.Password); errors.Is(err, auth.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "USER_NOT_FOUND", "用户不存在", false)
+			return
+		} else if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "重置密码失败", true)
+			return
+		}
+		recordAudit(deps.Audit, r, principal.UserID, "admin.user.reset_password", targetID, nil)
+		writeJSON(w, http.StatusOK, map[string]any{"requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("PATCH /api/v1/admin/users/{id}/active", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context())
+		if !adminAllowed(principal, w, r) {
+			return
+		}
+		var input struct {
+			Active bool `json:"active"`
+		}
+		if err := decodeJSON(w, r, &input); err != nil {
+			return
+		}
+		targetID := r.PathValue("id")
+		if !input.Active && targetID == principal.UserID {
+			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "不能禁用当前登录的管理员账号", false)
+			return
+		}
+		if err := deps.Auth.SetUserActive(r.Context(), targetID, input.Active); errors.Is(err, auth.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "USER_NOT_FOUND", "用户不存在", false)
+			return
+		} else if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "更新用户状态失败", true)
+			return
+		}
+		recordAudit(deps.Audit, r, principal.UserID, "admin.user.set_active", targetID, map[string]any{"active": input.Active})
+		writeJSON(w, http.StatusOK, map[string]any{"requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("GET /api/v1/admin/users/{id}/sessions", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context())
+		if !adminAllowed(principal, w, r) {
+			return
+		}
+		sessions, err := deps.Auth.ListSessions(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取设备会话", true)
+			return
+		}
+		type item struct {
+			ID         string      `json:"id"`
+			Device     auth.Device `json:"device"`
+			Current    bool        `json:"current"`
+			CreatedAt  time.Time   `json:"createdAt"`
+			LastUsedAt time.Time   `json:"lastUsedAt"`
+			ExpiresAt  time.Time   `json:"expiresAt"`
+		}
+		items := make([]item, 0, len(sessions))
+		for _, session := range sessions {
+			items = append(items, item{ID: session.ID, Device: session.Device, Current: session.UserID == principal.UserID && session.ID == principal.SessionID, CreatedAt: session.CreatedAt, LastUsedAt: session.LastUsedAt, ExpiresAt: session.ExpiresAt})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"sessions": items, "requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("GET /api/v1/admin/jobs", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context())
+		if !adminAllowed(principal, w, r) {
+			return
+		}
+		if deps.Jobs == nil {
+			writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true)
+			return
+		}
+		limit, limitErr := queryInt(r, "limit", 50)
+		offset, offsetErr := queryInt(r, "offset", 0)
+		status, action := strings.TrimSpace(r.URL.Query().Get("status")), strings.TrimSpace(r.URL.Query().Get("action"))
+		userID := strings.TrimSpace(r.URL.Query().Get("userId"))
+		if limitErr != nil || offsetErr != nil || limit < 1 || limit > 100 || offset < 0 || !validJobFilter(status, action) {
+			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "历史筛选参数不正确", false)
+			return
+		}
+		page, err := deps.Jobs.ListAll(r.Context(), jobs.ListInput{UserID: userID, Query: r.URL.Query().Get("q"), Status: status, Action: action, Limit: limit, Offset: offset})
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务列表", true)
+			return
+		}
+		withMediaPreviews(page.Items, deps.ASRSigner, time.Now())
+		writeJSON(w, http.StatusOK, map[string]any{"jobs": page.Items, "total": page.Total, "limit": page.Limit, "offset": page.Offset, "requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("GET /api/v1/admin/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context())
+		if !adminAllowed(principal, w, r) {
+			return
+		}
+		if deps.Jobs == nil {
+			writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true)
+			return
+		}
+		job, err := deps.Jobs.GetAny(r.Context(), r.PathValue("id"))
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在", false)
+			return
+		}
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务", true)
+			return
+		}
+		withMediaPreviews([]jobs.Job{job}, deps.ASRSigner, time.Now())
+		writeJSON(w, http.StatusOK, map[string]any{"job": job, "requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("POST /api/v1/admin/jobs/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context())
+		if !adminAllowed(principal, w, r) {
+			return
+		}
+		jobID := r.PathValue("id")
+		job, err := deps.Jobs.GetAny(r.Context(), jobID)
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在", false)
+			return
+		}
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务", true)
+			return
+		}
+		job, err = deps.Jobs.Cancel(r.Context(), job.UserID, jobID)
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在", false)
+			return
+		}
+		if errors.Is(err, jobs.ErrNotCancellable) {
+			writeError(w, r, http.StatusConflict, "JOB_NOT_CANCELLABLE", "当前阶段不能即时取消", false)
+			return
+		}
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "取消任务失败", true)
+			return
+		}
+		recordAudit(deps.Audit, r, principal.UserID, "admin.job.cancel", jobID, nil)
+		writeJSON(w, http.StatusOK, map[string]any{"job": job, "requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("POST /api/v1/admin/jobs/{id}/retry", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context())
+		if !adminAllowed(principal, w, r) {
+			return
+		}
+		jobID := r.PathValue("id")
+		job, err := deps.Jobs.GetAny(r.Context(), jobID)
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在", false)
+			return
+		}
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务", true)
+			return
+		}
+		job, err = deps.Jobs.Retry(r.Context(), job.UserID, jobID)
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在", false)
+			return
+		}
+		if errors.Is(err, jobs.ErrNotRetryable) {
+			writeError(w, r, http.StatusConflict, "JOB_NOT_RETRYABLE", "当前任务不能重试", false)
+			return
+		}
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "重试任务失败", true)
+			return
+		}
+		recordAudit(deps.Audit, r, principal.UserID, "admin.job.retry", jobID, nil)
+		writeJSON(w, http.StatusAccepted, map[string]any{"job": job, "requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("DELETE /api/v1/admin/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context())
+		if !adminAllowed(principal, w, r) {
+			return
+		}
+		jobID := r.PathValue("id")
+		job, findErr := deps.Jobs.GetAny(r.Context(), jobID)
+		if errors.Is(findErr, jobs.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在", false)
+			return
+		}
+		if findErr != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "删除任务失败", true)
+			return
+		}
+		if job.Status != "completed" && job.Status != "failed" && job.Status != "cancelled" {
+			writeError(w, r, http.StatusConflict, "JOB_NOT_DELETABLE", "进行中的任务不能删除", false)
+			return
+		}
+		var owned []ownedfiles.File
+		if deps.Files != nil {
+			owned, _ = deps.Files.ListByJob(r.Context(), job.UserID, jobID)
+		}
+		if deps.Storage != nil {
+			for _, file := range owned {
+				if removeErr := deps.Storage.Remove(file); removeErr != nil {
+					writeError(w, r, http.StatusInternalServerError, "FILE_DELETE_FAILED", "删除任务文件失败", true)
+					return
+				}
+			}
+		}
+		err := deps.Jobs.Delete(r.Context(), job.UserID, jobID)
+		if errors.Is(err, jobs.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在", false)
+			return
+		}
+		if errors.Is(err, jobs.ErrNotDeletable) {
+			writeError(w, r, http.StatusConflict, "JOB_NOT_DELETABLE", "进行中的任务不能删除", false)
+			return
+		}
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "删除任务失败", true)
+			return
+		}
+		recordAudit(deps.Audit, r, principal.UserID, "admin.job.delete", jobID, nil)
+		writeJSON(w, http.StatusOK, map[string]any{"requestId": RequestID(r.Context())})
+	})
+	protected.HandleFunc("GET /api/v1/admin/files/{id}", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context())
+		if !adminAllowed(principal, w, r) {
+			return
+		}
+		if deps.Files == nil || deps.Storage == nil {
+			writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true)
+			return
+		}
+		file, err := deps.Files.FindByID(r.Context(), r.PathValue("id"))
+		if errors.Is(err, ownedfiles.ErrNotFound) {
+			writeError(w, r, http.StatusNotFound, "FILE_NOT_FOUND", "文件不存在", false)
+			return
+		}
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取文件", true)
+			return
+		}
+		recordAudit(deps.Audit, r, principal.UserID, "admin.file.download", file.ID, nil)
+		handleFileDownload(deps.Storage, file, w, r)
 	})
 	webFiles, err := fs.Sub(web.Files, "static")
 	if err != nil {
@@ -547,6 +982,7 @@ func New(deps Dependencies) http.Handler {
 		mux.Handle("GET /api/v1/auth/sessions", requireAuth(deps.Auth, protected))
 		mux.Handle("DELETE /api/v1/auth/sessions/{id}", requireAuth(deps.Auth, protected))
 		mux.Handle("DELETE /api/v1/admin/sessions/{id}", requireAuth(deps.Auth, protected))
+		mux.Handle("GET /api/v1/admin/stats", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/admin/settings/providers", requireAuth(deps.Auth, protected))
 		mux.Handle("PUT /api/v1/admin/settings/providers", requireAuth(deps.Auth, protected))
 		mux.Handle("POST /api/v1/jobs", requireAuth(deps.Auth, protected))
@@ -557,6 +993,17 @@ func New(deps Dependencies) http.Handler {
 		mux.Handle("POST /api/v1/jobs/{id}/cancel", requireAuth(deps.Auth, protected))
 		mux.Handle("POST /api/v1/jobs/{id}/retry", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/files/{id}", requireAuth(deps.Auth, protected))
+		mux.Handle("GET /api/v1/admin/users", requireAuth(deps.Auth, protected))
+		mux.Handle("POST /api/v1/admin/users", requireAuth(deps.Auth, protected))
+		mux.Handle("POST /api/v1/admin/users/{id}/password", requireAuth(deps.Auth, protected))
+		mux.Handle("PATCH /api/v1/admin/users/{id}/active", requireAuth(deps.Auth, protected))
+		mux.Handle("GET /api/v1/admin/users/{id}/sessions", requireAuth(deps.Auth, protected))
+		mux.Handle("GET /api/v1/admin/jobs", requireAuth(deps.Auth, protected))
+		mux.Handle("GET /api/v1/admin/jobs/{id}", requireAuth(deps.Auth, protected))
+		mux.Handle("POST /api/v1/admin/jobs/{id}/cancel", requireAuth(deps.Auth, protected))
+		mux.Handle("POST /api/v1/admin/jobs/{id}/retry", requireAuth(deps.Auth, protected))
+		mux.Handle("DELETE /api/v1/admin/jobs/{id}", requireAuth(deps.Auth, protected))
+		mux.Handle("GET /api/v1/admin/files/{id}", requireAuth(deps.Auth, protected))
 	}
 	return requestMiddleware(deps.Build.Version, mux)
 }
@@ -701,8 +1148,12 @@ func handleLogin(deps Dependencies, limiter *loginLimiter, w http.ResponseWriter
 		writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "登录暂时不可用", true)
 		return
 	}
+	web := isWebClient(input.Device.Platform, input.Device.AppVersion)
+	if web {
+		setRefreshCookie(w, r, pair.RefreshToken, time.Until(pair.RefreshTokenExpires))
+	}
 	recordAudit(deps.Audit, r, pair.User.ID, "auth.login", pair.SessionID, map[string]any{"platform": input.Device.Platform})
-	writeJSON(w, http.StatusOK, tokenPayload(pair, RequestID(r.Context())))
+	writeJSON(w, http.StatusOK, tokenPayload(pair, RequestID(r.Context()), web))
 }
 
 func recordAudit(recorder *audit.Recorder, r *http.Request, userID, action, sessionID string, metadata map[string]any) {
@@ -714,8 +1165,13 @@ func recordAudit(recorder *audit.Recorder, r *http.Request, userID, action, sess
 	}
 }
 
-func tokenPayload(pair auth.TokenPair, requestID string) tokenResponse {
-	return tokenResponse{AccessToken: pair.AccessToken, AccessTokenExpiresAt: pair.AccessTokenExpires, RefreshToken: pair.RefreshToken, RefreshTokenExpiresAt: pair.RefreshTokenExpires, User: userResponse{ID: pair.User.ID, DisplayName: pair.User.DisplayName, Role: pair.User.Role}, RequestID: requestID}
+func tokenPayload(pair auth.TokenPair, requestID string, web bool) tokenResponse {
+	response := tokenResponse{AccessToken: pair.AccessToken, AccessTokenExpiresAt: pair.AccessTokenExpires, User: userResponse{ID: pair.User.ID, DisplayName: pair.User.DisplayName, Role: pair.User.Role}, RequestID: requestID}
+	if !web {
+		response.RefreshToken = pair.RefreshToken
+		response.RefreshTokenExpiresAt = pair.RefreshTokenExpires
+	}
+	return response
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) error {
@@ -740,6 +1196,14 @@ func remoteIP(value string) string {
 		return host
 	}
 	return strings.TrimSpace(value)
+}
+
+func adminAllowed(principal auth.Principal, w http.ResponseWriter, r *http.Request) bool {
+	if principal.Role != auth.RoleAdmin {
+		writeError(w, r, http.StatusForbidden, "FORBIDDEN", "仅管理员可执行此操作", false)
+		return false
+	}
+	return true
 }
 
 func secureSettingsRequest(r *http.Request) bool {

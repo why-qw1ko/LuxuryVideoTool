@@ -39,6 +39,27 @@ func (r *SQLiteRepository) SetUserActive(ctx context.Context, userID string, act
 	return requireChanged(result)
 }
 
+func (r *SQLiteRepository) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id, username_normalized, display_name, password_hash,
+		role, is_active, created_at, updated_at, last_login_at FROM users ORDER BY created_at ASC, username_normalized ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	defer rows.Close()
+	var users []User
+	for rows.Next() {
+		user, scanErr := scanUser(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan user: %w", scanErr)
+		}
+		users = append(users, user)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	return users, nil
+}
+
 func (r *SQLiteRepository) FindUserByUsername(ctx context.Context, username string) (User, error) {
 	return scanUser(r.db.QueryRowContext(ctx, `SELECT id, username_normalized, display_name, password_hash,
 		role, is_active, created_at, updated_at, last_login_at FROM users WHERE username_normalized = ?`, username))

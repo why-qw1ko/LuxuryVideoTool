@@ -146,6 +146,11 @@ func (s *Service) CreateUser(ctx context.Context, username, displayName, passwor
 	if username == "" || len(username) > 64 || displayName == "" || len(displayName) > 100 {
 		return User{}, fmt.Errorf("invalid username or display name")
 	}
+	if _, err := s.repository.FindUserByUsername(ctx, username); err == nil {
+		return User{}, ErrUsernameTaken
+	} else if !errors.Is(err, ErrNotFound) {
+		return User{}, err
+	}
 	if role != RoleAdmin && role != RoleUser {
 		return User{}, fmt.Errorf("invalid role")
 	}
@@ -163,6 +168,18 @@ func (s *Service) CreateUser(ctx context.Context, username, displayName, passwor
 		return User{}, err
 	}
 	return user, nil
+}
+
+// ListUsers 返回全部用户（不含密码哈希），供管理界面使用。
+func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
+	users, err := s.repository.ListUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for index := range users {
+		users[index].PasswordHash = ""
+	}
+	return users, nil
 }
 
 func (s *Service) ResetPassword(ctx context.Context, userID, password string) error {

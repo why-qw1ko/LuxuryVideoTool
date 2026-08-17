@@ -1,7 +1,12 @@
 const $=s=>document.querySelector(s);
 let session=null,poll=null;
 let selectedId=null,currentJob=null,jobsCache=[],detailSig='';
+let adminMode=false,currentView='new',adminOpen=false,adminCurrentView='dashboard',adminJobsCache=[];
+let jobsPage=1,jobsPageSize=20,jobsTotal=0;
+let adminJobsPage=1,adminJobsPageSize=20,adminJobsTotal=0;
 let taskMusic={jobId:null,url:'',playing:false};
+let statusChart=null,trendChart=null;
+let lastStatsSig='',lastAdminJobsSig='';
 
 /* ---------- 主题（仅浅色 / 深色） ---------- */
 const THEMES=['light','dark'];
@@ -51,8 +56,9 @@ function icon(name,size=18){
 }
 
 function show(id,on){$(id).classList.toggle('hidden',!on)}
-function save(value){session=value;value?sessionStorage.setItem('dc_session',JSON.stringify(value)):sessionStorage.removeItem('dc_session')}
-function restore(){try{return JSON.parse(sessionStorage.getItem('dc_session'))}catch{return null}}
+// 网页端安全方案：access token 只保存在内存，refresh token 存服务端 httpOnly Cookie。
+// 页面刷新后通过 /api/v1/auth/refresh 用 Cookie 静默恢复会话，JS 不再接触任何长效凭证。
+function save(value){session=value}
 function normaliseAPI(value){const url=new URL(value);if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw new Error('API 地址必须是有效的 HTTP/HTTPS 地址');url.pathname=url.pathname.replace(/\/+$/,'')||'/';return url.origin+url.pathname.replace(/\/$/,'')}
 /* crypto.randomUUID 仅在安全上下文（HTTPS 或 localhost）可用；内网穿透的 http 地址不可用，需兜底 */
 function uuidv4(){
@@ -66,14 +72,24 @@ function uuidv4(){
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16)});
 }
 
+// 共享的续期 Promise：多个并发 401 只触发一次 refresh，避免 refresh token 轮换时互相把会话刷失效。
+let refreshing=null;
+async function refreshSession(){
+  if(!refreshing){
+    refreshing=fetch('/api/v1/auth/refresh',{method:'POST'}).then(async response=>{
+      if(response.ok){save(await response.json());return true}
+      save(null);return false;
+    }).finally(()=>{refreshing=null});
+  }
+  return refreshing;
+}
 async function api(path,options={},retry=true){
   options.headers={...(options.headers||{}),'Content-Type':'application/json'};
   if(session?.accessToken)options.headers.Authorization=`Bearer ${session.accessToken}`;
   let response=await fetch(path,options);
-  if(response.status===401&&retry&&session?.refreshToken){
-    const refreshed=await fetch('/api/v1/auth/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({refreshToken:session.refreshToken})});
-    if(refreshed.ok){save(await refreshed.json());return api(path,options,false)}
-    save(null);throw new Error('登录已过期，请重新登录');
+  if(response.status===401&&retry){
+    if(await refreshSession())return api(path,options,false);
+    throw new Error('登录已过期，请重新登录');
   }
   const body=await response.json().catch(()=>({}));
   if(!response.ok)throw new Error(body.error?.message||`请求失败 (${response.status})`);
@@ -109,7 +125,7 @@ function applyTheme(){
   t.title=theme==='dark'?'切换到浅色主题':'切换到深色主题';
   t.setAttribute('aria-label',t.title);
 }
-$('#theme-toggle').addEventListener('click',()=>{theme=theme==='dark'?'light':'dark';localStorage.setItem('dc_theme',theme);applyTheme()});
+$('#theme-toggle').addEventListener('click',()=>{theme=theme==='dark'?'light':'dark';localStorage.setItem('dc_theme',theme);applyTheme();if(adminOpen&&adminCurrentView==='dashboard'){lastStatsSig='';loadAdminStats()}});
 applyTheme();
 
 /* ---------- 移动端收缩侧边栏 ---------- */
@@ -141,6 +157,7 @@ if(__contentEl)__contentEl.addEventListener('scroll',updateBackTop,{passive:true
 
 /* ---------- 视图 / 选中 ---------- */
 function showView(name){
+  currentView=name;
   ['new','detail','settings'].forEach(v=>show('#view-'+v,v===name));
   $('#new-task-btn').classList.toggle('active',name==='new');
   $('#settings-link').classList.toggle('active',name==='settings');
@@ -161,9 +178,44 @@ function selectJob(id){
 $('#new-task-btn').addEventListener('click',()=>selectJob(null));
 $('#settings-link').addEventListener('click',e=>{e.preventDefault();selectJob(null);showView('settings')});
 
+/* ---------- 后台管理系统 ---------- */
+function openAdminConsole(){
+  adminOpen=true;adminMode=false;selectedId=null;currentJob=null;
+  lastStatsSig=''; // 重新打开时按当前主题重绘图表，避免沿用旧配色
+  show('#app',false);show('#admin-console',true);
+  adminShowView('dashboard');
+}
+function closeAdminConsole(){
+  adminOpen=false;adminMode=false;
+  show('#admin-console',false);show('#app',true);
+  selectJob(null);
+}
+function adminShowView(name){
+  adminCurrentView=name;
+  ['dashboard','jobs','users','detail'].forEach(v=>show('#admin-view-'+v,v===name));
+  document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>btn.classList.toggle('active',btn.dataset.adminView===name));
+  if(name==='dashboard')loadAdminStats();
+  if(name==='jobs'){loadAdminUsers();loadAdminJobs()}
+  if(name==='users')loadAdminUsers();
+}
+$('#admin-console-btn').addEventListener('click',openAdminConsole);
+$('#admin-back-front').addEventListener('click',closeAdminConsole);
+$('#admin-refresh-stats').addEventListener('click',async e=>{
+  const btn=e.currentTarget;
+  btn.disabled=true;
+  btn.classList.add('loading');
+  try{await loadAdminStats()}finally{btn.disabled=false;btn.classList.remove('loading')}
+});
+$('#admin-detail-back').addEventListener('click',()=>adminShowView('jobs'));
+document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>btn.addEventListener('click',()=>adminShowView(btn.dataset.adminView)));
+
 function enter(value){
   save(value);
-  show('#login',!value);show('#app',!!value);show('#logout',!!value);
+  adminMode=false;currentView='new';adminOpen=false;jobsPage=1;adminJobsPage=1;
+  if($('#admin-user-name'))$('#admin-user-name').textContent=value?.user?.displayName||'';
+  if($('#admin-user-role'))$('#admin-user-role').textContent=value?.user?.role==='admin'?'管理员':'普通用户';
+  if($('#admin-user-avatar'))$('#admin-user-avatar').textContent=(value?.user?.displayName||'?').trim().charAt(0).toUpperCase();
+  show('#login',!value);show('#app',!!value);show('#logout',!!value);show('#admin-console',false);
   // 未登录时隐藏左上角菜单按钮：导航抽屉是登录后的功能，登录页点了只会打开空的抽屉。
   // 用 visibility 而非 display，保留其在顶栏网格中的 40px 占位，避免品牌文字被顶位裁剪。
   $('#sidebar-toggle').classList.toggle('nav-hidden',!value);
@@ -172,7 +224,12 @@ function enter(value){
     selectJob(null);
     if(value.user?.role==='admin')loadProviders();
     loadJobs();
-    poll=setInterval(loadJobs,5000);
+    poll=setInterval(()=>{
+      if(adminOpen){
+        if(adminCurrentView==='dashboard')loadAdminStats();
+        if(adminCurrentView==='jobs')loadAdminJobs();
+      }else loadJobs();
+    },5000);
   }else{
     clearInterval(poll);
     stopTaskMusic();
@@ -212,10 +269,247 @@ $('#submit-task').innerHTML=icon('arrow-up-right',14)+' 提取内容';
 $('#capture-form').addEventListener('submit',async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{const action=$('#info-only').checked?'info':'full';const data=await api('/api/v1/jobs',{method:'POST',headers:{'Idempotency-Key':uuidv4()},body:JSON.stringify({shareText:$('#share-text').value.trim(),action,options:{force:false,keepVideo:action==='full',languageHints:['zh','en'],hotwords:[]}})});$('#share-text').value='';await loadJobs();if(data.job?.id)selectJob(data.job.id);toast('任务已创建，正在处理','success')}catch(err){toast(err.message,'error')}finally{button.disabled=false}});
 
 /* ---------- 任务列表 ---------- */
-$('#search-form').addEventListener('submit',e=>{e.preventDefault();loadJobs()});
+$('#search-form').addEventListener('submit',e=>{e.preventDefault();jobsPage=1;loadJobs()});
 $('#refresh').addEventListener('click',loadJobs);
-$('#status').addEventListener('change',loadJobs);
-async function loadJobs(){if(!session)return;try{const q=new URLSearchParams({q:$('#query').value.trim(),status:$('#status').value,limit:'100',offset:'0'});const data=await api(`/api/v1/jobs?${q}`);renderList(data.jobs||[]);if($('#job-total'))$('#job-total').textContent=data.total!=null?`${data.total} 个任务`:''}catch(err){if(err.message.includes('登录'))enter(null);else toast(err.message,'error')}}
+$('#status').addEventListener('change',()=>{jobsPage=1;loadJobs()});
+async function loadJobs(){if(!session)return;try{const q=new URLSearchParams({q:$('#query').value.trim(),status:$('#status').value,limit:String(jobsPageSize),offset:String((jobsPage-1)*jobsPageSize)});const data=await api(`/api/v1/jobs?${q}`);jobsTotal=data.total||0;renderList(data.jobs||[]);if($('#job-total'))$('#job-total').textContent=`${jobsTotal} 个任务`;renderPager($('#job-pager'),jobsPage,Math.max(1,Math.ceil(jobsTotal/jobsPageSize)),p=>{jobsPage=p;loadJobs()})}catch(err){if(err.message.includes('登录'))enter(null);else toast(err.message,'error')}}
+// 通用分页条：onPage 接收目标页码；单页时不渲染。
+function renderPager(el,page,totalPages,onPage){
+  if(!el)return;
+  if(totalPages<=1){el.innerHTML='';return}
+  el.innerHTML=`<button type="button" class="ghost" data-pager="${page-1}" ${page<=1?'disabled':''}>上一页</button><span class="pager-info">${page} / ${totalPages}</span><button type="button" class="ghost" data-pager="${page+1}" ${page>=totalPages?'disabled':''}>下一页</button>`;
+  el.onclick=e=>{
+    const btn=e.target.closest('button[data-pager]');
+    if(!btn||btn.disabled)return;
+    onPage(Number(btn.dataset.pager));
+  };
+}
+
+/* ---------- 后台仪表盘 ---------- */
+let adminUsers=[];
+async function loadAdminStats(){
+  if(!session)return;
+  try{
+    const data=await api('/api/v1/admin/stats');
+    const stats=data.stats||{};
+    // 数据未变化时不重绘，避免轮询导致图表/卡片闪烁
+    const sig=JSON.stringify([stats.users,stats.activeUsers,stats.totalJobs,stats.todayJobs,stats.byStatus,stats.byDay]);
+    if(sig===lastStatsSig)return;
+    lastStatsSig=sig;
+    renderStatCards(stats);
+    renderStatusChart(stats.byStatus||{});
+    renderTrendChart(stats.byDay||[]);
+    // 图表高度随布局自适应，绘制完成后校准一次尺寸
+    requestAnimationFrame(()=>{if(statusChart)statusChart.resize();if(trendChart)trendChart.resize()});
+  }catch(err){toast(err.message,'error')}
+}
+function renderStatCards(stats){
+  const cards=[
+    {label:'用户总数',value:stats.users??'-'},
+    {label:'启用账号',value:stats.activeUsers??'-'},
+    {label:'任务总数',value:stats.totalJobs??'-'},
+    {label:'今日任务',value:stats.todayJobs??'-'},
+  ];
+  $('#admin-stats-cards').innerHTML=cards.map(card=>`<div class="stat-card"><span>${esc(card.label)}</span><strong>${esc(card.value)}</strong></div>`).join('');
+}
+function chartColors(){
+  const dark=document.documentElement.dataset.theme==='dark';
+  return {text:dark?'#A2A8BB':'#5C6474',axis:dark?'#2A2E38':'#DFE3EA',grid:dark?'#20232B':'#F3F4F6'};
+}
+function renderStatusChart(byStatus){
+  const el=$('#chart-status');
+  if(typeof echarts==='undefined'){el.innerHTML='<p class="meta">ECharts 未加载</p>';return}
+  if(!statusChart)statusChart=echarts.init(el);
+  const labels={queued:'排队中',resolving:'解析信息',downloading:'下载中',extracting:'提取音频',transcribing:'识别中',postprocessing:'生成结果',completed:'已完成',failed:'失败',retry_wait:'等待重试',cancelled:'已取消'};
+  const colors={queued:'#9AA1B2',resolving:'#335CFF',downloading:'#3D5AFE',extracting:'#7D94FF',transcribing:'#7D94FF',postprocessing:'#7D94FF',completed:'#2FA96A',failed:'#E5484D',retry_wait:'#E8912D',cancelled:'#5C6474'};
+  const data=Object.entries(byStatus).map(([key,value])=>({name:labels[key]||key,value,itemStyle:{color:colors[key]||'#335CFF'}})).filter(d=>d.value>0);
+  const c=chartColors();
+  statusChart.setOption({
+    color:Object.values(colors),
+    animation:false,
+    tooltip:{trigger:'item',formatter:'{b}: {c} ({d}%)'},
+    legend:{bottom:0,textStyle:{color:c.text}},
+    series:[{type:'pie',radius:['38%','64%'],center:['50%','44%'],avoidLabelOverlap:true,itemStyle:{borderColor:document.documentElement.dataset.theme==='dark'?'#17191F':'#FFFFFF',borderWidth:2},label:{color:c.text},data:data.length?data:[{name:'暂无任务',value:1,itemStyle:{color:c.grid}}]}]
+  },true);
+}
+function renderTrendChart(byDay){
+  const el=$('#chart-trend');
+  if(typeof echarts==='undefined'){el.innerHTML='<p class="meta">ECharts 未加载</p>';return}
+  if(!trendChart)trendChart=echarts.init(el);
+  const c=chartColors();
+  trendChart.setOption({
+    animation:false,
+    tooltip:{trigger:'axis'},
+    grid:{left:36,right:16,top:24,bottom:28},
+    xAxis:{type:'category',data:byDay.map(d=>d.day.slice(5)),axisLine:{lineStyle:{color:c.axis}},axisLabel:{color:c.text}},
+    yAxis:{type:'value',minInterval:1,splitLine:{lineStyle:{color:c.axis}},axisLabel:{color:c.text}},
+    series:[{name:'任务数',type:'line',smooth:true,symbolSize:6,data:byDay.map(d=>d.count),itemStyle:{color:'#335CFF'},lineStyle:{width:3},areaStyle:{color:{type:'linear',x:0,y:0,x2:0,y2:1,colorStops:[{offset:0,color:'rgba(51,92,255,.28)'},{offset:1,color:'rgba(51,92,255,.02)'}]}}}]
+  },true);
+}
+window.addEventListener('resize',()=>{if(statusChart)statusChart.resize();if(trendChart)trendChart.resize()});
+
+$('#admin-jobs-form').addEventListener('submit',e=>{e.preventDefault();adminJobsPage=1;loadAdminJobs()});
+async function loadAdminJobs(){
+  if(!session)return;
+  const q=new URLSearchParams({q:$('#admin-jobs-q').value.trim(),status:$('#admin-jobs-status').value,userId:$('#admin-jobs-user').value,limit:String(adminJobsPageSize),offset:String((adminJobsPage-1)*adminJobsPageSize)});
+  try{
+    const data=await api(`/api/v1/admin/jobs?${q}`);
+    adminJobsCache=data.jobs||[];
+    adminJobsTotal=data.total||0;
+    // 数据与筛选条件未变化时不重绘表格，避免轮询闪烁
+    const sig=JSON.stringify([String(q),adminJobsTotal,(adminJobsCache||[]).map(jobSignature).join('|')]);
+    if(sig===lastAdminJobsSig)return;
+    lastAdminJobsSig=sig;
+    renderAdminJobs(adminJobsCache);
+    if($('#admin-jobs-total'))$('#admin-jobs-total').textContent=`共 ${adminJobsTotal} 个任务`;
+    renderPager($('#admin-jobs-pager'),adminJobsPage,Math.max(1,Math.ceil(adminJobsTotal/adminJobsPageSize)),p=>{adminJobsPage=p;loadAdminJobs()});
+  }catch(err){toast(err.message,'error')}
+}
+function adminJobOps(job){
+  const terminal=['completed','failed','cancelled'].includes(job.status);
+  const ops=[`<button type="button" data-op="view">${icon('search',13)} 查看</button>`];
+  if(!terminal)ops.push(`<button type="button" data-op="cancel">${icon('circle-slash',13)} 取消</button>`);
+  if(job.status==='failed'||job.status==='cancelled')ops.push(`<button type="button" data-op="retry">${icon('rotate-ccw',13)} 重试</button>`);
+  if(terminal)ops.push(`<button type="button" data-op="delete" class="danger">${icon('trash',13)} 删除</button>`);
+  return ops.join('');
+}
+function renderAdminJobs(jobs){
+  const root=$('#admin-jobs-list');
+  if(!jobs.length){root.innerHTML=`<div class="empty-state">${icon('inbox',36)}<p>暂无任务</p><span>调整筛选条件后重试</span></div>`;return}
+  root.innerHTML=`<div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>创建时间</th><th>用户</th><th>任务</th><th>类型</th><th>状态</th><th>操作</th></tr></thead><tbody>`+jobs.map(job=>{
+    const w=job.work||{};
+    const title=stripHashtags(w.title,w.hashtags)||`任务 ${job.id.slice(0,8)}`;
+    const tone=statusTone[job.status]||'muted';
+    const owner=job.ownerDisplayName||job.ownerUsername||'-';
+    return `<tr data-id="${esc(job.id)}">
+      <td class="nowrap">${fmtShort(job.createdAt)}</td>
+      <td class="nowrap">${esc(owner)}</td>
+      <td class="admin-title">${esc(title)}</td>
+      <td>${esc(actionLabels[job.action]||job.action)}</td>
+      <td class="nowrap"><span class="dot dot-${tone}"></span>${esc(statusLabels[job.status]||job.status)}</td>
+      <td class="admin-ops nowrap">${adminJobOps(job)}</td>
+    </tr>`;
+  }).join('')+`</tbody></table></div>`;
+}
+$('#admin-view-jobs').addEventListener('click',e=>{
+  const btn=e.target.closest('button[data-op]');
+  if(!btn)return;
+  const row=btn.closest('tr[data-id]');
+  if(!row)return;
+  if(btn.dataset.op==='view')viewAdminJob(row.dataset.id);
+  else operateAdminJob(row.dataset.id,btn.dataset.op);
+});
+async function viewAdminJob(id){
+  try{
+    const data=await api(`/api/v1/admin/jobs/${encodeURIComponent(id)}`);
+    adminMode=true;currentJob=data.job;
+    $('#admin-detail').innerHTML=jobDetailHTML(data.job);
+    syncTaskMusicWithJob(data.job);updateTaskMusicUI();
+    adminShowView('detail');
+    if(matchMedia('(max-width:960px)').matches)setSidebar(false);
+  }catch(err){toast(err.message,'error')}
+}
+async function operateAdminJob(id,op){
+  if(op==='delete'&&!(await confirmDialog({title:'删除任务',message:'确认删除该任务及其文件？此操作不可撤销。',confirmText:'删除'})))return;
+  try{
+    await api(`/api/v1/admin/jobs/${encodeURIComponent(id)}${op==='delete'?'':`/${op}`}`,{method:op==='delete'?'DELETE':'POST'});
+    toast(op==='delete'?'任务已删除':op==='cancel'?'已请求取消':'已重新开始','success');
+    if(op==='delete'){
+      adminMode=false;
+      if(adminJobsPage>1&&adminJobsTotal-1<=(adminJobsPage-1)*adminJobsPageSize)adminJobsPage--;
+      adminShowView('jobs');
+    }
+    else await loadAdminJobs();
+  }catch(err){toast(err.message,'error')}
+}
+
+/* ---------- 管理后台：用户管理 ---------- */
+$('#user-create-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const password=$('#user-password').value;
+  if(password.length<12)return toast('密码至少需要 12 位','warning');
+  try{
+    await api('/api/v1/admin/users',{method:'POST',body:JSON.stringify({username:$('#user-username').value.trim(),displayName:$('#user-display').value.trim(),password,role:$('#user-role').value})});
+    e.target.reset();toast('用户已创建','success');await loadAdminUsers();
+  }catch(err){toast(err.message,'error')}
+});
+async function loadAdminUsers(){
+  if(!session)return;
+  try{
+    const data=await api('/api/v1/admin/users');
+    adminUsers=data.users||[];
+    renderAdminUsers(adminUsers);
+    const select=$('#admin-jobs-user');
+    if(select)select.innerHTML=`<option value="">全部用户</option>`+adminUsers.map(u=>`<option value="${esc(u.id)}">${esc(u.displayName||u.username)}</option>`).join('');
+  }catch(err){toast(err.message,'error')}
+}
+function renderAdminUsers(users){
+  const root=$('#admin-users-list');
+  root.innerHTML=`<div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>用户名</th><th>显示名</th><th>角色</th><th>状态</th><th>最近登录</th><th>创建时间</th><th>操作</th></tr></thead><tbody>`+users.map(u=>`<tr data-id="${esc(u.id)}">
+    <td class="nowrap">${esc(u.username)}</td>
+    <td>${esc(u.displayName)}</td>
+    <td>${u.role==='admin'?'管理员':'普通用户'}</td>
+    <td class="nowrap">${u.isActive?'<span class="dot dot-success"></span>正常':'<span class="dot dot-danger"></span>已禁用'}</td>
+    <td class="nowrap">${u.lastLoginAt?fmtDate(u.lastLoginAt):'-'}</td>
+    <td class="nowrap">${fmtDate(u.createdAt)}</td>
+    <td class="admin-ops nowrap">
+      <button type="button" data-op="${u.isActive?'disable':'enable'}">${u.isActive?'禁用':'启用'}</button>
+      <button type="button" data-op="password">重置密码</button>
+      <button type="button" data-op="sessions">会话</button>
+    </td>
+  </tr>`).join('')+`</tbody></table></div>`;
+}
+$('#admin-view-users').addEventListener('click',e=>{
+  const btn=e.target.closest('button[data-op]');
+  if(!btn)return;
+  const row=btn.closest('tr[data-id]');
+  if(!row)return;
+  const op=btn.dataset.op;
+  if(op==='disable')return setUserActive(row.dataset.id,false);
+  if(op==='enable')return setUserActive(row.dataset.id,true);
+  if(op==='password')return resetUserPassword(row.dataset.id);
+  if(op==='sessions')return showUserSessions(row.dataset.id,row.querySelector('td:nth-child(2)')?.textContent||'');
+});
+async function setUserActive(id,active){
+  if(!active&&!(await confirmDialog({title:'禁用用户',message:'禁用后该用户的所有会话会立即下线且无法登录，确定？',confirmText:'禁用'})))return;
+  try{
+    await api(`/api/v1/admin/users/${encodeURIComponent(id)}/active`,{method:'PATCH',body:JSON.stringify({active})});
+    toast(active?'已启用':'已禁用','success');await loadAdminUsers();
+  }catch(err){toast(err.message,'error')}
+}
+async function resetUserPassword(id){
+  const password=await promptDialog({title:'重置密码',message:'该用户的所有会话将立即下线。请输入新密码（至少 12 位）：',placeholder:'新密码',password:true,confirmText:'重置'});
+  if(password==null)return;
+  if(password.length<12)return toast('密码至少需要 12 位','warning');
+  try{
+    await api(`/api/v1/admin/users/${encodeURIComponent(id)}/password`,{method:'POST',body:JSON.stringify({password})});
+    toast('密码已重置，该用户会话已下线','success');
+  }catch(err){toast(err.message,'error')}
+}
+async function showUserSessions(id,username){
+  const host=$('#admin-user-sessions');
+  host.dataset.userId=id;host.dataset.userName=username||'';
+  host.classList.remove('hidden');
+  host.innerHTML='<p class="meta">加载会话…</p>';
+  try{
+    const data=await api(`/api/v1/admin/users/${encodeURIComponent(id)}/sessions`);
+    const sessions=data.sessions||[];
+    host.innerHTML=`<div class="admin-head"><div><h3>${esc(username||'用户')} 的会话</h3></div><button type="button" class="ghost" data-close-sessions>收起</button></div>`+
+      (sessions.length?sessions.map(s=>`<div class="admin-session"><span>${esc(s.device.name||s.device.platform)}</span><span class="meta">${fmtDate(s.lastUsedAt)} 活跃</span>${s.current?'<span class="badge badge-success">当前</span>':''}<button type="button" class="danger" data-session="${esc(s.id)}">下线</button></div>`).join(''):'<p class="meta">该用户当前没有活跃会话</p>');
+  }catch(err){toast(err.message,'error')}
+}
+$('#admin-user-sessions').addEventListener('click',async e=>{
+  const close=e.target.closest('[data-close-sessions]');
+  if(close){$('#admin-user-sessions').classList.add('hidden');$('#admin-user-sessions').innerHTML='';return}
+  const btn=e.target.closest('button[data-session]');
+  if(!btn)return;
+  const host=$('#admin-user-sessions');
+  try{
+    await api(`/api/v1/admin/sessions/${encodeURIComponent(btn.dataset.session)}`,{method:'DELETE'});
+    toast('会话已下线','success');
+    showUserSessions(host.dataset.userId,host.dataset.userName);
+  }catch(err){toast(err.message,'error')}
+});
 
 /* ---------- 渲染 ---------- */
 function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -318,8 +612,9 @@ function jobDetailHTML(job){
 
   const isNote=w.type==='note';
   const linkFiles=isNote?files.filter(f=>f.kind!=='image'&&f.kind!=='animated'):files;
+  const fileHref=f=>adminMode?`/api/v1/admin/files/${encodeURIComponent(f.id)}`:`/api/v1/files/${encodeURIComponent(f.id)}`;
   // data-preview 携带同源签名流式地址：视频/配图下载直接用 <a download> 流式落盘，不再 fetch 整文件缓冲。
-  const fileLinks=linkFiles.map(f=>`<a class="btn download" href="/api/v1/files/${encodeURIComponent(f.id)}" data-file="${esc(f.id)}" data-name="${esc(f.name)}" data-preview="${esc(f.previewUrl||'')}">${icon('download',14)} ${esc(fileLabel(f))}</a>`);
+  const fileLinks=linkFiles.map(f=>`<a class="btn download" href="${fileHref(f)}" data-file="${esc(f.id)}" data-name="${esc(f.name)}" data-preview="${esc(f.previewUrl||'')}">${icon('download',14)} ${esc(fileLabel(f))}</a>`);
   const viewOps=[],taskOps=[];
   if(videoFile)viewOps.push(`<button type="button" class="btn preview-btn" data-op="preview" data-fid="${esc(videoFile.id)}" data-name="${esc(videoFile.name)}" data-preview="${esc(videoFile.previewUrl||'')}">${icon('play',14)} 预览视频</button>`);
   if(!terminal)taskOps.push(`<button type="button" data-op="cancel">${icon('circle-slash',14)} 取消</button>`);
@@ -341,7 +636,7 @@ function jobDetailHTML(job){
     const cdnSrc=img.animatedUrl||img.url;
     // 签名预览地址 24h 有效：可用时优先（跨区域稳定），过期则退回 CDN 原址，避免 404 黑框。
     const viewerSrc=(file&&file.previewUrl&&previewUsable(file.previewUrl))?file.previewUrl:cdnSrc;
-    const dl=file?`<a class="gallery-dl" href="/api/v1/files/${encodeURIComponent(file.id)}" data-file data-name="${esc(file.name||'image')}" data-preview="${esc(file.previewUrl||'')}" title="下载">${icon('download',14)}</a>`:'';
+    const dl=file?`<a class="gallery-dl" href="${fileHref(file)}" data-file data-name="${esc(file.name||'image')}" data-preview="${esc(file.previewUrl||'')}" title="下载">${icon('download',14)}</a>`:'';
     const badge=`<span class="gallery-badge">${img.animatedUrl?'动图':'图片'}</span>`;
     // 回退链在错误发生时现查（不烘焙渲染时的判断），避免页面停留超过 24h 后签名地址过期、
     // 或客户端时钟偏差把新鲜地址误判为过期时，图片/动图永久无法恢复。mediaFallback 每项只尝试一次。
@@ -353,7 +648,8 @@ function jobDetailHTML(job){
     return `<figure class="gallery-item" data-preview="${esc(viewerSrc)}" data-fallback="${esc(cdnSrc)}" data-animated="${img.animatedUrl?'1':'0'}" data-title="${esc((stripHashtags(w.title,w.hashtags)||'预览').slice(0,40))}"><div class="gallery-media">${media}</div>${foot}</figure>`;
   }).join('');
   const noteGallery=isNote&&noteImages.length?`<div class="note-gallery">${galleryItems}</div>`:'';
-  const zipLink=(isNote&&mediaFiles.length&&job.status==='completed')?`<a class="btn" href="/api/v1/jobs/${encodeURIComponent(job.id)}/images/archive" data-file data-name="${esc((job.work&&job.work.douyinWorkId)||job.id)}_images.zip">${icon('download',14)} 打包下载全部</a>`:'';
+  // 管理员详情里打包下载走用户自己的接口会因所有权校验失败，故仅在普通用户视图展示。
+  const zipLink=(!adminMode&&isNote&&mediaFiles.length&&job.status==='completed')?`<a class="btn" href="/api/v1/jobs/${encodeURIComponent(job.id)}/images/archive" data-file data-name="${esc((job.work&&job.work.douyinWorkId)||job.id)}_images.zip">${icon('download',14)} 打包下载全部</a>`:'';
 
   const musicRow=isNote&&w.musicUrl?`<div class="music-row"><span class="music-info">${icon('music',13)} <span>${esc(w.musicTitle||'背景音乐')}${w.musicArtist?' · '+esc(w.musicArtist):''}</span></span><button type="button" class="music-toggle" data-op="music" data-music="${esc(w.musicUrl)}">${icon('play',13)} 播放音乐</button></div>`:'';
   const hasMedia=cover||w.authorName||metas.length;
@@ -389,7 +685,7 @@ function renderDetail(){
   updateTaskMusicUI();
 }
 
-$('#app').addEventListener('click',e=>{
+function handleContentClick(e){
   const row=e.target.closest('.job-row');
   if(row){selectJob(row.dataset.id);return}
   const gItem=e.target.closest('.gallery-item');
@@ -401,7 +697,9 @@ $('#app').addEventListener('click',e=>{
   if(btn.hasAttribute('data-file')){e.preventDefault();download(btn);return}
   if(btn.hasAttribute('data-copy')){e.preventDefault();e.stopPropagation();copyText(btn);return}
   if(btn.dataset.op){const job=btn.closest('[data-job]');if(job)operate(job.dataset.job,btn.dataset.op)}
-});
+}
+$('#app').addEventListener('click',handleContentClick);
+$('#admin-console').addEventListener('click',handleContentClick);
 
 /* ---------- 自定义确认弹窗 ---------- */
 function confirmDialog(opts={}){
@@ -420,12 +718,51 @@ function confirmDialog(opts={}){
   });
 }
 
+/* 带输入框的弹窗（用于重置密码等）；取消返回 null，确定返回输入值 */
+function promptDialog(opts={}){
+  return new Promise(resolve=>{
+    const modal=$('#confirm-modal'),ok=$('#confirm-ok'),cancel=$('#confirm-cancel');
+    $('#confirm-title').textContent=opts.title||'输入';
+    const message=$('#confirm-message');
+    message.innerHTML='';
+    if(opts.message)message.appendChild(document.createTextNode(opts.message));
+    const input=document.createElement('input');
+    input.type=opts.password?'password':'text';
+    input.placeholder=opts.placeholder||'';
+    input.maxLength=1024;
+    input.autocomplete='new-password';
+    input.className='prompt-input';
+    message.appendChild(input);
+    ok.textContent=opts.confirmText||'确定';
+    ok.className='btn-primary';
+    const close=v=>{modal.classList.add('hidden');document.body.classList.remove('modal-open');resolve(v)};
+    ok.onclick=()=>close(input.value);
+    cancel.onclick=()=>close(null);
+    modal.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>close(null));
+    modal.classList.remove('hidden');document.body.classList.add('modal-open');
+    input.focus();
+    input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();ok.click()}});
+  });
+}
+
 async function operate(id,op){
   if(op==='delete'&&!(await confirmDialog({title:'删除任务',message:'确认删除该任务及其文件？此操作不可撤销。',confirmText:'删除'})))return;
+  const base=adminMode?`/api/v1/admin/jobs/${encodeURIComponent(id)}`:`/api/v1/jobs/${encodeURIComponent(id)}`;
   try{
-    await api(`/api/v1/jobs/${encodeURIComponent(id)}${op==='delete'?'':`/${op}`}`,{method:op==='delete'?'DELETE':'POST'});
+    await api(base+(op==='delete'?'':`/${op}`),{method:op==='delete'?'DELETE':'POST'});
+    if(adminMode){
+      toast(op==='delete'?'任务已删除':op==='cancel'?'已请求取消':'已重新开始','success');
+      if(op==='delete'){
+        adminMode=false;
+        if(adminJobsPage>1&&adminJobsTotal-1<=(adminJobsPage-1)*adminJobsPageSize)adminJobsPage--;
+        adminShowView('jobs');
+      }
+      else await loadAdminJobs();
+      return;
+    }
     await loadJobs();
     if(op==='delete'&&selectedId===id)selectJob(null);
+    if(op==='delete'&&jobsPage>1&&jobsTotal<=(jobsPage-1)*jobsPageSize){jobsPage--;loadJobs()}
     if(op==='delete')toast('任务已删除','success');
     if(op==='cancel')toast('已请求取消');
     if(op==='retry')toast('已重新开始');
@@ -488,6 +825,14 @@ function stopTaskMusic(){
   taskMusic.playing=false;
   updateTaskMusicUI();
 }
+function resumeTaskMusic(){
+  if(!taskMusic.jobId||!taskMusic.url)return;
+  const audio=taskAudio();
+  if(!audio)return;
+  audio.src=taskMusic.url;
+  audio.loop=true;
+  audio.play().then(()=>{taskMusic.playing=true;updateTaskMusicUI()}).catch(()=>{taskMusic.playing=false;updateTaskMusicUI()});
+}
 function syncTaskMusicWithJob(job){
   const url=job?.work?.musicUrl||'';
   if(!job||!url){
@@ -530,6 +875,8 @@ async function toggleTaskMusic(jobId,url){
 
 /* ---------- 视频预览 / 图文查看 ---------- */
 let previewURL=null,galleryPreview={items:[],index:0,touchX:null};
+let previewMusicSuspended=false;
+let previewSoundOn=false;
 function setPreviewNav(show){
   document.querySelectorAll('[data-preview-nav]').forEach(btn=>btn.classList.toggle('hidden',!show));
 }
@@ -552,13 +899,15 @@ function openGalleryPreview(item){
 }
 function moveGalleryPreview(delta){
   if(galleryPreview.items.length<2||$('#preview-modal').classList.contains('hidden'))return;
-  galleryPreview.index=(galleryPreview.index+delta+galleryPreview.items.length)%galleryPreview.items.length;
+  const target=galleryPreview.index+delta;
+  if(target<0||target>=galleryPreview.items.length)return; // 两端不循环
+  galleryPreview.index=target;
   renderGalleryPreview();
 }
 function renderGalleryPreview(){
   const item=galleryPreview.items[galleryPreview.index];
   if(!item)return;
-  const modal=$('#preview-modal'),video=$('#preview-video'),img=$('#preview-image');
+  const modal=$('#preview-modal'),video=$('#preview-video'),img=$('#preview-image'),soundBtn=$('#preview-sound-toggle');
   modal.classList.remove('hidden');
   document.body.classList.add('modal-open');
   resetPreviewMedia();
@@ -567,19 +916,58 @@ function renderGalleryPreview(){
   const count=galleryPreview.items.length>1?` ${galleryPreview.index+1}/${galleryPreview.items.length}`:'';
   $('#preview-title').textContent=(item.title||'预览')+count;
   setPreviewNav(galleryPreview.items.length>1);
+  // 两端禁用对应方向的按钮：第一张不能左、最后一张不能右
+  const prevBtn=document.querySelector('.preview-prev'),nextBtn=document.querySelector('.preview-next');
+  if(galleryPreview.items.length>1){
+    prevBtn.disabled=galleryPreview.index===0;
+    nextBtn.disabled=galleryPreview.index===galleryPreview.items.length-1;
+  }
+  // 动图点击即自动播放：动图静音播放，同时自动播放背景音乐；「原声」按钮按需开启原声。
+  previewSoundOn=false;
   if(item.animated==='1'){
-    if(taskMusic.playing)stopTaskMusic();
+    // 从有声动图切回时先恢复背景音乐
+    if(previewMusicSuspended){previewMusicSuspended=false;resumeTaskMusic()}
     video.classList.remove('hidden');
-    video.controls=false;video.loop=true;video.playsInline=true;video.muted=false;
-    video.src=src;video.load();video.play().catch(()=>{});
+    video.controls=false;video.loop=true;video.playsInline=true;video.muted=true;
+    soundBtn.classList.remove('hidden');
+    soundBtn.classList.remove('on');
+    soundBtn.innerHTML=icon('volume-x',15)+' 原声';
+    video.src=src;video.load();
+    const autoplay=()=>{video.play().catch(()=>{})};
+    autoplay();
+    // 资源未就绪时等 canplay 再补一次，保证点击后一定自动播放
+    video.oncanplay=()=>{if(video.paused)autoplay();video.oncanplay=null};
+    // 点击动图自动播放背景音乐（作品没有音乐则不响，原声开启时不打断）
+    if(taskMusic.jobId&&taskMusic.url&&!taskMusic.playing&&!previewMusicSuspended)resumeTaskMusic();
   }else{
+    if(previewMusicSuspended){previewMusicSuspended=false;resumeTaskMusic()}
+    soundBtn.classList.add('hidden');
     img.classList.remove('hidden');img.src=src;
   }
 }
+function togglePreviewSound(){
+  const video=$('#preview-video'),btn=$('#preview-sound-toggle');
+  previewSoundOn=!previewSoundOn;
+  if(previewSoundOn){
+    if(taskMusic.playing){stopTaskMusic();previewMusicSuspended=true}
+    video.muted=false;
+    video.play().catch(()=>{});
+    btn.classList.add('on');
+    btn.innerHTML=icon('volume-2',15)+' 原声';
+  }else{
+    video.muted=true;
+    if(previewMusicSuspended){previewMusicSuspended=false;resumeTaskMusic()}
+    btn.classList.remove('on');
+    btn.innerHTML=icon('volume-x',15)+' 原声';
+  }
+}
+$('#preview-sound-toggle').addEventListener('click',e=>{e.preventDefault();e.stopPropagation();togglePreviewSound()});
 async function openPreview(fileId,name,previewUrl){
   const modal=$('#preview-modal'),video=$('#preview-video'),img=$('#preview-image');
   if(taskMusic.playing)stopTaskMusic();
   galleryPreview={items:[],index:0,touchX:null};
+  previewSoundOn=false;
+  $('#preview-sound-toggle').classList.add('hidden');
   setPreviewNav(false);
   $('#preview-title').textContent=name||'视频预览';
   modal.classList.remove('hidden');
@@ -604,7 +992,7 @@ async function openPreview(fileId,name,previewUrl){
     video.play().catch(()=>{});
   }catch(err){closePreview();toast(err.message,'error')}
 }
-// 画廊点击查看：图片可继续听详情页音乐；动图本体按视频处理，只播视频自身声音。
+// 画廊点击查看：动图点击即自动播放，并自动播放背景音乐；「原声」按钮切换动图原声。
 function openMediaPreview(src,animated,title,fallback){
   galleryPreview={items:[{src,animated,title,fallback}],index:0,touchX:null};
   renderGalleryPreview();
@@ -615,6 +1003,9 @@ function closePreview(){
   galleryPreview={items:[],index:0,touchX:null};
   setPreviewNav(false);
   if(previewURL){URL.revokeObjectURL(previewURL);previewURL=null}
+  previewSoundOn=false;
+  $('#preview-sound-toggle').classList.add('hidden');
+  if(previewMusicSuspended){previewMusicSuspended=false;resumeTaskMusic()}
 }
 document.querySelectorAll('[data-preview-nav]').forEach(btn=>{
   btn.innerHTML=icon(btn.dataset.previewNav==='-1'?'chevron-left':'chevron-right',22);
@@ -642,4 +1033,5 @@ document.addEventListener('keydown',e=>{
   if(!$('#confirm-modal').classList.contains('hidden')){$('#confirm-cancel').click()}
 });
 
-enter(restore());
+// 启动时用 httpOnly Cookie 静默恢复会话；失效则回到登录页。
+(async()=>{try{enter(await api('/api/v1/auth/refresh',{method:'POST'},false))}catch{enter(null)}})();

@@ -73,6 +73,7 @@ func sameStrings(left, right []string) bool { if len(left) != len(right) { retur
 func validOptions(values []string, maxRunes int) bool { for _, value := range values { value = strings.TrimSpace(value); if value == "" || len([]rune(value)) > maxRunes { return false } }; return true }
 
 func (s *Service) Get(ctx context.Context, userID, jobID string) (Job, error) { return s.repo.FindByID(ctx, userID, jobID) }
+func (s *Service) GetAny(ctx context.Context, jobID string) (Job, error) { return s.repo.FindAnyByID(ctx, jobID) }
 func (s *Service) List(ctx context.Context, input ListInput) (JobPage, error) {
 	input.Query = strings.TrimSpace(input.Query)
 	if input.Limit <= 0 { input.Limit = 20 }
@@ -80,6 +81,15 @@ func (s *Service) List(ctx context.Context, input ListInput) (JobPage, error) {
 	if input.Offset < 0 { input.Offset = 0 }
 	return s.repo.List(ctx, input)
 }
+// ListAll 供管理员跨用户查询任务；UserID 为空时返回全部用户的任务。
+func (s *Service) ListAll(ctx context.Context, input ListInput) (JobPage, error) {
+	input.Query = strings.TrimSpace(input.Query)
+	if input.Limit <= 0 { input.Limit = 20 }
+	if input.Limit > 100 { input.Limit = 100 }
+	if input.Offset < 0 { input.Offset = 0 }
+	return s.repo.ListAll(ctx, input)
+}
+func (s *Service) Stats(ctx context.Context) (Stats, error) { return s.repo.Stats(ctx, s.now().UTC()) }
 func (s *Service) Delete(ctx context.Context, userID, jobID string) error {
 	job, err := s.repo.FindByID(ctx, userID, jobID)
 	if err != nil { return err }

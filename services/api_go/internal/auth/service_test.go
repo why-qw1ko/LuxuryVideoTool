@@ -14,6 +14,7 @@ type memoryRepository struct {
 func (r *memoryRepository) CreateUser(context.Context, User) error { return nil }
 func (r *memoryRepository) UpdatePassword(context.Context, string, string, time.Time) error { return nil }
 func (r *memoryRepository) SetUserActive(context.Context, string, bool, time.Time) error { return nil }
+func (r *memoryRepository) ListUsers(context.Context) ([]User, error) { return []User{r.user}, nil }
 func (r *memoryRepository) FindUserByUsername(_ context.Context, username string) (User, error) { if r.user.UsernameNormalized != username { return User{}, ErrNotFound }; return r.user, nil }
 func (r *memoryRepository) FindUserByID(_ context.Context, id string) (User, error) { if r.user.ID != id { return User{}, ErrNotFound }; return r.user, nil }
 func (r *memoryRepository) FindSessionByID(_ context.Context, userID, id string) (Session, error) { value, ok := r.sessions[id]; if !ok || value.UserID != userID { return Session{}, ErrNotFound }; return value, nil }

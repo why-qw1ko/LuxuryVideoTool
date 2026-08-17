@@ -40,6 +40,26 @@ func (r *SQLiteRepository) FindByID(ctx context.Context, userID, jobID string) (
 	return job, nil
 }
 
+func (r *SQLiteRepository) FindAnyByID(ctx context.Context, jobID string) (Job, error) {
+	job, err := r.findOwner(ctx, `j.id = ?`, jobID)
+	if err != nil {
+		return Job{}, err
+	}
+	if job.Status == "completed" {
+		items, filesErr := r.FindFiles(ctx, job.UserID, jobID)
+		if filesErr != nil {
+			return Job{}, filesErr
+		}
+		if job.Result == nil {
+			job.Result = map[string]any{}
+		}
+		if value, ok := job.Result.(map[string]any); ok {
+			value["files"] = items
+		}
+	}
+	return job, nil
+}
+
 func (r *SQLiteRepository) List(ctx context.Context, input ListInput) (JobPage, error) {
 	where := []string{"j.user_id = ?"}
 	args := []any{input.UserID}
@@ -102,6 +122,71 @@ func (r *SQLiteRepository) List(ctx context.Context, input ListInput) (JobPage, 
 	return JobPage{Items: items, Total: total, Limit: input.Limit, Offset: input.Offset}, nil
 }
 
+func (r *SQLiteRepository) ListAll(ctx context.Context, input ListInput) (JobPage, error) {
+	where := []string{"1=1"}
+	args := []any{}
+	if input.UserID != "" {
+		where = append(where, "j.user_id = ?")
+		args = append(args, input.UserID)
+	}
+	if input.Status != "" {
+		if input.Status == "processing" {
+			where = append(where, "j.status IN ('resolving','downloading','extracting','transcribing','postprocessing')")
+		} else {
+			where = append(where, "j.status = ?")
+			args = append(args, input.Status)
+		}
+	}
+	if input.Action != "" {
+		where = append(where, "j.action = ?")
+		args = append(args, input.Action)
+	}
+	if input.Query != "" {
+		where = append(where, "(j.input_text LIKE ? ESCAPE '\\' OR w.title LIKE ? ESCAPE '\\' OR w.author_name LIKE ? ESCAPE '\\')")
+		like := "%" + escapeLike(input.Query) + "%"
+		args = append(args, like, like, like)
+	}
+	clause := strings.Join(where, " AND ")
+	var total int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs j LEFT JOIN works w ON w.id = j.work_id WHERE `+clause, args...).Scan(&total); err != nil {
+		return JobPage{}, fmt.Errorf("count jobs: %w", err)
+	}
+	query := jobSelectOwner + ` WHERE ` + clause + ` ORDER BY j.created_at DESC, j.id DESC LIMIT ? OFFSET ?`
+	args = append(args, input.Limit, input.Offset)
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return JobPage{}, fmt.Errorf("list jobs: %w", err)
+	}
+	defer rows.Close()
+	items := make([]Job, 0, input.Limit)
+	for rows.Next() {
+		job, scanErr := scanJobOwner(rows)
+		if scanErr != nil {
+			return JobPage{}, scanErr
+		}
+		items = append(items, job)
+	}
+	if err := rows.Err(); err != nil {
+		return JobPage{}, err
+	}
+	for index := range items {
+		if items[index].Status != "completed" {
+			continue
+		}
+		files, filesErr := r.FindFiles(ctx, items[index].UserID, items[index].ID)
+		if filesErr != nil {
+			return JobPage{}, filesErr
+		}
+		if items[index].Result == nil {
+			items[index].Result = map[string]any{}
+		}
+		if result, ok := items[index].Result.(map[string]any); ok {
+			result["files"] = files
+		}
+	}
+	return JobPage{Items: items, Total: total, Limit: input.Limit, Offset: input.Offset}, nil
+}
+
 func (r *SQLiteRepository) Delete(ctx context.Context, userID, jobID string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -125,6 +210,55 @@ func (r *SQLiteRepository) Delete(ctx context.Context, userID, jobID string) err
 		return err
 	}
 	return tx.Commit()
+}
+
+func (r *SQLiteRepository) Stats(ctx context.Context, now time.Time) (Stats, error) {
+	stats := Stats{ByStatus: map[string]int{}, ByDay: []DayCount{}}
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs`).Scan(&stats.Total); err != nil {
+		return Stats{}, fmt.Errorf("count jobs: %w", err)
+	}
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE created_at >= ?`, millis(todayStart)).Scan(&stats.Today); err != nil {
+		return Stats{}, fmt.Errorf("count today jobs: %w", err)
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT status, COUNT(*) FROM jobs GROUP BY status`)
+	if err != nil {
+		return Stats{}, fmt.Errorf("count jobs by status: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			return Stats{}, fmt.Errorf("scan job status count: %w", err)
+		}
+		stats.ByStatus[status] = count
+	}
+	if err := rows.Err(); err != nil {
+		return Stats{}, err
+	}
+	dayRows, err := r.db.QueryContext(ctx, `SELECT date(created_at/1000,'unixepoch') AS day, COUNT(*) FROM jobs WHERE created_at >= ? GROUP BY day`, millis(todayStart.AddDate(0, 0, -13)))
+	if err != nil {
+		return Stats{}, fmt.Errorf("count jobs by day: %w", err)
+	}
+	defer dayRows.Close()
+	byDay := map[string]int{}
+	for dayRows.Next() {
+		var day string
+		var count int
+		if err := dayRows.Scan(&day, &count); err != nil {
+			return Stats{}, fmt.Errorf("scan job day count: %w", err)
+		}
+		byDay[day] = count
+	}
+	if err := dayRows.Err(); err != nil {
+		return Stats{}, err
+	}
+	for offset := 13; offset >= 0; offset-- {
+		day := todayStart.AddDate(0, 0, -offset)
+		stats.ByDay = append(stats.ByDay, DayCount{Day: day.Format("2006-01-02"), Count: byDay[day.Format("2006-01-02")]})
+	}
+	return stats, nil
 }
 
 func (r *SQLiteRepository) CreateInfo(ctx context.Context, job Job) error {
@@ -175,12 +309,15 @@ func (r *SQLiteRepository) Fail(ctx context.Context, jobID, code, message string
 	return changed(result)
 }
 
-const jobSelect = `SELECT j.id, j.user_id, j.input_text, j.input_url, j.action, j.status, j.progress,
+const jobSelectColumns = `SELECT j.id, j.user_id, j.input_text, j.input_url, j.action, j.status, j.progress,
 		j.status_message, j.idempotency_key, j.force_refresh, j.error_code, j.error_message,
 		j.created_at, j.updated_at, j.completed_at, j.attempt_count, j.max_attempts, j.lease_owner, j.result_json, j.options_json,
 		w.id, w.douyin_work_id, w.content_type, w.canonical_url, w.author_id, w.author_name,
 		w.title, w.description, w.cover_url, w.published_at, w.metadata_json, w.resolver_name, w.resolver_version, w.resolved_at
-		FROM jobs j LEFT JOIN works w ON w.id = j.work_id`
+`
+const jobSelect = jobSelectColumns + `FROM jobs j LEFT JOIN works w ON w.id = j.work_id`
+const jobSelectOwner = jobSelectColumns + `, u.username_normalized, u.display_name
+		FROM jobs j LEFT JOIN works w ON w.id = j.work_id LEFT JOIN users u ON u.id = j.user_id`
 
 func (r *SQLiteRepository) find(ctx context.Context, where string, args ...any) (Job, error) {
 	query := jobSelect + ` WHERE ` + where
@@ -189,6 +326,19 @@ func (r *SQLiteRepository) find(ctx context.Context, where string, args ...any) 
 }
 
 func scanJob(row scanner) (Job, error) {
+	return scanJobFields(row, false)
+}
+
+func (r *SQLiteRepository) findOwner(ctx context.Context, where string, args ...any) (Job, error) {
+	row := r.db.QueryRowContext(ctx, jobSelectOwner+` WHERE `+where, args...)
+	return scanJobOwner(row)
+}
+
+func scanJobOwner(row scanner) (Job, error) {
+	return scanJobFields(row, true)
+}
+
+func scanJobFields(row scanner, withOwner bool) (Job, error) {
 	var job Job
 	var force int
 	var errorCode, errorMessage sql.NullString
@@ -199,11 +349,15 @@ func scanJob(row scanner) (Job, error) {
 	var optionsJSON string
 	var workID, douyinID, kind, canonical, authorID, authorName, title, description, cover, metadata, resolverName, resolverVersion sql.NullString
 	var published, resolved sql.NullInt64
-	err := row.Scan(&job.ID, &job.UserID, &job.InputText, &job.InputURL, &job.Action, &job.Status, &job.Progress,
+	dest := []any{&job.ID, &job.UserID, &job.InputText, &job.InputURL, &job.Action, &job.Status, &job.Progress,
 		&job.StatusMessage, &job.IdempotencyKey, &force, &errorCode, &errorMessage, &created, &updated, &completed,
 		&job.AttemptCount, &job.MaxAttempts, &leaseOwner, &resultJSON, &optionsJSON,
 		&workID, &douyinID, &kind, &canonical, &authorID, &authorName, &title, &description, &cover, &published, &metadata,
-		&resolverName, &resolverVersion, &resolved)
+		&resolverName, &resolverVersion, &resolved}
+	if withOwner {
+		dest = append(dest, &job.OwnerUsername, &job.OwnerDisplayName)
+	}
+	err := row.Scan(dest...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, ErrNotFound
 	}
@@ -536,6 +690,7 @@ func boolInt(value bool) int {
 	}
 	return 0
 }
+func millis(value time.Time) int64 { return value.UTC().UnixMilli() }
 func nullText(value string) any {
 	if value == "" {
 		return nil

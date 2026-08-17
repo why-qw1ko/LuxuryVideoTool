@@ -10,6 +10,7 @@ import (
 var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrInactiveUser       = errors.New("inactive user")
+	ErrUsernameTaken      = errors.New("username already taken")
 	ErrInvalidToken       = errors.New("invalid token")
 	ErrExpiredToken       = errors.New("expired token")
 	ErrRevokedSession     = errors.New("revoked session")
@@ -65,6 +66,7 @@ type Repository interface {
 	CreateUser(ctx context.Context, user User) error
 	UpdatePassword(ctx context.Context, userID, passwordHash string, now time.Time) error
 	SetUserActive(ctx context.Context, userID string, active bool, now time.Time) error
+	ListUsers(ctx context.Context) ([]User, error)
 	FindUserByUsername(ctx context.Context, usernameNormalized string) (User, error)
 	FindUserByID(ctx context.Context, userID string) (User, error)
 	FindSessionByID(ctx context.Context, userID, sessionID string) (Session, error)
