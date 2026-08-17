@@ -10,13 +10,37 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 ## 认证
 
 - `POST /api/v1/auth/login`：用户名、密码及设备信息登录。
-- `POST /api/v1/auth/refresh`：消费一次 Refresh Token，返回轮换后的新 Token 对。
+- `POST /api/v1/auth/refresh`：消费一次 Refresh Token，返回轮换后的新 Token 对。网页端（`appVersion` 以 `web-` 开头）的 Refresh Token 只写入 httpOnly Cookie（`SameSite=Strict`，HTTPS/回环地址附加 `Secure`），请求体为空、凭 Cookie 续期，并校验 Origin 同源；原生客户端仍通过请求体携带 Refresh Token。
 - `POST /api/v1/auth/logout`：撤销当前 Bearer Token 对应会话。
 - `GET /api/v1/auth/sessions`：列出当前用户未撤销、未过期的设备会话。
 - `DELETE /api/v1/auth/sessions/{id}`：撤销当前用户指定会话。
 - `DELETE /api/v1/admin/sessions/{id}`：管理员撤销任意用户会话。
 - `GET /api/v1/admin/settings/providers`：管理员查看阿里云/硅基流动 API Key 状态及阿里云当前是否具备公网调用条件；不返回密钥原文。
 - `PUT /api/v1/admin/settings/providers`：管理员保存或清除供应商 API Key；服务端使用 JWT 主密钥派生密钥加密存储，并立即用于新任务。
+
+## 管理 API（仅管理员，普通用户一律 403）
+
+### 仪表盘统计
+
+- `GET /api/v1/admin/stats`：返回用户总数、启用账号数、任务总数、今日任务数、各状态任务数（`byStatus`）以及近 14 天每日任务数（`byDay`），供仪表盘图表使用。
+
+### 用户管理
+
+- `GET /api/v1/admin/users`：列出全部用户（不含密码哈希）。
+- `POST /api/v1/admin/users`：创建用户，请求体 `{username, displayName, password, role}`；密码至少 12 位，用户名重复返回 409。
+- `POST /api/v1/admin/users/{id}/password`：重置密码（至少 12 位），并立即撤销该用户全部会话。
+- `PATCH /api/v1/admin/users/{id}/active`：启用/禁用账号，请求体 `{active: bool}`；禁用会撤销该用户全部会话，不能禁用当前登录账号。
+- `GET /api/v1/admin/users/{id}/sessions`：查看任意用户的活跃设备会话。
+- `DELETE /api/v1/admin/sessions/{id}`：管理员下线任意用户的会话。
+
+### 任务管理（跨用户）
+
+- `GET /api/v1/admin/jobs`：跨用户任务列表，支持 `q/status/action/userId/limit/offset` 筛选分页；返回 `ownerUsername`/`ownerDisplayName`。
+- `GET /api/v1/admin/jobs/{id}`：管理员视角查看任意任务详情（含媒体文件）。
+- `POST /api/v1/admin/jobs/{id}/cancel`、`POST /api/v1/admin/jobs/{id}/retry`、`DELETE /api/v1/admin/jobs/{id}`：管理员取消、重试、删除任意用户的任务。
+- `GET /api/v1/admin/files/{id}`：管理员下载任意用户的媒体文件。
+
+以上管理操作均写入审计日志（`admin.user.*`、`admin.job.*`、`admin.file.*`）。
 
 ## M2 作品信息任务
 
