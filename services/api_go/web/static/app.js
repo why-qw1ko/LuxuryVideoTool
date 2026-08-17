@@ -1,6 +1,7 @@
 const $=s=>document.querySelector(s);
 let session=null,poll=null;
 let selectedId=null,currentJob=null,jobsCache=[],detailSig='';
+let taskMusic={jobId:null,url:'',playing:false};
 
 /* ---------- 主题（仅浅色 / 深色） ---------- */
 const THEMES=['light','dark'];
@@ -41,7 +42,9 @@ const ICONS={
   'volume-x':'<path d="M11 5 6 9H2v6h4l5 4V5Z"/><line x1="22" x2="16" y1="9" y2="15"/><line x1="16" x2="22" y1="9" y2="15"/>',
   music:'<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
   menu:'<line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/>',
-  'arrow-up':'<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>'
+  'arrow-up':'<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+  'chevron-left':'<path d="m15 18-6-6 6-6"/>',
+  'chevron-right':'<path d="m9 18 6-6-6-6"/>'
 };
 function icon(name,size=18){
   return `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]||''}</svg>`;
@@ -144,9 +147,13 @@ function showView(name){
   if(name==='settings')loadProviders();
 }
 function selectJob(id){
-  if(selectedId!==id){selectedId=id;detailSig='';currentJob=id?(jobsCache.find(j=>j.id===id)||null):null}
+  if(selectedId!==id){
+    if(taskMusic.jobId&&taskMusic.jobId!==id)stopTaskMusic();
+    selectedId=id;detailSig='';currentJob=id?(jobsCache.find(j=>j.id===id)||null):null;
+  }
   document.querySelectorAll('.job-row').forEach(r=>r.classList.toggle('selected',r.dataset.id===id));
   showView(id?'detail':'new');
+  if(!id)stopTaskMusic();
   renderDetail();
   if(matchMedia('(max-width:960px)').matches)setSidebar(false);
   if(id&&matchMedia('(max-width:960px)').matches)$('#view-detail').scrollIntoView({behavior:'smooth',block:'start'});
@@ -168,6 +175,7 @@ function enter(value){
     poll=setInterval(loadJobs,5000);
   }else{
     clearInterval(poll);
+    stopTaskMusic();
     setSidebar(false); // 退出登录时若抽屉还开着，一并收起
   }
 }
@@ -342,12 +350,12 @@ function jobDetailHTML(job){
       ?`<video class="gallery-anim" src="${esc(viewerSrc)}" autoplay muted loop playsinline preload="metadata"${viewerSrc===cdnSrc?` data-preview="${esc(preview)}"`:` data-fallback="${esc(cdnSrc)}"`} onerror="mediaFallback(this)"></video>`
       :`<img src="${esc(img.url)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-preview="${esc(preview)}" onerror="mediaFallback(this)">`;
     const foot=(badge||dl)?`<div class="gallery-foot">${badge}${dl}</div>`:'';
-    return `<figure class="gallery-item" data-preview="${esc(viewerSrc)}" data-fallback="${esc(cdnSrc)}" data-animated="${img.animatedUrl?'1':'0'}" data-title="${esc((stripHashtags(w.title,w.hashtags)||'预览').slice(0,40))}" data-music="${esc(w.musicUrl||'')}"><div class="gallery-media">${media}</div>${foot}</figure>`;
+    return `<figure class="gallery-item" data-preview="${esc(viewerSrc)}" data-fallback="${esc(cdnSrc)}" data-animated="${img.animatedUrl?'1':'0'}" data-title="${esc((stripHashtags(w.title,w.hashtags)||'预览').slice(0,40))}"><div class="gallery-media">${media}</div>${foot}</figure>`;
   }).join('');
   const noteGallery=isNote&&noteImages.length?`<div class="note-gallery">${galleryItems}</div>`:'';
   const zipLink=(isNote&&mediaFiles.length&&job.status==='completed')?`<a class="btn" href="/api/v1/jobs/${encodeURIComponent(job.id)}/images/archive" data-file data-name="${esc((job.work&&job.work.douyinWorkId)||job.id)}_images.zip">${icon('download',14)} 打包下载全部</a>`:'';
 
-  const musicRow=isNote&&w.musicUrl?`<div class="music-row">${icon('music',13)} ${esc(w.musicTitle||'背景音乐')}${w.musicArtist?' · '+esc(w.musicArtist):''}</div>`:'';
+  const musicRow=isNote&&w.musicUrl?`<div class="music-row"><span class="music-info">${icon('music',13)} <span>${esc(w.musicTitle||'背景音乐')}${w.musicArtist?' · '+esc(w.musicArtist):''}</span></span><button type="button" class="music-toggle" data-op="music" data-music="${esc(w.musicUrl)}">${icon('play',13)} 播放音乐</button></div>`:'';
   const hasMedia=cover||w.authorName||metas.length;
   const mediaBlock=isNote
     ?(noteGallery||zipLink||musicRow?`<div class="detail-media no-cover">${noteGallery}${musicRow}${metas.length?`<div class="detail-meta">${metas.join('')}</div>`:''}${canonical}${zipLink?`<div class="action-group">${zipLink}</div>`:''}</div>`:'')
@@ -373,18 +381,22 @@ function jobDetailHTML(job){
 function renderDetail(){
   if(!currentJob)return;
   const sig=jobSignature(currentJob);
-  if(sig===detailSig)return;
-  detailSig=sig;
-  $('#detail').innerHTML=jobDetailHTML(currentJob);
+  if(sig!==detailSig){
+    detailSig=sig;
+    $('#detail').innerHTML=jobDetailHTML(currentJob);
+  }
+  syncTaskMusicWithJob(currentJob);
+  updateTaskMusicUI();
 }
 
 $('#app').addEventListener('click',e=>{
   const row=e.target.closest('.job-row');
   if(row){selectJob(row.dataset.id);return}
   const gItem=e.target.closest('.gallery-item');
-  if(gItem&&!e.target.closest('.gallery-dl')){openMediaPreview(gItem.dataset.preview,gItem.dataset.animated,gItem.dataset.title,gItem.dataset.music,gItem.dataset.fallback);return}
+  if(gItem&&!e.target.closest('.gallery-dl')){openGalleryPreview(gItem);return}
   const btn=e.target.closest('[data-op],a[data-file],[data-copy]');
   if(!btn)return;
+  if(btn.dataset.op==='music'){e.preventDefault();e.stopPropagation();toggleTaskMusic(btn.closest('[data-job]')?.dataset.job,btn.dataset.music);return}
   if(btn.dataset.op==='preview'){e.preventDefault();openPreview(btn.dataset.fid,btn.dataset.name,btn.dataset.preview);return}
   if(btn.hasAttribute('data-file')){e.preventDefault();download(btn);return}
   if(btn.hasAttribute('data-copy')){e.preventDefault();e.stopPropagation();copyText(btn);return}
@@ -456,65 +468,125 @@ async function copyText(btn){
   setTimeout(()=>{btn.innerHTML=icon('copy',13)+' 复制';btn.classList.remove('copied')},1400);
 }
 
+/* ---------- 当前任务音乐 ---------- */
+function taskAudio(){return $('#task-music-audio')}
+function updateTaskMusicUI(){
+  document.querySelectorAll('.music-toggle').forEach(btn=>{
+    const jobId=btn.closest('[data-job]')?.dataset.job;
+    const playing=taskMusic.playing&&taskMusic.jobId===jobId&&taskMusic.url===btn.dataset.music;
+    btn.classList.toggle('playing',playing);
+    btn.setAttribute('aria-pressed',playing?'true':'false');
+    btn.innerHTML=icon(playing?'volume-x':'play',13)+(playing?' 停止音乐':' 播放音乐');
+  });
+}
+function stopTaskMusic(){
+  const audio=taskAudio();
+  if(audio){
+    audio.pause();
+    audio.currentTime=0;
+  }
+  taskMusic.playing=false;
+  updateTaskMusicUI();
+}
+function syncTaskMusicWithJob(job){
+  const url=job?.work?.musicUrl||'';
+  if(!job||!url){
+    if(taskMusic.playing)stopTaskMusic();
+    taskMusic={jobId:job?.id||null,url:'',playing:false};
+    return;
+  }
+  if(taskMusic.jobId!==job.id){
+    if(taskMusic.playing)stopTaskMusic();
+    taskMusic={jobId:job.id,url,playing:false};
+  }else if(taskMusic.url!==url){
+    stopTaskMusic();
+    taskMusic={jobId:job.id,url,playing:false};
+  }
+}
+async function toggleTaskMusic(jobId,url){
+  if(!jobId||!url)return;
+  const audio=taskAudio();
+  if(!audio)return;
+  if(taskMusic.jobId!==jobId||taskMusic.url!==url){
+    stopTaskMusic();
+    taskMusic={jobId,url,playing:false};
+  }
+  if(taskMusic.playing){
+    stopTaskMusic();
+    return;
+  }
+  try{
+    audio.src=url;
+    audio.loop=true;
+    await audio.play();
+    taskMusic.playing=true;
+    updateTaskMusicUI();
+  }catch{
+    taskMusic.playing=false;
+    updateTaskMusicUI();
+    toast('音乐播放失败，请稍后重试','error');
+  }
+}
+
 /* ---------- 视频预览 / 图文查看 ---------- */
-let previewURL=null,previewBgmURL='',previewSound='audio'; // 'audio'=作品背景音乐, 'clip'=动图原声
-function currentMuted(){
-  const v=$('#preview-video'),a=$('#preview-audio');
-  return previewSound==='audio'?a.muted:v.muted;
+let previewURL=null,galleryPreview={items:[],index:0,touchX:null};
+function setPreviewNav(show){
+  document.querySelectorAll('[data-preview-nav]').forEach(btn=>btn.classList.toggle('hidden',!show));
 }
-function setActiveMuted(muted){
-  const v=$('#preview-video'),a=$('#preview-audio');
-  if(previewSound==='audio'){
-    a.muted=muted;
-    // 静态图默认静音打开（未开始播放）；取消静音时补一次 play，否则只改 muted 不会有声音。
-    if(!muted&&a.paused)a.play().catch(()=>{});
+function resetPreviewMedia(){
+  const video=$('#preview-video'),img=$('#preview-image');
+  video.pause();video.currentTime=0;video.removeAttribute('src');video.load();video.classList.add('hidden');
+  img.classList.add('hidden');img.removeAttribute('src');
+}
+function openGalleryPreview(item){
+  const nodes=[...item.closest('.note-gallery').querySelectorAll('.gallery-item')];
+  const items=nodes.map(el=>({
+    src:el.dataset.preview,
+    animated:el.dataset.animated,
+    title:el.dataset.title,
+    fallback:el.dataset.fallback
+  }));
+  galleryPreview.items=items;
+  galleryPreview.index=Math.max(0,nodes.indexOf(item));
+  renderGalleryPreview();
+}
+function moveGalleryPreview(delta){
+  if(galleryPreview.items.length<2||$('#preview-modal').classList.contains('hidden'))return;
+  galleryPreview.index=(galleryPreview.index+delta+galleryPreview.items.length)%galleryPreview.items.length;
+  renderGalleryPreview();
+}
+function renderGalleryPreview(){
+  const item=galleryPreview.items[galleryPreview.index];
+  if(!item)return;
+  const modal=$('#preview-modal'),video=$('#preview-video'),img=$('#preview-image');
+  modal.classList.remove('hidden');
+  document.body.classList.add('modal-open');
+  resetPreviewMedia();
+  let src=item.src;
+  if(!previewUsable(src)&&item.fallback)src=item.fallback;
+  const count=galleryPreview.items.length>1?` ${galleryPreview.index+1}/${galleryPreview.items.length}`:'';
+  $('#preview-title').textContent=(item.title||'预览')+count;
+  setPreviewNav(galleryPreview.items.length>1);
+  if(item.animated==='1'){
+    if(taskMusic.playing)stopTaskMusic();
+    video.classList.remove('hidden');
+    video.controls=false;video.loop=true;video.playsInline=true;video.muted=false;
+    video.src=src;video.load();video.play().catch(()=>{});
   }else{
-    v.muted=muted;
+    img.classList.remove('hidden');img.src=src;
   }
 }
-function updateSoundUI(){
-  const sound=$('#preview-sound'),source=$('#preview-source');
-  const muted=currentMuted();
-  sound.innerHTML=icon(muted?'volume-x':'volume-2',15);
-  sound.setAttribute('aria-label',muted?'取消静音':'静音');
-  sound.title=muted?'取消静音':'静音';
-  source.textContent='♪ '+(previewSound==='audio'?'背景音乐':'原声');
-}
-function applySound(initialMuted){
-  const v=$('#preview-video'),a=$('#preview-audio');
-  if(previewSound==='audio'&&previewBgmURL){
-    v.muted=true;
-    a.src=previewBgmURL;a.muted=!!initialMuted;
-    // 动图（live photo）打开即播放背景音乐；静态图默认静音，由用户点按钮开启。
-    if(!initialMuted)a.play().catch(()=>{});
-  }else{
-    a.pause();a.removeAttribute('src');a.load();
-    v.muted=false;v.play().catch(()=>{});
-  }
-  updateSoundUI();
-}
-$('#preview-sound').addEventListener('click',e=>{
-  e.preventDefault();e.stopPropagation();
-  setActiveMuted(!currentMuted());
-  updateSoundUI();
-});
-$('#preview-source').addEventListener('click',e=>{
-  e.preventDefault();e.stopPropagation();
-  previewSound=previewSound==='audio'?'clip':'audio';
-  applySound();
-});
 async function openPreview(fileId,name,previewUrl){
   const modal=$('#preview-modal'),video=$('#preview-video'),img=$('#preview-image');
+  if(taskMusic.playing)stopTaskMusic();
+  galleryPreview={items:[],index:0,touchX:null};
+  setPreviewNav(false);
   $('#preview-title').textContent=name||'视频预览';
   modal.classList.remove('hidden');
   document.body.classList.add('modal-open');
-  img.classList.add('hidden');img.removeAttribute('src');
-  $('#preview-audio').pause();$('#preview-audio').removeAttribute('src');
+  resetPreviewMedia();
   video.classList.remove('hidden');
   video.controls=true;video.muted=false;video.loop=false;video.playsInline=true;
-  $('#preview-sound').classList.add('hidden');
-  $('#preview-source-row').classList.add('hidden');
-  video.removeAttribute('src');
   if(previewURL){URL.revokeObjectURL(previewURL);previewURL=null}
   // 优先用同源签名地址直接流式播放（支持 Range，秒开），不再把整个视频 fetch 进内存再播。
   if(previewUsable(previewUrl)){
@@ -532,51 +604,41 @@ async function openPreview(fileId,name,previewUrl){
     video.play().catch(()=>{});
   }catch(err){closePreview();toast(err.message,'error')}
 }
-// 画廊点击查看。动图：视频静音作画面，声音默认取作品背景音乐，可切到原声；
-// 静态配图：显示大图，背景音乐默认静音不自动播放，用户可点声音按钮开启。
-function openMediaPreview(src,animated,title,musicUrl,fallback){
-  const modal=$('#preview-modal'),video=$('#preview-video'),img=$('#preview-image'),sound=$('#preview-sound');
-  $('#preview-title').textContent=title||'预览';
-  modal.classList.remove('hidden');
-  document.body.classList.add('modal-open');
-  previewBgmURL=musicUrl||'';
-  // 签名预览地址可能在渲染后过期（已完成任务不会重渲染），点开时再兜底到 CDN 原址。
-  if(!previewUsable(src)&&fallback)src=fallback;
-  sound.classList.remove('hidden');
-  if(animated==='1'){
-    img.classList.add('hidden');img.removeAttribute('src');
-    video.classList.remove('hidden');
-    // 先静音再播放，避免 applySound 前瞬间漏出动图原声（有 bgm 时画面应静音）。
-    video.controls=false;video.loop=true;video.playsInline=true;video.muted=true;
-    video.removeAttribute('src');video.src=src;video.load();video.play().catch(()=>{});
-    if(previewBgmURL){previewSound='audio';$('#preview-source-row').classList.remove('hidden');}
-    else{previewSound='clip';$('#preview-source-row').classList.add('hidden');}
-    applySound();
-  }else{
-    video.pause();video.removeAttribute('src');video.load();video.classList.add('hidden');
-    img.classList.remove('hidden');img.src=src;
-    if(previewBgmURL){
-      // 静态图没有原声可切，隐藏"原声"切换；背景音乐默认静音不自动播放，用户可点声音按钮开启。
-      previewSound='audio';$('#preview-source-row').classList.add('hidden');applySound(true);
-    }else{
-      // 静态图且无背景音乐：没有任何声音可控制，隐藏声音按钮与来源切换。
-      $('#preview-source-row').classList.add('hidden');
-      sound.classList.add('hidden');
-      $('#preview-audio').pause();$('#preview-audio').removeAttribute('src');
-    }
-  }
+// 画廊点击查看：图片可继续听详情页音乐；动图本体按视频处理，只播视频自身声音。
+function openMediaPreview(src,animated,title,fallback){
+  galleryPreview={items:[{src,animated,title,fallback}],index:0,touchX:null};
+  renderGalleryPreview();
 }
 function closePreview(){
   const modal=$('#preview-modal');modal.classList.add('hidden');document.body.classList.remove('modal-open');
-  const video=$('#preview-video');video.pause();video.currentTime=0;video.removeAttribute('src');video.load();
-  const img=$('#preview-image');img.classList.add('hidden');img.removeAttribute('src');
-  const a=$('#preview-audio');a.pause();a.removeAttribute('src');a.load();
+  resetPreviewMedia();
+  galleryPreview={items:[],index:0,touchX:null};
+  setPreviewNav(false);
   if(previewURL){URL.revokeObjectURL(previewURL);previewURL=null}
 }
+document.querySelectorAll('[data-preview-nav]').forEach(btn=>{
+  btn.innerHTML=icon(btn.dataset.previewNav==='-1'?'chevron-left':'chevron-right',22);
+  btn.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();moveGalleryPreview(Number(btn.dataset.previewNav))});
+});
+$('#preview-modal').addEventListener('touchstart',e=>{
+  if(galleryPreview.items.length<2)return;
+  galleryPreview.touchX=e.touches[0]?.clientX??null;
+},{passive:true});
+$('#preview-modal').addEventListener('touchend',e=>{
+  if(galleryPreview.items.length<2||galleryPreview.touchX==null)return;
+  const endX=e.changedTouches[0]?.clientX??galleryPreview.touchX;
+  const dx=endX-galleryPreview.touchX;
+  galleryPreview.touchX=null;
+  if(Math.abs(dx)>48)moveGalleryPreview(dx<0?1:-1);
+},{passive:true});
 $('#preview-modal').addEventListener('click',e=>{if(e.target.closest('[data-close]'))closePreview()});
 document.addEventListener('keydown',e=>{
+  if(!$('#preview-modal').classList.contains('hidden')){
+    if(e.key==='Escape'){closePreview();return}
+    if(e.key==='ArrowLeft'){moveGalleryPreview(-1);return}
+    if(e.key==='ArrowRight'){moveGalleryPreview(1);return}
+  }
   if(e.key!=='Escape')return;
-  if(!$('#preview-modal').classList.contains('hidden')){closePreview();return}
   if(!$('#confirm-modal').classList.contains('hidden')){$('#confirm-cancel').click()}
 });
 

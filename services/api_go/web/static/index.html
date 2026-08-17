@@ -12,6 +12,7 @@
 </head>
 <body>
   <div id="toasts" class="toasts" aria-live="polite"></div>
+  <audio id="task-music-audio" loop></audio>
 
   <header class="topbar">
     <div class="topbar-inner">
@@ -127,14 +128,13 @@
       <div class="modal-head">
         <strong id="preview-title">视频预览</strong>
         <div class="modal-actions">
-          <button id="preview-sound" class="ghost icon-btn hidden" type="button" aria-label="静音" title="静音"></button>
           <button type="button" class="modal-close" data-close aria-label="关闭"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
         </div>
       </div>
-      <div id="preview-source-row" class="preview-source-row hidden"><button id="preview-source" type="button" title="切换声音来源">♪ 背景音乐</button></div>
+      <button class="preview-nav preview-prev hidden" type="button" data-preview-nav="-1" aria-label="上一张" title="上一张"></button>
+      <button class="preview-nav preview-next hidden" type="button" data-preview-nav="1" aria-label="下一张" title="下一张"></button>
       <video id="preview-video" class="hidden" controls playsinline></video>
       <img id="preview-image" class="hidden preview-image" alt="">
-      <audio id="preview-audio" loop></audio>
     </div>
   </div>
 
