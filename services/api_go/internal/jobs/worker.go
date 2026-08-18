@@ -302,6 +302,17 @@ func (w *Worker) processNote(ctx context.Context, owner string, job Job, work re
 		if downloaded == 0 {
 			return w.finishFailed(job, owner, stepID, media.ErrDownload)
 		}
+		if work.MusicURL != "" {
+			if file, err := w.downloadNoteMusic(ctx, job, work, expires, now.Add(time.Duration(len(work.Images))*time.Millisecond)); err == nil {
+				downloaded++
+				slog.InfoContext(ctx, "note music downloaded", "job_id", job.ID, "file_id", file.ID)
+			} else if ctx.Err() != nil {
+				_ = w.repo.FinishStep(context.Background(), stepID, "cancelled", "", "任务已取消", map[string]any{}, now)
+				return ctx.Err()
+			} else {
+				slog.WarnContext(ctx, "note music download failed, using source url fallback", "job_id", job.ID, "error", err)
+			}
+		}
 		if err := w.repo.FinishStep(ctx, stepID, "completed", "", "", map[string]any{"files": downloaded}, now); err != nil {
 			return err
 		}
@@ -318,7 +329,11 @@ func (w *Worker) processNote(ctx context.Context, owner string, job Job, work re
 	if err != nil {
 		return err
 	}
-	files := []struct{ name string; body []byte; mime, kind string }{
+	files := []struct {
+		name       string
+		body       []byte
+		mime, kind string
+	}{
 		{"result.md", []byte(bundle.Markdown), "text/markdown; charset=utf-8", "result_markdown"},
 		{"result.txt", []byte(bundle.Text), "text/plain; charset=utf-8", "result_text"},
 		{"meta.json", bundle.Meta, "application/json", "result_meta"},
@@ -333,6 +348,34 @@ func (w *Worker) processNote(ctx context.Context, owner string, job Job, work re
 	}
 	result := map[string]any{"rawText": text, "normalizedText": text, "files": resultFiles}
 	return w.repo.CompleteTranscription(ctx, job.ID, owner, result, "配图下载与文案生成完成", now)
+}
+
+func (w *Worker) downloadNoteMusic(ctx context.Context, job Job, work resolver.Work, expires, createdAt time.Time) (ownedfiles.File, error) {
+	relative, temporary, final, err := w.storage.NewScopedTarget("music", job.UserID, job.ID, ".mp3")
+	if err != nil {
+		return ownedfiles.File{}, err
+	}
+	fileCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	result, err := w.downloader.Download(fileCtx, work.MusicURL, temporary, final, w.config.MaxVideoBytes)
+	cancel()
+	if err != nil {
+		_ = w.storage.Remove(ownedfiles.File{RelativePath: relative})
+		return ownedfiles.File{}, err
+	}
+	nameBase := safeMediaName(work.DouyinWorkID)
+	if nameBase == "" {
+		nameBase = "music"
+	}
+	file, err := ownedfiles.NewFile(createdAt, job.UserID, job.ID, "music", relative, nameBase+".mp3", result.MIMEType, result.SHA256, result.SizeBytes, &expires)
+	if err != nil {
+		_ = w.storage.Remove(ownedfiles.File{RelativePath: relative})
+		return ownedfiles.File{}, err
+	}
+	if err := w.fileRepo.Create(ctx, file); err != nil {
+		_ = w.storage.Remove(ownedfiles.File{RelativePath: relative})
+		return ownedfiles.File{}, err
+	}
+	return file, nil
 }
 
 func (w *Worker) Cancel(jobID string) bool {

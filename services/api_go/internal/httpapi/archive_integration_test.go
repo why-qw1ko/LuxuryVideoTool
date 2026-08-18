@@ -148,6 +148,17 @@ func TestMediaPreviewSigned(t *testing.T) {
 	if err := fileRepo.Create(ctx, file); err != nil {
 		t.Fatal(err)
 	}
+	musicRelative, musicTemporary, musicFinal, _ := storage.NewScopedTarget("music", user.ID, "job-p", ".mp3")
+	if err := storage.WriteAtomic(musicTemporary, musicFinal, []byte("preview-music-bytes")); err != nil {
+		t.Fatal(err)
+	}
+	music, err := ownedfiles.NewFile(now.Add(time.Millisecond), user.ID, "job-p", "music", musicRelative, "music.mp3", "audio/mpeg", "sha-music", 19, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fileRepo.Create(ctx, music); err != nil {
+		t.Fatal(err)
+	}
 
 	signer := ownedfiles.NewSigner([]byte("01234567890123456789012345678901"), "")
 	handler := New(Dependencies{Build: version.Info{Version: "test"}, Auth: authService, Jobs: jobs.NewService(jobRepo, nil), Files: fileRepo, Storage: storage, ASRSigner: signer, LoginRateLimit: 5, Ready: func() error { return nil }})
@@ -168,16 +179,28 @@ func TestMediaPreviewSigned(t *testing.T) {
 		t.Fatal(err)
 	}
 	files, _ := payload.Job["result"].(map[string]any)["files"].([]any)
-	if len(files) != 1 {
+	if len(files) != 2 {
 		t.Fatalf("files = %#v", files)
 	}
-	first := files[0].(map[string]any)
-	preview, ok := first["previewUrl"].(string)
-	if !ok || !bytes.Contains([]byte(preview), []byte("/api/v1/media-preview/")) {
-		t.Fatalf("missing previewUrl: %#v", first)
+	var imagePreview, musicPreview string
+	for _, item := range files {
+		file := item.(map[string]any)
+		preview, ok := file["previewUrl"].(string)
+		if !ok || !bytes.Contains([]byte(preview), []byte("/api/v1/media-preview/")) {
+			t.Fatalf("missing previewUrl: %#v", file)
+		}
+		if file["kind"] == "image" {
+			imagePreview = preview
+		}
+		if file["kind"] == "music" {
+			musicPreview = preview
+		}
+	}
+	if imagePreview == "" || musicPreview == "" {
+		t.Fatalf("missing typed previews: image=%q music=%q files=%#v", imagePreview, musicPreview, files)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, preview, nil)
+	req := httptest.NewRequest(http.MethodGet, imagePreview, nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -186,9 +209,18 @@ func TestMediaPreviewSigned(t *testing.T) {
 	if !bytes.Contains(rec.Body.Bytes(), []byte("preview-image-bytes")) {
 		t.Fatalf("media-preview body mismatch: %s", rec.Body.String())
 	}
+	musicReq := httptest.NewRequest(http.MethodGet, musicPreview, nil)
+	musicRec := httptest.NewRecorder()
+	handler.ServeHTTP(musicRec, musicReq)
+	if musicRec.Code != http.StatusOK {
+		t.Fatalf("music media-preview status = %d body=%s", musicRec.Code, musicRec.Body.String())
+	}
+	if !bytes.Contains(musicRec.Body.Bytes(), []byte("preview-music-bytes")) {
+		t.Fatalf("music media-preview body mismatch: %s", musicRec.Body.String())
+	}
 
 	// 篡改签名应 404
-	bad := httptest.NewRequest(http.MethodGet, strings.Replace(preview, "signature=", "signature=0000", 1), nil)
+	bad := httptest.NewRequest(http.MethodGet, strings.Replace(imagePreview, "signature=", "signature=0000", 1), nil)
 	badRec := httptest.NewRecorder()
 	handler.ServeHTTP(badRec, bad)
 	if badRec.Code != http.StatusNotFound {

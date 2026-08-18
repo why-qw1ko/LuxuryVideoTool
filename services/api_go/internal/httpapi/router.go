@@ -10,8 +10,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -872,7 +872,7 @@ func New(deps Dependencies) http.Handler {
 			return
 		}
 		file, err := deps.Files.FindByID(r.Context(), r.PathValue("id"))
-		if err != nil || (file.Kind != "image" && file.Kind != "animated" && file.Kind != "video") {
+		if err != nil || (file.Kind != "image" && file.Kind != "animated" && file.Kind != "video" && file.Kind != "music") {
 			http.NotFound(w, r)
 			return
 		}
@@ -1085,7 +1085,7 @@ func withMediaPreviews(items []jobs.Job, signer *ownedfiles.Signer, now time.Tim
 		}
 		for j := range files {
 			// video 也注入：视频预览/下载走同源签名地址直接流式传输，避免前端 fetch 整文件缓冲导致"半天才弹出"。
-			if files[j].Kind == "image" || files[j].Kind == "animated" || files[j].Kind == "video" {
+			if files[j].Kind == "image" || files[j].Kind == "animated" || files[j].Kind == "video" || files[j].Kind == "music" {
 				files[j].PreviewURL = signer.PreviewURL(files[j].ID, expires)
 			}
 		}

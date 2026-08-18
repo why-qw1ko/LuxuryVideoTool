@@ -4,7 +4,7 @@ let selectedId=null,currentJob=null,jobsCache=[],detailSig='';
 let adminMode=false,currentView='new',adminOpen=false,adminCurrentView='dashboard',adminJobsCache=[];
 let jobsPage=1,jobsPageSize=20,jobsTotal=0;
 let adminJobsPage=1,adminJobsPageSize=20,adminJobsTotal=0;
-let taskMusic={jobId:null,url:'',playing:false};
+let taskMusic={jobId:null,source:'',url:'',playing:false};
 let statusChart=null,trendChart=null;
 let lastStatsSig='',lastAdminJobsSig='';
 
@@ -726,7 +726,9 @@ function jobDetailHTML(job){
   // 管理员详情里打包下载走用户自己的接口会因所有权校验失败，故仅在普通用户视图展示。
   const zipLink=(!adminMode&&isNote&&mediaFiles.length&&job.status==='completed')?`<a class="btn" href="/api/v1/jobs/${encodeURIComponent(job.id)}/images/archive" data-file data-name="${esc((job.work&&job.work.douyinWorkId)||job.id)}_images.zip">${icon('download',14)} 打包下载全部</a>`:'';
 
-  const musicRow=isNote&&w.musicUrl?`<div class="music-row"><span class="music-info">${icon('music',13)} <span>${esc(w.musicTitle||'背景音乐')}${w.musicArtist?' · '+esc(w.musicArtist):''}</span></span><button type="button" class="music-toggle" data-op="music" data-music="${esc(w.musicUrl)}">${icon('play',13)} 播放音乐</button></div>`:'';
+  const musicFile=files.find(f=>f.kind==='music');
+  const musicPlayUrl=musicFile&&musicFile.previewUrl&&previewUsable(musicFile.previewUrl)?musicFile.previewUrl:w.musicUrl;
+  const musicRow=isNote&&w.musicUrl?`<div class="music-row"><span class="music-info">${icon('music',13)} <span>${esc(w.musicTitle||'背景音乐')}${w.musicArtist?' · '+esc(w.musicArtist):''}</span></span><button type="button" class="music-toggle" data-op="music" data-music="${esc(w.musicUrl)}" data-play-url="${esc(musicPlayUrl||'')}" data-fallback="${esc(w.musicUrl)}">${icon('play',13)} 播放音乐</button></div>`:'';
   const hasMedia=cover||w.authorName||metas.length;
   const mediaBlock=isNote
     ?(noteGallery||zipLink||musicRow?`<div class="detail-media no-cover">${noteGallery}${musicRow}${metas.length?`<div class="detail-meta">${metas.join('')}</div>`:''}${canonical}${zipLink?`<div class="action-group">${zipLink}</div>`:''}</div>`:'')
@@ -767,7 +769,7 @@ function handleContentClick(e){
   if(gItem&&!e.target.closest('.gallery-dl')){openGalleryPreview(gItem);return}
   const btn=e.target.closest('[data-op],a[data-file],[data-copy]');
   if(!btn)return;
-  if(btn.dataset.op==='music'){e.preventDefault();e.stopPropagation();toggleTaskMusic(btn.closest('[data-job]')?.dataset.job,btn.dataset.music);return}
+  if(btn.dataset.op==='music'){e.preventDefault();e.stopPropagation();toggleTaskMusic(btn.closest('[data-job]')?.dataset.job,btn.dataset.music,btn.dataset.playUrl||btn.dataset.music,btn.dataset.fallback||'');return}
   if(btn.dataset.op==='preview'){e.preventDefault();openPreview(btn.dataset.fid,btn.dataset.name,btn.dataset.preview);return}
   if(btn.hasAttribute('data-file')){e.preventDefault();download(btn);return}
   if(btn.hasAttribute('data-copy')){e.preventDefault();e.stopPropagation();copyText(btn);return}
@@ -885,7 +887,7 @@ function taskAudio(){return $('#task-music-audio')}
 function updateTaskMusicUI(){
   document.querySelectorAll('.music-toggle').forEach(btn=>{
     const jobId=btn.closest('[data-job]')?.dataset.job;
-    const playing=taskMusic.playing&&taskMusic.jobId===jobId&&taskMusic.url===btn.dataset.music;
+    const playing=taskMusic.playing&&taskMusic.jobId===jobId&&taskMusic.source===btn.dataset.music;
     btn.classList.toggle('playing',playing);
     btn.setAttribute('aria-pressed',playing?'true':'false');
     btn.innerHTML=icon(playing?'volume-x':'play',13)+(playing?' 停止音乐':' 播放音乐');
@@ -909,27 +911,33 @@ function resumeTaskMusic(){
   audio.play().then(()=>{taskMusic.playing=true;updateTaskMusicUI()}).catch(()=>{taskMusic.playing=false;updateTaskMusicUI()});
 }
 function syncTaskMusicWithJob(job){
-  const url=job?.work?.musicUrl||'';
-  if(!job||!url){
+  const source=job?.work?.musicUrl||'';
+  if(!job||!source){
     if(taskMusic.playing)stopTaskMusic();
-    taskMusic={jobId:job?.id||null,url:'',playing:false};
+    taskMusic={jobId:job?.id||null,source:'',url:'',playing:false};
     return;
   }
+  const files=(job.Result&&job.Result.files)||[];
+  const musicFile=Array.isArray(files)?files.find(f=>f.kind==='music')||null:null;
+  const url=musicFile&&musicFile.previewUrl&&previewUsable(musicFile.previewUrl)?musicFile.previewUrl:source;
   if(taskMusic.jobId!==job.id){
     if(taskMusic.playing)stopTaskMusic();
-    taskMusic={jobId:job.id,url,playing:false};
-  }else if(taskMusic.url!==url){
+    taskMusic={jobId:job.id,source,url,playing:false};
+  }else if(taskMusic.source!==source){
     stopTaskMusic();
-    taskMusic={jobId:job.id,url,playing:false};
+    taskMusic={jobId:job.id,source,url,playing:false};
+  }else if(!taskMusic.playing){
+    taskMusic.url=url;
   }
 }
-async function toggleTaskMusic(jobId,url){
-  if(!jobId||!url)return;
+async function toggleTaskMusic(jobId,source,playUrl,fallbackUrl){
+  if(!jobId||!source)return;
   const audio=taskAudio();
   if(!audio)return;
-  if(taskMusic.jobId!==jobId||taskMusic.url!==url){
+  const url=playUrl||source;
+  if(taskMusic.jobId!==jobId||taskMusic.source!==source){
     stopTaskMusic();
-    taskMusic={jobId,url,playing:false};
+    taskMusic={jobId,source,url,playing:false};
   }
   if(taskMusic.playing){
     stopTaskMusic();
@@ -939,9 +947,21 @@ async function toggleTaskMusic(jobId,url){
     audio.src=url;
     audio.loop=true;
     await audio.play();
+    taskMusic.url=url;
     taskMusic.playing=true;
     updateTaskMusicUI();
-  }catch{
+  }catch(err){
+    if(fallbackUrl&&fallbackUrl!==url){
+      try{
+        audio.src=fallbackUrl;
+        audio.loop=true;
+        await audio.play();
+        taskMusic.url=fallbackUrl;
+        taskMusic.playing=true;
+        updateTaskMusicUI();
+        return;
+      }catch{}
+    }
     taskMusic.playing=false;
     updateTaskMusicUI();
     toast('音乐播放失败，请稍后重试','error');

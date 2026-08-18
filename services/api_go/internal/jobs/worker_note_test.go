@@ -54,6 +54,7 @@ func TestWorkerNoteFullDownloadsImagesAndUsesCaption(t *testing.T) {
 			{URL: "https://p1.douyinpic.com/static.jpg", Width: 100, Height: 100, AnimatedURL: "https://v1.douyinvod.com/animated.mp4"},
 			{URL: "https://p2.douyinpic.com/static2.jpg", Width: 200, Height: 200},
 		},
+		MusicURL:     "https://sf3-cdn-tos.douyinstatic.com/music.mp3",
 		ResolverName: "fake", ResolverVersion: resolver.DouyinResolverVersion, ResolvedAt: now,
 	}
 	resolverService := resolver.NewService(&resolver.Fake{Work: noteWork}, resolver.NewSQLiteCache(db), 6*time.Hour, resolver.DouyinResolverVersion)
@@ -80,7 +81,7 @@ func TestWorkerNoteFullDownloadsImagesAndUsesCaption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var resultTextCount, mediaCount, mediaExpired int
+	var resultTextCount, mediaCount, musicCount, mediaExpired int
 	for _, f := range files {
 		switch f.Kind {
 		case "image", "animated":
@@ -89,12 +90,20 @@ func TestWorkerNoteFullDownloadsImagesAndUsesCaption(t *testing.T) {
 				t.Fatalf("media file %s (%s) missing ExpiresAt", f.Name, f.Kind)
 			}
 			mediaExpired++
+		case "music":
+			musicCount++
+			if f.ExpiresAt == nil {
+				t.Fatalf("music file %s missing ExpiresAt", f.Name)
+			}
 		case "result_text":
 			resultTextCount++
 		}
 	}
 	if mediaCount != 2 || mediaExpired != 2 {
 		t.Fatalf("media files=%d (with expiry=%d), want 2 each; files=%#v", mediaCount, mediaExpired, files)
+	}
+	if musicCount != 1 {
+		t.Fatalf("music=%d, want 1; files=%#v", musicCount, files)
 	}
 	if resultTextCount != 1 {
 		t.Fatalf("result_text=%d, want 1; files=%#v", resultTextCount, files)
@@ -133,7 +142,7 @@ func TestWorkerNoteDownloadProducesMediaAndCaption(t *testing.T) {
 	noteWork := resolver.Work{
 		ID: "work-dl", DouyinWorkID: "222", Type: "note", CanonicalURL: "https://www.douyin.com/note/222",
 		Title: "图文", Description: "配文", AuthorName: "作者",
-		Images: []resolver.Image{{URL: "https://p1.douyinpic.com/a.jpg"}},
+		Images:       []resolver.Image{{URL: "https://p1.douyinpic.com/a.jpg"}},
 		ResolverName: "fake", ResolverVersion: resolver.DouyinResolverVersion, ResolvedAt: now,
 	}
 	resolverService := resolver.NewService(&resolver.Fake{Work: noteWork}, resolver.NewSQLiteCache(db), 6*time.Hour, resolver.DouyinResolverVersion)
@@ -198,7 +207,7 @@ func TestWorkerNoteCancelDuringDownload(t *testing.T) {
 	noteWork := resolver.Work{
 		ID: "work-c", DouyinWorkID: "333", Type: "note", CanonicalURL: "https://www.douyin.com/note/333",
 		Title: "图文", Description: "配文", AuthorName: "作者",
-		Images: []resolver.Image{{URL: "https://p1.douyinpic.com/a.jpg", AnimatedURL: "https://v1.douyinvod.com/a.mp4"}},
+		Images:       []resolver.Image{{URL: "https://p1.douyinpic.com/a.jpg", AnimatedURL: "https://v1.douyinvod.com/a.mp4"}},
 		ResolverName: "fake", ResolverVersion: resolver.DouyinResolverVersion, ResolvedAt: now,
 	}
 	resolverService := resolver.NewService(&resolver.Fake{Work: noteWork}, resolver.NewSQLiteCache(db), 6*time.Hour, resolver.DouyinResolverVersion)
