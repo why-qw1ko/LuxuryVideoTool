@@ -1,0 +1,74 @@
+/* ================= 主题令牌（仅浅色 / 深色） ================= */
+:root{
+  --bg:#F5F6F8;--card:#FFFFFF;--sidebar:#FFFFFF;--input:#F3F4F6;
+  --hover:#EEF0F3;--active:#E8ECF8;--border:#DFE3EA;--border-focus:#335CFF;
+  --text:#171B26;--text-secondary:#5C6474;--text-tertiary:#9AA1B2;
+  --primary:#335CFF;--primary-hover:#264AE8;--primary-light:#EEF2FF;
+  --primary-2:#8B5CF6;--accent:#00E5A0;--accent-2:#0EA5E9;
+  --danger:#E5484D;--danger-light:#FDECEE;
+  --success:#2FA96A;--success-light:#E7F6EE;
+  --warning:#E8912D;--warning-light:#FDF3E4;
+  --on-primary:#FFFFFF;
+  --radius:8px;--radius-lg:8px;--control-h:40px;--control-sm:32px;
+  --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;--space-8:32px;
+  --table-row-h:44px;--bp-mobile:620px;--bp-tablet:960px;--bp-wide:1240px;
+  --shadow:none;
+  --shadow-lg:0 24px 64px -12px rgba(23,27,38,.22);
+  --shadow-card:0 2px 10px rgba(23,27,38,.05),0 12px 32px -12px rgba(23,27,38,.12);
+  --shadow-card-hover:0 6px 16px rgba(23,27,38,.07),0 20px 48px -16px rgba(79,124,255,.30);
+  --shadow-glow:0 8px 28px -8px rgba(79,124,255,.55);
+  --header-bg:rgba(255,255,255,.8);
+  --gradient:linear-gradient(135deg,#4F7CFF,#8B5CF6);
+  --gradient-accent:linear-gradient(135deg,#00E5A0,#0EA5E9);
+  --ambient:radial-gradient(1100px 520px at 18% -8%,rgba(79,124,255,.14),transparent 60%),radial-gradient(900px 480px at 88% 4%,rgba(139,92,246,.12),transparent 55%),radial-gradient(900px 620px at 50% 112%,rgba(0,229,160,.09),transparent 60%);
+  --chevron:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235C6474' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  color-scheme:light;
+}
+:root[data-theme=dark]{
+  --bg:#101114;--card:#17191F;--sidebar:#17191F;--input:#20232B;
+  --hover:#252932;--active:#22283A;--border:#2A2E38;--border-focus:#7D94FF;
+  --text:#EDEFF7;--text-secondary:#A2A8BB;--text-tertiary:#6E7488;
+  --primary:#7D94FF;--primary-hover:#6D84F0;--primary-light:#202640;
+  --primary-2:#C084FC;--accent:#34D399;--accent-2:#38BDF8;
+  --danger:#F0606A;--danger-light:#2A1A1E;
+  --success:#3DD68C;--success-light:#173026;
+  --warning:#FFB454;--warning-light:#2E2514;
+  --on-primary:#0D1016;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 16px 40px -12px rgba(0,0,0,.5);
+  --shadow-lg:0 32px 80px -16px rgba(0,0,0,.7);
+  --shadow-card:0 2px 10px rgba(0,0,0,.25),0 14px 40px -14px rgba(0,0,0,.55);
+  --shadow-card-hover:0 8px 20px rgba(0,0,0,.35),0 24px 60px -18px rgba(124,132,255,.35);
+  --shadow-glow:0 8px 32px -8px rgba(125,148,255,.5);
+  --header-bg:rgba(15,16,21,.8);
+  --gradient:linear-gradient(135deg,#7D94FF,#A78BFA);
+  --gradient-accent:linear-gradient(135deg,#34D399,#38BDF8);
+  --ambient:radial-gradient(1100px 520px at 18% -8%,rgba(125,148,255,.10),transparent 60%),radial-gradient(900px 480px at 88% 4%,rgba(167,139,250,.09),transparent 55%),radial-gradient(900px 620px at 50% 112%,rgba(52,211,153,.07),transparent 60%);
+  --chevron:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23A2A8BB' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  color-scheme:dark;
+}
+
+/* ================= 基础 ================= */
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{font-family:Inter,"PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;font-size:14px;line-height:1.6;color:var(--text);background-color:var(--bg);background-image:var(--ambient);background-attachment:fixed;-webkit-font-smoothing:antialiased;transition:background-color .3s,color .3s}
+::selection{background:var(--primary-light);color:var(--primary)}
+/* 细滚动条：与参考站点一致，hover 变主题色 */
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:6px;border:2px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:var(--primary);background-clip:padding-box}
+*{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+a{color:var(--primary);text-decoration:none}
+a:hover{text-decoration:underline}
+.hidden{display:none!important}
+.shell{width:100%;max-width:1480px;margin:0 auto;padding:24px 24px 48px}
+body.modal-open{overflow:hidden}
+.ic{display:inline-block;flex-shrink:0;vertical-align:-3px}
+
+/* ================= 动效基础 ================= */
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes mediaIn{from{opacity:0;transform:scale(.985)}to{opacity:1;transform:none}}
+@keyframes glowPulse{0%,100%{opacity:.55}50%{opacity:1}}
+@keyframes gradientFlow{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+

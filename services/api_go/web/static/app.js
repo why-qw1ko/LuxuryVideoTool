@@ -129,15 +129,30 @@ $('#theme-toggle').addEventListener('click',()=>{theme=theme==='dark'?'light':'d
 applyTheme();
 
 /* ---------- 移动端收缩侧边栏 ---------- */
+let sidebarLastFocus=null;
 function setSidebar(open){
   const frontSidebar=$('.master-list'),adminSidebar=$('.admin-sidebar');
+  const target=adminOpen?adminSidebar:frontSidebar;
+  if(open)sidebarLastFocus=document.activeElement;
   if(frontSidebar)frontSidebar.classList.toggle('open',!adminOpen&&open);
   if(adminSidebar)adminSidebar.classList.toggle('open',adminOpen&&open);
   $('#sidebar-backdrop').classList.toggle('hidden',!open);
   $('#sidebar-toggle').setAttribute('aria-expanded',open?'true':'false');
+  $('#sidebar-toggle').setAttribute('aria-label',open?'关闭菜单':'打开菜单');
+  if(frontSidebar)frontSidebar.setAttribute('aria-hidden',(!open||adminOpen)?'true':'false');
+  if(adminSidebar)adminSidebar.setAttribute('aria-hidden',(!open||!adminOpen)?'true':'false');
+  if(open&&target){
+    requestAnimationFrame(()=>target.querySelector('button,a,input,select,textarea')?.focus());
+  }else if(sidebarLastFocus&&document.contains(sidebarLastFocus)){
+    sidebarLastFocus.focus();
+  }
 }
 $('#sidebar-toggle').innerHTML=icon('menu',18);
-$('#sidebar-toggle').addEventListener('click',()=>setSidebar(!$('.master-list').classList.contains('open')));
+$('#sidebar-toggle').setAttribute('aria-label','打开菜单');
+$('#sidebar-toggle').addEventListener('click',()=>{
+  const sidebar=adminOpen?$('.admin-sidebar'):$('.master-list');
+  setSidebar(!sidebar?.classList.contains('open'));
+});
 $('#sidebar-backdrop').addEventListener('click',()=>setSidebar(false));
 
 /* ---------- 返回顶部 ---------- */
@@ -182,6 +197,10 @@ $('#settings-link').addEventListener('click',e=>{e.preventDefault();selectJob(nu
 
 /* ---------- 后台管理系统 ---------- */
 function openAdminConsole(){
+  if(adminOpen){
+    toast('已在后台','info');
+    return;
+  }
   setSidebar(false);
   adminOpen=true;adminMode=false;selectedId=null;currentJob=null;
   lastStatsSig=''; // 重新打开时按当前主题重绘图表，避免沿用旧配色
@@ -294,21 +313,27 @@ function renderPager(el,page,totalPages,onPage){
 
 /* ---------- 后台仪表盘 ---------- */
 let adminUsers=[];
+function skeletonRows(count=4){
+  return `<div class="skeleton-list" aria-hidden="true">${Array.from({length:count},()=>`<div class="skeleton-row"><span></span><span></span><span></span></div>`).join('')}</div>`;
+}
 async function loadAdminStats(){
   if(!session)return;
   try{
+    if(!$('#admin-stats-cards').children.length)$('#admin-stats-cards').innerHTML=skeletonRows(4);
+    document.querySelectorAll('.chart-card').forEach(card=>card.classList.add('loading'));
     const data=await api('/api/v1/admin/stats');
     const stats=data.stats||{};
     // 数据未变化时不重绘，避免轮询导致图表/卡片闪烁
     const sig=JSON.stringify([stats.users,stats.activeUsers,stats.totalJobs,stats.todayJobs,stats.byStatus,stats.byDay]);
-    if(sig===lastStatsSig)return;
+    if(sig===lastStatsSig){document.querySelectorAll('.chart-card').forEach(card=>card.classList.remove('loading'));return}
     lastStatsSig=sig;
     renderStatCards(stats);
     renderStatusChart(stats.byStatus||{});
     renderTrendChart(stats.byDay||[]);
+    document.querySelectorAll('.chart-card').forEach(card=>card.classList.remove('loading'));
     // 图表高度随布局自适应，绘制完成后校准一次尺寸
     requestAnimationFrame(()=>{if(statusChart)statusChart.resize();if(trendChart)trendChart.resize()});
-  }catch(err){toast(err.message,'error')}
+  }catch(err){document.querySelectorAll('.chart-card').forEach(card=>card.classList.remove('loading'));toast(err.message,'error')}
 }
 function renderStatCards(stats){
   const cards=[
@@ -368,6 +393,8 @@ async function loadAdminJobs(){
   if(!session)return;
   const q=new URLSearchParams({q:$('#admin-jobs-q').value.trim(),status:$('#admin-jobs-status').value,userId:$('#admin-jobs-user').value,limit:String(adminJobsPageSize),offset:String((adminJobsPage-1)*adminJobsPageSize)});
   try{
+    const root=$('#admin-jobs-list');
+    if(root&&!root.children.length)root.innerHTML=skeletonRows(6);
     const data=await api(`/api/v1/admin/jobs?${q}`);
     adminJobsCache=data.jobs||[];
     adminJobsTotal=data.total||0;
@@ -380,18 +407,33 @@ async function loadAdminJobs(){
     renderPager($('#admin-jobs-pager'),adminJobsPage,Math.max(1,Math.ceil(adminJobsTotal/adminJobsPageSize)),p=>{adminJobsPage=p;loadAdminJobs()});
   }catch(err){toast(err.message,'error')}
 }
-function adminJobOps(job){
+function adminJobOps(job,wrap=true){
   const terminal=['completed','failed','cancelled'].includes(job.status);
   const ops=[`<button type="button" data-op="view">${icon('search',13)} 查看</button>`];
   if(!terminal)ops.push(`<button type="button" data-op="cancel">${icon('circle-slash',13)} 取消</button>`);
   if(job.status==='failed'||job.status==='cancelled')ops.push(`<button type="button" data-op="retry">${icon('rotate-ccw',13)} 重试</button>`);
   if(terminal)ops.push(`<button type="button" data-op="delete" class="danger">${icon('trash',13)} 删除</button>`);
-  return ops.join('');
+  return wrap?`<div class="admin-ops-row">${ops.join('')}</div>`:ops.join('');
+}
+function adminJobCardHTML(job){
+  const w=job.work||{};
+  const title=stripHashtags(w.title,w.hashtags)||`任务 ${job.id.slice(0,8)}`;
+  const tone=statusTone[job.status]||'muted';
+  const owner=job.ownerDisplayName||job.ownerUsername||'-';
+  return `<article class="admin-card" data-id="${esc(job.id)}">
+    <div class="admin-card-head"><strong>${esc(title)}</strong><span class="badge badge-${tone}">${esc(statusLabels[job.status]||job.status)}</span></div>
+    <div class="admin-card-meta">
+      <span>创建：${fmtShort(job.createdAt)}</span>
+      <span>用户：${esc(owner)}</span>
+      <span>类型：${esc(actionLabels[job.action]||job.action)}</span>
+    </div>
+    <div class="admin-card-actions">${adminJobOps(job,false)}</div>
+  </article>`;
 }
 function renderAdminJobs(jobs){
   const root=$('#admin-jobs-list');
   if(!jobs.length){root.innerHTML=`<div class="empty-state">${icon('inbox',36)}<p>暂无任务</p><span>调整筛选条件后重试</span></div>`;return}
-  root.innerHTML=`<div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>创建时间</th><th>用户</th><th>任务</th><th>类型</th><th>状态</th><th>操作</th></tr></thead><tbody>`+jobs.map(job=>{
+  const table=`<div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>创建时间</th><th>用户</th><th>任务</th><th>类型</th><th>状态</th><th>操作</th></tr></thead><tbody>`+jobs.map(job=>{
     const w=job.work||{};
     const title=stripHashtags(w.title,w.hashtags)||`任务 ${job.id.slice(0,8)}`;
     const tone=statusTone[job.status]||'muted';
@@ -405,11 +447,12 @@ function renderAdminJobs(jobs){
       <td class="admin-ops nowrap">${adminJobOps(job)}</td>
     </tr>`;
   }).join('')+`</tbody></table></div>`;
+  root.innerHTML=table+`<div class="admin-card-list">${jobs.map(adminJobCardHTML).join('')}</div>`;
 }
 $('#admin-view-jobs').addEventListener('click',e=>{
   const btn=e.target.closest('button[data-op]');
   if(!btn)return;
-  const row=btn.closest('tr[data-id]');
+  const row=btn.closest('tr[data-id],.admin-card[data-id]');
   if(!row)return;
   if(btn.dataset.op==='view')viewAdminJob(row.dataset.id);
   else operateAdminJob(row.dataset.id,btn.dataset.op);
@@ -451,6 +494,8 @@ $('#user-create-form').addEventListener('submit',async e=>{
 async function loadAdminUsers(){
   if(!session)return;
   try{
+    const root=$('#admin-users-list');
+    if(root&&!root.children.length)root.innerHTML=skeletonRows(5);
     const data=await api('/api/v1/admin/users');
     adminUsers=data.users||[];
     renderAdminUsers(adminUsers);
@@ -460,24 +505,39 @@ async function loadAdminUsers(){
 }
 function renderAdminUsers(users){
   const root=$('#admin-users-list');
-  root.innerHTML=`<div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>用户名</th><th>显示名</th><th>角色</th><th>状态</th><th>最近登录</th><th>创建时间</th><th>操作</th></tr></thead><tbody>`+users.map(u=>`<tr data-id="${esc(u.id)}">
+  const table=`<div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>用户名</th><th>显示名</th><th>角色</th><th>状态</th><th>最近登录</th><th>创建时间</th><th>操作</th></tr></thead><tbody>`+users.map(u=>`<tr data-id="${esc(u.id)}">
     <td class="nowrap">${esc(u.username)}</td>
     <td>${esc(u.displayName)}</td>
     <td>${u.role==='admin'?'管理员':'普通用户'}</td>
     <td class="nowrap">${u.isActive?'<span class="dot dot-success"></span>正常':'<span class="dot dot-danger"></span>已禁用'}</td>
     <td class="nowrap">${u.lastLoginAt?fmtDate(u.lastLoginAt):'-'}</td>
     <td class="nowrap">${fmtDate(u.createdAt)}</td>
-    <td class="admin-ops nowrap">
+    <td class="admin-ops nowrap"><div class="admin-ops-row">
       <button type="button" data-op="${u.isActive?'disable':'enable'}">${u.isActive?'禁用':'启用'}</button>
       <button type="button" data-op="password">重置密码</button>
       <button type="button" data-op="sessions">会话</button>
-    </td>
+    </div></td>
   </tr>`).join('')+`</tbody></table></div>`;
+  const cards=`<div class="admin-card-list">${users.map(u=>`<article class="admin-card" data-id="${esc(u.id)}">
+    <div class="admin-card-head"><strong>${esc(u.displayName||u.username)}</strong><span class="badge ${u.isActive?'badge-success':'badge-danger'}">${u.isActive?'正常':'已禁用'}</span></div>
+    <div class="admin-card-meta">
+      <span>用户名：${esc(u.username)}</span>
+      <span>角色：${u.role==='admin'?'管理员':'普通用户'}</span>
+      <span>最近登录：${u.lastLoginAt?fmtDate(u.lastLoginAt):'-'}</span>
+      <span>创建：${fmtDate(u.createdAt)}</span>
+    </div>
+    <div class="admin-card-actions">
+      <button type="button" data-op="${u.isActive?'disable':'enable'}">${u.isActive?'禁用':'启用'}</button>
+      <button type="button" data-op="password">重置密码</button>
+      <button type="button" data-op="sessions">会话</button>
+    </div>
+  </article>`).join('')}</div>`;
+  root.innerHTML=table+cards;
 }
 $('#admin-view-users').addEventListener('click',e=>{
   const btn=e.target.closest('button[data-op]');
   if(!btn)return;
-  const row=btn.closest('tr[data-id]');
+  const row=btn.closest('tr[data-id],.admin-card[data-id]');
   if(!row)return;
   const op=btn.dataset.op;
   if(op==='disable')return setUserActive(row.dataset.id,false);
@@ -948,8 +1008,7 @@ function renderGalleryPreview(){
     video.classList.remove('hidden');
     video.controls=false;video.loop=true;video.playsInline=true;video.muted=true;
     soundBtn.classList.remove('hidden');
-    soundBtn.classList.remove('on');
-    soundBtn.innerHTML=icon('volume-x',15)+' 原声';
+    setPreviewSoundUI(false);
     video.src=src;video.load();
     const autoplay=()=>{video.play().catch(()=>{})};
     autoplay();
@@ -963,20 +1022,24 @@ function renderGalleryPreview(){
     img.classList.remove('hidden');img.src=src;
   }
 }
+function setPreviewSoundUI(on){
+  const btn=$('#preview-sound-toggle');
+  btn.classList.toggle('on',on);
+  btn.setAttribute('aria-pressed',on?'true':'false');
+  btn.innerHTML=icon(on?'volume-2':'volume-x',15)+' 原声';
+}
 function togglePreviewSound(){
-  const video=$('#preview-video'),btn=$('#preview-sound-toggle');
-  previewSoundOn=!previewSoundOn;
+  const video=$('#preview-video');
+  const next=!previewSoundOn;
+  previewSoundOn=next;
+  setPreviewSoundUI(next);
   if(previewSoundOn){
     if(taskMusic.playing){stopTaskMusic();previewMusicSuspended=true}
     video.muted=false;
     video.play().catch(()=>{});
-    btn.classList.add('on');
-    btn.innerHTML=icon('volume-2',15)+' 原声';
   }else{
     video.muted=true;
     if(previewMusicSuspended){previewMusicSuspended=false;resumeTaskMusic()}
-    btn.classList.remove('on');
-    btn.innerHTML=icon('volume-x',15)+' 原声';
   }
 }
 $('#preview-sound-toggle').addEventListener('click',e=>{e.preventDefault();e.stopPropagation();togglePreviewSound()});
@@ -1051,6 +1114,7 @@ document.addEventListener('keydown',e=>{
     if(e.key==='ArrowRight'){moveGalleryPreview(1);return}
   }
   if(e.key!=='Escape')return;
+  if(!$('#sidebar-backdrop').classList.contains('hidden')){setSidebar(false);return}
   if(!$('#confirm-modal').classList.contains('hidden')){$('#confirm-cancel').click()}
 });
 
