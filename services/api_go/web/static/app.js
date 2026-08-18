@@ -130,7 +130,9 @@ applyTheme();
 
 /* ---------- 移动端收缩侧边栏 ---------- */
 function setSidebar(open){
-  $('.master-list').classList.toggle('open',open);
+  const frontSidebar=$('.master-list'),adminSidebar=$('.admin-sidebar');
+  if(frontSidebar)frontSidebar.classList.toggle('open',!adminOpen&&open);
+  if(adminSidebar)adminSidebar.classList.toggle('open',adminOpen&&open);
   $('#sidebar-backdrop').classList.toggle('hidden',!open);
   $('#sidebar-toggle').setAttribute('aria-expanded',open?'true':'false');
 }
@@ -180,12 +182,14 @@ $('#settings-link').addEventListener('click',e=>{e.preventDefault();selectJob(nu
 
 /* ---------- 后台管理系统 ---------- */
 function openAdminConsole(){
+  setSidebar(false);
   adminOpen=true;adminMode=false;selectedId=null;currentJob=null;
   lastStatsSig=''; // 重新打开时按当前主题重绘图表，避免沿用旧配色
   show('#app',false);show('#admin-console',true);
   adminShowView('dashboard');
 }
 function closeAdminConsole(){
+  setSidebar(false);
   adminOpen=false;adminMode=false;
   show('#admin-console',false);show('#app',true);
   selectJob(null);
@@ -207,7 +211,10 @@ $('#admin-refresh-stats').addEventListener('click',async e=>{
   try{await loadAdminStats()}finally{btn.disabled=false;btn.classList.remove('loading')}
 });
 $('#admin-detail-back').addEventListener('click',()=>adminShowView('jobs'));
-document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>btn.addEventListener('click',()=>adminShowView(btn.dataset.adminView)));
+document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>btn.addEventListener('click',()=>{
+  adminShowView(btn.dataset.adminView);
+  if(matchMedia('(max-width:960px)').matches)setSidebar(false);
+}));
 
 function enter(value){
   save(value);
@@ -326,7 +333,11 @@ function renderStatusChart(byStatus){
   const c=chartColors();
   statusChart.setOption({
     color:Object.values(colors),
-    animation:false,
+    animation:true,
+    animationDuration:260,
+    animationEasing:'cubicOut',
+    animationDurationUpdate:180,
+    animationEasingUpdate:'cubicOut',
     tooltip:{trigger:'item',formatter:'{b}: {c} ({d}%)'},
     legend:{bottom:0,textStyle:{color:c.text}},
     series:[{type:'pie',radius:['38%','64%'],center:['50%','44%'],avoidLabelOverlap:true,itemStyle:{borderColor:document.documentElement.dataset.theme==='dark'?'#17191F':'#FFFFFF',borderWidth:2},label:{color:c.text},data:data.length?data:[{name:'暂无任务',value:1,itemStyle:{color:c.grid}}]}]
@@ -338,7 +349,11 @@ function renderTrendChart(byDay){
   if(!trendChart)trendChart=echarts.init(el);
   const c=chartColors();
   trendChart.setOption({
-    animation:false,
+    animation:true,
+    animationDuration:280,
+    animationEasing:'cubicOut',
+    animationDurationUpdate:180,
+    animationEasingUpdate:'cubicOut',
     tooltip:{trigger:'axis'},
     grid:{left:36,right:16,top:24,bottom:28},
     xAxis:{type:'category',data:byDay.map(d=>d.day.slice(5)),axisLine:{lineStyle:{color:c.axis}},axisLabel:{color:c.text}},
@@ -909,6 +924,9 @@ function renderGalleryPreview(){
   if(!item)return;
   const modal=$('#preview-modal'),video=$('#preview-video'),img=$('#preview-image'),soundBtn=$('#preview-sound-toggle');
   modal.classList.remove('hidden');
+  modal.classList.toggle('preview-animated-mode',item.animated==='1');
+  modal.classList.toggle('preview-image-mode',item.animated!=='1');
+  modal.classList.remove('preview-video-mode');
   document.body.classList.add('modal-open');
   resetPreviewMedia();
   let src=item.src;
@@ -966,6 +984,8 @@ async function openPreview(fileId,name,previewUrl){
   const modal=$('#preview-modal'),video=$('#preview-video'),img=$('#preview-image');
   if(taskMusic.playing)stopTaskMusic();
   galleryPreview={items:[],index:0,touchX:null};
+  modal.classList.add('preview-video-mode');
+  modal.classList.remove('preview-image-mode','preview-animated-mode');
   previewSoundOn=false;
   $('#preview-sound-toggle').classList.add('hidden');
   setPreviewNav(false);
@@ -999,6 +1019,7 @@ function openMediaPreview(src,animated,title,fallback){
 }
 function closePreview(){
   const modal=$('#preview-modal');modal.classList.add('hidden');document.body.classList.remove('modal-open');
+  modal.classList.remove('preview-video-mode','preview-image-mode','preview-animated-mode');
   resetPreviewMedia();
   galleryPreview={items:[],index:0,touchX:null};
   setPreviewNav(false);
