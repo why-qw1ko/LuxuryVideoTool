@@ -45,8 +45,8 @@ input:focus,textarea:focus,select:focus{border-color:var(--border-focus);box-sha
 .music-info{display:inline-flex;align-items:center;gap:6px;min-width:0}
 .music-info span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .music-row svg{flex-shrink:0}
-.music-toggle{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);font-size:12px;font-weight:700;line-height:1;white-space:nowrap;cursor:pointer;transition:background .14s ease,border-color .14s ease,color .14s ease,transform .08s ease}
-.music-toggle:hover{border-color:var(--border-focus);background:var(--hover);color:var(--primary)}
+.music-toggle{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--text-secondary);font-size:12px;font-weight:700;line-height:1;white-space:nowrap;cursor:pointer;transition:background .14s ease,border-color .14s ease,color .14s ease,transform .08s ease}
+.music-toggle:hover{border-color:var(--border-focus);background:var(--primary-light);color:var(--primary)}
 .music-toggle.playing{border-color:var(--border-focus);color:var(--primary);background:var(--primary-light)}
 input::placeholder,textarea::placeholder{color:var(--text-tertiary)}
 textarea{resize:vertical;line-height:1.6}

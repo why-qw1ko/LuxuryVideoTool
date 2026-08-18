@@ -145,7 +145,8 @@
   .actions .btn,.actions button{width:100%;min-height:44px;justify-content:center}
   .confirm-actions{flex-direction:column-reverse}
   .modal{padding:12px}
-  #preview-modal{align-items:stretch}
+  /* 预览弹窗保持内容高度并垂直居中，不要用 stretch 把卡片撑满全屏导致媒体顶到上方 */
+  #preview-modal{align-items:center;justify-content:center}
   #preview-modal .modal-card{width:100%;min-width:0;max-height:calc(100dvh - 24px)}
   #preview-video,#preview-video[controls],.preview-image{width:100%;min-width:0;max-height:calc(100dvh - 96px);border-radius:0}
   .preview-nav{top:50%;bottom:auto;transform:translateY(-50%);width:42px;height:42px}

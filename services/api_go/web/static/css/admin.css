@@ -14,6 +14,14 @@
 .admin-table .nowrap{white-space:nowrap}
 .admin-table th:last-child,.admin-table td.admin-ops{text-align:right}
 .admin-table td.admin-ops{min-width:180px}
+/* 任务表格固定列宽：标题列吃掉剩余宽度并省略号截断，状态胶囊/操作列不再被长标题挤压 */
+.admin-jobs-table{table-layout:fixed}
+.admin-jobs-table th:nth-child(1),.admin-jobs-table td:nth-child(1){width:132px}
+.admin-jobs-table th:nth-child(2),.admin-jobs-table td:nth-child(2){width:112px}
+.admin-jobs-table th:nth-child(4),.admin-jobs-table td:nth-child(4){width:92px}
+.admin-jobs-table th:nth-child(5),.admin-jobs-table td:nth-child(5){width:96px}
+.admin-jobs-table th:nth-child(6),.admin-jobs-table td:nth-child(6){width:216px}
+.admin-jobs-table .admin-title{max-width:none}
 .admin-ops-row,.admin-card-actions{display:flex;justify-content:flex-end;align-items:center;gap:6px;flex-wrap:wrap}
 .admin-ops button,.admin-card-actions button,.pager button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:var(--control-sm);padding:4px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--text-secondary);font-weight:700;font-size:12px;line-height:1.2;box-shadow:0 1px 2px rgba(23,27,38,.04);transition:background .14s ease,border-color .14s ease,color .14s ease,box-shadow .14s ease}
 .admin-ops button:hover,.admin-card-actions button:hover,.pager button:not(:disabled):hover{background:var(--primary-light);color:var(--primary);border-color:var(--border-focus);box-shadow:none}
@@ -103,6 +111,7 @@ body:has(#admin-console:not(.hidden)) .shell,body:has(#admin-console:not(.hidden
 .admin-card{display:grid;gap:10px;padding:14px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-card)}
 .admin-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
 .admin-card-head strong{min-width:0;font-size:14px;line-height:1.35;overflow-wrap:anywhere}
+.admin-card-head .badge{flex-shrink:0}
 .admin-card-meta{display:grid;gap:4px;font-size:12px;color:var(--text-secondary)}
 .admin-card-actions{gap:8px;padding-top:2px}
 #admin-user-sessions.panel.sub{max-height:40vh;overflow-y:auto}
@@ -113,6 +122,10 @@ body:has(#admin-console:not(.hidden)) .shell,body:has(#admin-console:not(.hidden
 .admin-table th{background:linear-gradient(180deg,var(--input),var(--hover));color:var(--text-secondary);font-weight:700;white-space:nowrap}
 .admin-table tbody tr{transition:background .15s}
 .admin-table tbody tr:hover{background:var(--primary-light)}
+/* 返回任务列表按钮：主色胶囊，与整体视觉语言一致 */
+.back-btn{display:inline-flex;align-items:center;gap:7px;min-height:36px;padding:0 16px;border:1px solid var(--border-focus);border-radius:999px;background:var(--primary-light);color:var(--primary);font-size:13px;font-weight:700;white-space:nowrap;box-shadow:var(--shadow-card);transition:background .14s ease,color .14s ease,border-color .14s ease,box-shadow .14s ease,transform .08s ease}
+.back-btn:hover:not(:disabled){background:var(--primary);border-color:var(--primary);color:var(--on-primary);box-shadow:var(--shadow-glow);transform:translateY(-1px)}
+.back-btn:active:not(:disabled){transform:translateY(0) scale(.98)}
 .preview-sound{position:absolute;right:16px;bottom:16px;z-index:6;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:76px;min-height:34px;padding:6px 14px;border-radius:999px;background:rgba(15,18,25,.72);color:#fff;border:1px solid rgba(255,255,255,.18);font-size:12px;font-weight:700;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);transition:background .12s ease,border-color .12s ease,color .12s ease,transform .08s ease}
 .preview-sound:hover{background:rgba(15,18,25,.85);color:#fff}
 .preview-sound.on{background:var(--primary);color:var(--on-primary);border-color:transparent}

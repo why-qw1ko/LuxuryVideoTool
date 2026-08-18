@@ -433,7 +433,7 @@ function adminJobCardHTML(job){
 function renderAdminJobs(jobs){
   const root=$('#admin-jobs-list');
   if(!jobs.length){root.innerHTML=`<div class="empty-state">${icon('inbox',36)}<p>暂无任务</p><span>调整筛选条件后重试</span></div>`;return}
-  const table=`<div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>创建时间</th><th>用户</th><th>任务</th><th>类型</th><th>状态</th><th>操作</th></tr></thead><tbody>`+jobs.map(job=>{
+  const table=`<div class="admin-table-wrap"><table class="admin-table admin-jobs-table"><thead><tr><th>创建时间</th><th>用户</th><th>任务</th><th>类型</th><th>状态</th><th>操作</th></tr></thead><tbody>`+jobs.map(job=>{
     const w=job.work||{};
     const title=stripHashtags(w.title,w.hashtags)||`任务 ${job.id.slice(0,8)}`;
     const tone=statusTone[job.status]||'muted';
@@ -678,7 +678,7 @@ function jobDetailHTML(job){
   if(w.durationMs)metas.push(`<span>时长 ${fmtDuration(w.durationMs)}</span>`);
   if(w.publishedAt)metas.push(`<span>发布 ${fmtDate(w.publishedAt)}</span>`);
   const tags=(w.hashtags||[]).map(t=>`<span class="tag">#${esc(t)}</span>`).join('');
-  const cover=w.coverUrl?`<img class="detail-cover" src="${esc(w.coverUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:'';
+  const cover=w.coverUrl?`<img class="detail-cover" src="${esc(w.coverUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:'';
 
   const error=job.error?`<div class="error-box">${icon('alert-circle',14)}<div><strong>${esc(job.error.code)}</strong><p>${esc(job.error.message)}</p></div></div>`:'';
   const progressPct=Math.max(0,Math.min(100,Math.round(Number(job.progress)||0)));
@@ -716,11 +716,17 @@ function jobDetailHTML(job){
     // 回退链在错误发生时现查（不烘焙渲染时的判断），避免页面停留超过 24h 后签名地址过期、
     // 或客户端时钟偏差把新鲜地址误判为过期时，图片/动图永久无法恢复。mediaFallback 每项只尝试一次。
     const preview=file&&file.previewUrl?file.previewUrl:'';
+    // 图片缩略图优先用本地已下载文件的签名地址（同源、稳定、不绕外网 CDN），CDN 原图仅作错误兜底；
+    // 签名过期时直接走 CDN，并把本地地址留给兜底链，避免页面停留久了缩略图永久 404。
+    const useLocal=!!preview&&previewUsable(preview);
+    const thumbSrc=useLocal?preview:img.url;
+    // 安卓微信 X5 内核需要 h5 模式才在页面内渲染视频；poster 用静态图兜底自动播放被拦时的黑屏。
+    const x5Attrs=isWeChat()?' x5-video-player-type="h5" x5-playsinline=""':'';
     const media=img.animatedUrl
-      ?`<video class="gallery-anim" src="${esc(viewerSrc)}" autoplay muted loop playsinline preload="metadata"${viewerSrc===cdnSrc?` data-preview="${esc(preview)}"`:` data-fallback="${esc(cdnSrc)}"`} onerror="mediaFallback(this)"></video>`
-      :`<img src="${esc(img.url)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-preview="${esc(preview)}" onerror="mediaFallback(this)">`;
+      ?`<video class="gallery-anim" src="${esc(viewerSrc)}" poster="${esc(img.url)}" autoplay muted loop playsinline webkit-playsinline preload="metadata"${x5Attrs}${viewerSrc===cdnSrc?` data-preview="${esc(preview)}"`:` data-fallback="${esc(cdnSrc)}"`} onerror="mediaFallback(this)"></video>`
+      :`<img src="${esc(thumbSrc)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"${useLocal?` data-fallback="${esc(img.url)}"`:` data-preview="${esc(preview)}"`} onerror="mediaFallback(this)">`;
     const foot=(badge||dl)?`<div class="gallery-foot">${badge}${dl}</div>`:'';
-    return `<figure class="gallery-item" data-preview="${esc(viewerSrc)}" data-fallback="${esc(cdnSrc)}" data-animated="${img.animatedUrl?'1':'0'}" data-title="${esc((stripHashtags(w.title,w.hashtags)||'预览').slice(0,40))}"><div class="gallery-media">${media}</div>${foot}</figure>`;
+    return `<figure class="gallery-item" data-preview="${esc(viewerSrc)}" data-fallback="${esc(cdnSrc)}" data-poster="${esc(img.url)}" data-animated="${img.animatedUrl?'1':'0'}" data-title="${esc((stripHashtags(w.title,w.hashtags)||'预览').slice(0,40))}"><div class="gallery-media">${media}</div>${foot}</figure>`;
   }).join('');
   const noteGallery=isNote&&noteImages.length?`<div class="note-gallery">${galleryItems}</div>`:'';
   // 管理员详情里打包下载走用户自己的接口会因所有权校验失败，故仅在普通用户视图展示。
@@ -855,6 +861,8 @@ function previewUsable(url){
   if(!m)return true;
   return Number(m[1])*1000+PREVIEW_SKEW_MS>Date.now();
 }
+// 微信内置浏览器（iOS WKWebView / 安卓 X5）对视频自动播放和页面内渲染有额外限制，需要单独适配。
+function isWeChat(){return /MicroMessenger/i.test(navigator.userAgent||'')}
 // 媒体加载失败兜底：按 data-preview（同源签名地址）→ data-fallback（CDN 原址）依次尝试，
 // 每项只试一次（试完清除该属性），全部失败则隐藏元素。判断发生在错误时刻而非渲染时刻。
 function mediaFallback(el){
@@ -972,12 +980,18 @@ async function toggleTaskMusic(jobId,source,playUrl,fallbackUrl){
 let previewURL=null,galleryPreview={items:[],index:0,touchX:null};
 let previewMusicSuspended=false;
 let previewSoundOn=false;
+let previewGestureHandler=null;
 function setPreviewNav(show){
   document.querySelectorAll('[data-preview-nav]').forEach(btn=>btn.classList.toggle('hidden',!show));
 }
 function resetPreviewMedia(){
   const video=$('#preview-video'),img=$('#preview-image');
-  video.pause();video.currentTime=0;video.removeAttribute('src');video.load();video.classList.add('hidden');
+  if(previewGestureHandler){
+    video.removeEventListener('click',previewGestureHandler);
+    video.removeEventListener('touchstart',previewGestureHandler);
+    previewGestureHandler=null;
+  }
+  video.pause();video.currentTime=0;video.removeAttribute('src');video.removeAttribute('poster');video.removeAttribute('x5-video-player-type');video.load();video.classList.add('hidden');
   img.classList.add('hidden');img.removeAttribute('src');
 }
 function openGalleryPreview(item){
@@ -986,7 +1000,8 @@ function openGalleryPreview(item){
     src:el.dataset.preview,
     animated:el.dataset.animated,
     title:el.dataset.title,
-    fallback:el.dataset.fallback
+    fallback:el.dataset.fallback,
+    poster:el.dataset.poster
   }));
   galleryPreview.items=items;
   galleryPreview.index=Math.max(0,nodes.indexOf(item));
@@ -1027,19 +1042,37 @@ function renderGalleryPreview(){
     if(previewMusicSuspended){previewMusicSuspended=false;resumeTaskMusic()}
     video.classList.remove('hidden');
     video.controls=false;video.loop=true;video.playsInline=true;video.muted=true;
+    // 安卓微信 X5 内核需要 h5 模式才在页面内渲染视频，否则黑屏或弹独立播放器
+    if(isWeChat())video.setAttribute('x5-video-player-type','h5');else video.removeAttribute('x5-video-player-type');
     soundBtn.classList.remove('hidden');
     setPreviewSoundUI(false);
+    if(item.poster)video.poster=item.poster;
     video.src=src;video.load();
     const autoplay=()=>{video.play().catch(()=>{})};
     autoplay();
     // 资源未就绪时等 canplay 再补一次，保证点击后一定自动播放
     video.oncanplay=()=>{if(video.paused)autoplay();video.oncanplay=null};
+    // 微信等浏览器可能拦截自动播放：poster 已兜底画面，首次点击/触摸视频时补播
+    previewGestureHandler=()=>{
+      if(!video.paused){
+        video.removeEventListener('click',previewGestureHandler);
+        video.removeEventListener('touchstart',previewGestureHandler);
+        return;
+      }
+      // 播放成功后再移除监听，避免资源未就绪时首次手势无效、之后无法再补播
+      video.play().then(()=>{
+        video.removeEventListener('click',previewGestureHandler);
+        video.removeEventListener('touchstart',previewGestureHandler);
+      }).catch(()=>{});
+    };
+    video.addEventListener('click',previewGestureHandler);
+    video.addEventListener('touchstart',previewGestureHandler,{passive:true});
     // 点击动图自动播放背景音乐（作品没有音乐则不响，原声开启时不打断）
     if(taskMusic.jobId&&taskMusic.url&&!taskMusic.playing&&!previewMusicSuspended)resumeTaskMusic();
   }else{
     if(previewMusicSuspended){previewMusicSuspended=false;resumeTaskMusic()}
     soundBtn.classList.add('hidden');
-    img.classList.remove('hidden');img.src=src;
+    img.classList.remove('hidden');img.decoding='async';img.src=src;
   }
 }
 function setPreviewSoundUI(on){
@@ -1096,8 +1129,8 @@ async function openPreview(fileId,name,previewUrl){
   }catch(err){closePreview();toast(err.message,'error')}
 }
 // 画廊点击查看：动图点击即自动播放，并自动播放背景音乐；「原声」按钮切换动图原声。
-function openMediaPreview(src,animated,title,fallback){
-  galleryPreview={items:[{src,animated,title,fallback}],index:0,touchX:null};
+function openMediaPreview(src,animated,title,fallback,poster){
+  galleryPreview={items:[{src,animated,title,fallback,poster}],index:0,touchX:null};
   renderGalleryPreview();
 }
 function closePreview(){
