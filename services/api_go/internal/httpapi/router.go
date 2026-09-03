@@ -236,6 +236,36 @@ func New(deps Dependencies) http.Handler {
 		recordAudit(deps.Audit, r, principal.UserID, "auth.session_revoke", r.PathValue("id"), nil)
 		writeJSON(w, http.StatusOK, map[string]any{"requestId": RequestID(r.Context())})
 	})
+	protected.HandleFunc("POST /api/v1/auth/password", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context())
+		var input struct {
+			CurrentPassword string `json:"currentPassword"`
+			NewPassword     string `json:"newPassword"`
+		}
+		if err := decodeJSON(w, r, &input); err != nil {
+			return
+		}
+		if input.CurrentPassword == "" || len(input.CurrentPassword) > 1024 {
+			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "当前密码不正确", false)
+			return
+		}
+		if len(input.NewPassword) < 12 || len(input.NewPassword) > 1024 {
+			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "新密码需要 12 到 1024 位", false)
+			return
+		}
+		if err := deps.Auth.ChangePassword(r.Context(), principal, input.CurrentPassword, input.NewPassword); errors.Is(err, auth.ErrInvalidCredentials) {
+			writeError(w, r, http.StatusUnauthorized, "AUTH_INVALID_CREDENTIALS", "当前密码不正确", false)
+			return
+		} else if errors.Is(err, auth.ErrNotFound) {
+			writeError(w, r, http.StatusUnauthorized, "AUTH_TOKEN_EXPIRED", "登录状态已失效，请重新登录", true)
+			return
+		} else if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "修改密码失败", true)
+			return
+		}
+		recordAudit(deps.Audit, r, principal.UserID, "auth.password_change", principal.SessionID, nil)
+		writeJSON(w, http.StatusOK, map[string]any{"requestId": RequestID(r.Context())})
+	})
 	protected.HandleFunc("DELETE /api/v1/admin/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		principal, _ := Principal(r.Context())
 		if err := deps.Auth.RevokeAnySession(r.Context(), principal, r.PathValue("id")); errors.Is(err, auth.ErrForbidden) {
@@ -981,6 +1011,7 @@ func New(deps Dependencies) http.Handler {
 		mux.Handle("POST /api/v1/auth/logout", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/auth/sessions", requireAuth(deps.Auth, protected))
 		mux.Handle("DELETE /api/v1/auth/sessions/{id}", requireAuth(deps.Auth, protected))
+		mux.Handle("POST /api/v1/auth/password", requireAuth(deps.Auth, protected))
 		mux.Handle("DELETE /api/v1/admin/sessions/{id}", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/admin/stats", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/admin/settings/providers", requireAuth(deps.Auth, protected))

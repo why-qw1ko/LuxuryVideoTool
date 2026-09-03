@@ -77,6 +77,7 @@ type Repository interface {
 	ListSessions(ctx context.Context, userID string, now time.Time) ([]Session, error)
 	RevokeSession(ctx context.Context, userID, sessionID string, now time.Time) error
 	RevokeAllUserSessions(ctx context.Context, userID string, now time.Time) error
+	RevokeOtherUserSessions(ctx context.Context, userID, keepSessionID string, now time.Time) error
 }
 
 func NormalizeUsername(value string) string {

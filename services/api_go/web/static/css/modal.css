@@ -20,6 +20,6 @@
 .preview-next{right:14px}
 .confirm-card{max-width:min(92vw,400px)}
 .confirm-body{padding:24px;font-size:14px;color:var(--text-secondary);line-height:1.7}
-.confirm-body p{margin:0}
+.confirm-body p,.confirm-body #confirm-message{margin:0}
 .confirm-actions{display:flex;justify-content:flex-end;gap:10px;padding:16px 20px;border-top:1px solid var(--border);background:var(--input)}
 

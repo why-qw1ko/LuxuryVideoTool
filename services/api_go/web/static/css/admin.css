@@ -45,6 +45,9 @@
 #admin-user-sessions.panel.sub{margin-top:16px;border:1px solid var(--border)}
 .prompt-input{width:100%;margin-top:10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--input);color:var(--text);font:inherit}
 .prompt-input:focus{border-color:var(--border-focus);box-shadow:0 0 0 3px var(--active);background:var(--card);outline:none}
+.password-change-grid{display:grid;gap:12px;margin-top:12px}
+.password-change-grid label{gap:6px}
+.dialog-hint{margin:0;color:var(--text-secondary)}
 @media(max-width:960px){
   .admin-filter{grid-template-columns:1fr 1fr}
   .admin-form{grid-template-columns:1fr 1fr}

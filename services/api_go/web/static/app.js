@@ -241,7 +241,7 @@ function enter(value){
   if($('#admin-user-name'))$('#admin-user-name').textContent=value?.user?.displayName||'';
   if($('#admin-user-role'))$('#admin-user-role').textContent=value?.user?.role==='admin'?'管理员':'普通用户';
   if($('#admin-user-avatar'))$('#admin-user-avatar').textContent=(value?.user?.displayName||'?').trim().charAt(0).toUpperCase();
-  show('#login',!value);show('#app',!!value);show('#logout',!!value);show('#admin-console',false);
+  show('#login',!value);show('#app',!!value);show('#change-password',!!value);show('#logout',!!value);show('#admin-console',false);
   // 未登录时隐藏左上角菜单按钮：导航抽屉是登录后的功能，登录页点了只会打开空的抽屉。
   // 用 visibility 而非 display，保留其在顶栏网格中的 40px 占位，避免品牌文字被顶位裁剪。
   $('#sidebar-toggle').classList.toggle('nav-hidden',!value);
@@ -284,7 +284,81 @@ function bindPasswordToggle(inputId,buttonId){
   });
 }
 bindPasswordToggle('#password','#toggle-password');
+$('#change-password').addEventListener('click',changeOwnPassword);
 $('#logout').addEventListener('click',async()=>{if(!(await confirmDialog({title:'退出登录',message:'确认退出当前账号？',confirmText:'退出',danger:false})))return;try{await api('/api/v1/auth/logout',{method:'POST'})}catch{}enter(null)});
+
+function passwordChangeDialog(){
+  return new Promise(resolve=>{
+    const modal=$('#confirm-modal'),ok=$('#confirm-ok'),cancel=$('#confirm-cancel'),message=$('#confirm-message');
+    $('#confirm-title').textContent='修改密码';
+    message.innerHTML='';
+    const hint=document.createElement('p');
+    hint.className='dialog-hint';
+    hint.textContent='修改成功后，其他设备会话将下线，当前设备保持登录。';
+    const wrap=document.createElement('div');
+    wrap.className='password-change-grid';
+    const fields=[
+      {key:'currentPassword',label:'当前密码',autocomplete:'current-password'},
+      {key:'newPassword',label:'新密码',autocomplete:'new-password'},
+      {key:'confirmPassword',label:'确认新密码',autocomplete:'new-password'}
+    ];
+    const inputs={};
+    fields.forEach(field=>{
+      const label=document.createElement('label');
+      label.appendChild(document.createTextNode(field.label));
+      const box=document.createElement('span');
+      box.className='password-wrap';
+      const input=document.createElement('input');
+      input.type='password';
+      input.maxLength=1024;
+      input.required=true;
+      input.autocomplete=field.autocomplete;
+      const toggle=document.createElement('button');
+      toggle.type='button';
+      toggle.className='password-eye';
+      toggle.setAttribute('aria-label','显示密码');
+      toggle.title='显示密码';
+      toggle.innerHTML=icon('eye',16);
+      toggle.addEventListener('click',e=>{
+        e.preventDefault();e.stopPropagation();
+        const show=input.type==='password';
+        input.type=show?'text':'password';
+        toggle.classList.toggle('on',show);
+        toggle.setAttribute('aria-label',show?'隐藏密码':'显示密码');
+        toggle.title=show?'隐藏密码':'显示密码';
+        toggle.innerHTML=icon(show?'eye-off':'eye',16);
+        input.focus();
+      });
+      input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();ok.click()}});
+      box.appendChild(input);
+      box.appendChild(toggle);
+      label.appendChild(box);
+      wrap.appendChild(label);
+      inputs[field.key]=input;
+    });
+    message.appendChild(hint);
+    message.appendChild(wrap);
+    ok.textContent='保存';
+    ok.className='btn-primary';
+    const close=value=>{modal.classList.add('hidden');document.body.classList.remove('modal-open');resolve(value)};
+    ok.onclick=()=>close({currentPassword:inputs.currentPassword.value,newPassword:inputs.newPassword.value,confirmPassword:inputs.confirmPassword.value});
+    cancel.onclick=()=>close(null);
+    modal.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>close(null));
+    modal.classList.remove('hidden');document.body.classList.add('modal-open');
+    inputs.currentPassword.focus();
+  });
+}
+async function changeOwnPassword(){
+  const values=await passwordChangeDialog();
+  if(!values)return;
+  if(!values.currentPassword)return toast('请输入当前密码','warning');
+  if(values.newPassword.length<12)return toast('新密码至少需要 12 位','warning');
+  if(values.newPassword!==values.confirmPassword)return toast('两次输入的新密码不一致','warning');
+  try{
+    await api('/api/v1/auth/password',{method:'POST',body:JSON.stringify({currentPassword:values.currentPassword,newPassword:values.newPassword})});
+    toast('密码已修改，其他设备会话已下线','success');
+  }catch(err){toast(err.message,'error')}
+}
 
 /* ---------- API Key 设置 ---------- */
 async function loadProviders(){try{const data=await api('/api/v1/admin/settings/providers'),p=data.providers;$('#aliyun-key').placeholder=`当前状态：${p.aliyunConfigured?(p.aliyunAvailable?'已配置，可作备用':'已配置，但缺少公网地址'):'未配置'}`;$('#silicon-key').placeholder=`当前状态：${p.siliconFlowConfigured?'已配置，默认使用':'未配置'}`;if($('#asr-model')){$('#asr-model').value=p.asrModel||'FunAudioLLM/SenseVoiceSmall';$('#asr-model').placeholder=`当前模型：${p.asrModel||'FunAudioLLM/SenseVoiceSmall'}`}}catch(err){toast(err.message,'error')}}
@@ -918,6 +992,14 @@ function resumeTaskMusic(){
   audio.loop=true;
   audio.play().then(()=>{taskMusic.playing=true;updateTaskMusicUI()}).catch(()=>{taskMusic.playing=false;updateTaskMusicUI()});
 }
+function playPreviewMusic(){
+  if(previewMusicSuspended){
+    previewMusicSuspended=false;
+    resumeTaskMusic();
+    return;
+  }
+  if(taskMusic.jobId&&taskMusic.url&&!taskMusic.playing)resumeTaskMusic();
+}
 function syncTaskMusicWithJob(job){
   const source=job?.work?.musicUrl||'';
   if(!job||!source){
@@ -925,7 +1007,7 @@ function syncTaskMusicWithJob(job){
     taskMusic={jobId:job?.id||null,source:'',url:'',playing:false};
     return;
   }
-  const files=(job.Result&&job.Result.files)||[];
+  const files=(job.result&&job.result.files)||[];
   const musicFile=Array.isArray(files)?files.find(f=>f.kind==='music')||null:null;
   const url=musicFile&&musicFile.previewUrl&&previewUsable(musicFile.previewUrl)?musicFile.previewUrl:source;
   if(taskMusic.jobId!==job.id){
@@ -1035,11 +1117,9 @@ function renderGalleryPreview(){
     prevBtn.disabled=galleryPreview.index===0;
     nextBtn.disabled=galleryPreview.index===galleryPreview.items.length-1;
   }
-  // 动图点击即自动播放：动图静音播放，同时自动播放背景音乐；「原声」按钮按需开启原声。
+  // 图文预览点击即播放：动图静音播放，普通图片也自动播放背景音乐；「原声」按钮按需开启动图原声。
   previewSoundOn=false;
   if(item.animated==='1'){
-    // 从有声动图切回时先恢复背景音乐
-    if(previewMusicSuspended){previewMusicSuspended=false;resumeTaskMusic()}
     video.classList.remove('hidden');
     video.controls=false;video.loop=true;video.playsInline=true;video.muted=true;
     // 安卓微信 X5 内核需要 h5 模式才在页面内渲染视频，否则黑屏或弹独立播放器
@@ -1068,11 +1148,12 @@ function renderGalleryPreview(){
     video.addEventListener('click',previewGestureHandler);
     video.addEventListener('touchstart',previewGestureHandler,{passive:true});
     // 点击动图自动播放背景音乐（作品没有音乐则不响，原声开启时不打断）
-    if(taskMusic.jobId&&taskMusic.url&&!taskMusic.playing&&!previewMusicSuspended)resumeTaskMusic();
+    playPreviewMusic();
   }else{
-    if(previewMusicSuspended){previewMusicSuspended=false;resumeTaskMusic()}
     soundBtn.classList.add('hidden');
     img.classList.remove('hidden');img.decoding='async';img.src=src;
+    // 普通图片点开也播放图文作品的背景音乐。
+    playPreviewMusic();
   }
 }
 function setPreviewSoundUI(on){
@@ -1128,7 +1209,7 @@ async function openPreview(fileId,name,previewUrl){
     video.play().catch(()=>{});
   }catch(err){closePreview();toast(err.message,'error')}
 }
-// 画廊点击查看：动图点击即自动播放，并自动播放背景音乐；「原声」按钮切换动图原声。
+// 画廊点击查看：图片/动图点击即播放；「原声」按钮切换动图原声。
 function openMediaPreview(src,animated,title,fallback,poster){
   galleryPreview={items:[{src,animated,title,fallback,poster}],index:0,touchX:null};
   renderGalleryPreview();

@@ -75,7 +75,10 @@ func (r *SQLiteRepository) FindSessionByID(ctx context.Context, userID, sessionI
 		app_version, expires_at, revoked_at, replaced_by, created_at, last_used_at
 		FROM refresh_tokens WHERE id = ?`
 	args := []any{sessionID}
-	if userID != "" { query += " AND user_id = ?"; args = append(args, userID) }
+	if userID != "" {
+		query += " AND user_id = ?"
+		args = append(args, userID)
+	}
 	row := r.db.QueryRowContext(ctx, query, args...)
 	var session Session
 	var expires, created, used int64
@@ -89,8 +92,13 @@ func (r *SQLiteRepository) FindSessionByID(ctx context.Context, userID, sessionI
 		return Session{}, fmt.Errorf("find session by id: %w", err)
 	}
 	session.ExpiresAt, session.CreatedAt, session.LastUsedAt = fromMillis(expires), fromMillis(created), fromMillis(used)
-	if revoked.Valid { value := fromMillis(revoked.Int64); session.RevokedAt = &value }
-	if replaced.Valid { session.ReplacedBy = &replaced.String }
+	if revoked.Valid {
+		value := fromMillis(revoked.Int64)
+		session.RevokedAt = &value
+	}
+	if replaced.Valid {
+		session.ReplacedBy = &replaced.String
+	}
 	return session, nil
 }
 
@@ -228,6 +236,15 @@ func (r *SQLiteRepository) RevokeAllUserSessions(ctx context.Context, userID str
 	return nil
 }
 
+func (r *SQLiteRepository) RevokeOtherUserSessions(ctx context.Context, userID, keepSessionID string, now time.Time) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE refresh_tokens SET revoked_at = ?, last_used_at = ?
+		WHERE user_id = ? AND id <> ? AND revoked_at IS NULL`, millis(now), millis(now), userID, keepSessionID)
+	if err != nil {
+		return fmt.Errorf("revoke other user sessions: %w", err)
+	}
+	return nil
+}
+
 type scanner interface{ Scan(dest ...any) error }
 
 func scanUser(row scanner) (User, error) {
@@ -262,7 +279,7 @@ func requireChanged(result sql.Result) error {
 	return nil
 }
 
-func millis(value time.Time) int64 { return value.UTC().UnixMilli() }
+func millis(value time.Time) int64     { return value.UTC().UnixMilli() }
 func fromMillis(value int64) time.Time { return time.UnixMilli(value).UTC() }
 func boolInt(value bool) int {
 	if value {

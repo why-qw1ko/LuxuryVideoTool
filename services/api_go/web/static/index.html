@@ -26,6 +26,7 @@
       </div>
       <div class="header-actions">
         <button id="admin-console-btn" class="ghost admin-only hidden" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg><span class="btn-label">管理后台</span></button>
+        <button id="change-password" class="ghost hidden" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 18v3h3l9.7-9.7"/><path d="m15.6 5.4 3 3"/><path d="M20.5 7.5a2.12 2.12 0 0 0-3-3l-12 12"/></svg><span class="btn-label">修改密码</span></button>
         <button id="theme-toggle" class="ghost icon-btn" type="button" aria-label="切换主题"></button>
         <button id="logout" class="ghost hidden" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg><span class="btn-label">退出</span></button>
       </div>
@@ -246,7 +247,7 @@
     <div class="modal-backdrop" data-close></div>
     <div class="modal-card confirm-card">
       <div class="modal-head"><strong id="confirm-title">确认操作</strong><button type="button" class="modal-close" data-close aria-label="关闭"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
-      <div class="confirm-body"><p id="confirm-message"></p></div>
+      <div class="confirm-body"><div id="confirm-message"></div></div>
       <div class="confirm-actions">
         <button id="confirm-cancel" class="ghost" type="button">取消</button>
         <button id="confirm-ok" class="btn-danger" type="button">确认</button>

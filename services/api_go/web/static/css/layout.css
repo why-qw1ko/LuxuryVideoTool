@@ -11,8 +11,8 @@
 .brand h1,.login-head h2{background:var(--gradient);background-size:200% auto;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;animation:gradientFlow 6s linear infinite}
 .brand p{margin:2px 0 0;font-size:12px;color:var(--text-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .header-actions{grid-column:span 4;display:flex;gap:8px;align-items:center;justify-self:end}
-.header-actions #logout{height:40px;padding:0 12px;white-space:nowrap}
-.header-actions #logout svg{flex-shrink:0}
+.header-actions #change-password,.header-actions #logout{height:40px;padding:0 12px;white-space:nowrap}
+.header-actions #change-password svg,.header-actions #logout svg{flex-shrink:0}
 
 
 /* ================= 主从式布局 ================= */
@@ -111,8 +111,9 @@
   .brand-mark{width:36px;height:36px}
   .brand p{display:none}
   .brand h1{font-size:17px}
-  .header-actions #logout{width:40px;padding:0}
+  .header-actions #change-password,.header-actions #logout{width:40px;padding:0}
   .header-actions #admin-console-btn{width:40px;height:40px;padding:0}
+  .header-actions #change-password .btn-label{display:none}
   .header-actions #admin-console-btn .btn-label{display:none}
   .header-actions #logout .btn-label{display:none}
   .panel,.job-detail{padding:20px}
@@ -153,4 +154,8 @@
   .preview-prev{left:14px}
   .preview-next{right:14px}
 }
-
+@media(max-width:360px){
+  .topbar .brand{width:100%;overflow:hidden;justify-content:center}
+  .topbar .brand-text{max-width:100%;overflow:hidden}
+  .brand h1{font-size:15px}
+}

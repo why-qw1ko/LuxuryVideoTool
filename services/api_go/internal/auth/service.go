@@ -194,6 +194,29 @@ func (s *Service) ResetPassword(ctx context.Context, userID, password string) er
 	return s.repository.RevokeAllUserSessions(ctx, userID, now)
 }
 
+func (s *Service) ChangePassword(ctx context.Context, principal Principal, currentPassword, newPassword string) error {
+	user, err := s.repository.FindUserByID(ctx, principal.UserID)
+	if err != nil {
+		return err
+	}
+	valid, err := VerifyPassword(currentPassword, user.PasswordHash)
+	if err != nil {
+		return fmt.Errorf("verify current password: %w", err)
+	}
+	if !valid {
+		return ErrInvalidCredentials
+	}
+	hash, err := HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	now := s.now().UTC()
+	if err := s.repository.UpdatePassword(ctx, principal.UserID, hash, now); err != nil {
+		return err
+	}
+	return s.repository.RevokeOtherUserSessions(ctx, principal.UserID, principal.SessionID, now)
+}
+
 func (s *Service) SetUserActive(ctx context.Context, userID string, active bool) error {
 	now := s.now().UTC()
 	if err := s.repository.SetUserActive(ctx, userID, active, now); err != nil {
