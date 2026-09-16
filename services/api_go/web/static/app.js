@@ -745,6 +745,17 @@ function jobDetailHTML(job){
   const noteImgs=w.images||[];
   if(w.type==='note')badges.push(noteImgs.length>0&&noteImgs.every(img=>img.animatedUrl)?'<span class="badge badge-note">动图作品</span>':'<span class="badge badge-note">图文作品</span>');
 
+  const expiringFiles=files.filter(f=>f.expiresAt);
+  const mediaExpiry=expiringFiles.reduce((e,f)=>!e||f.expiresAt<e?f.expiresAt:e,null);
+  // 保留期已过：媒体已自动清理，详情页只保留标题与删除入口，不再展示媒体与文案内容。
+  if(mediaExpiry&&new Date(mediaExpiry).getTime()<=Date.now()){
+    return `<article class="job-detail" data-job="${esc(job.id)}">
+    <div class="detail-head"><div><h2>${esc(title)}</h2><div class="badges">${badges.join('')}</div></div><span class="job-time" title="${esc(new Date(job.createdAt).toLocaleString())}">${fmtDate(job.createdAt)}</span></div>
+    <div class="expired-box">${icon('info',14)}<div><strong>任务已过期</strong><p>内容与媒体文件已过保留期并自动清理，无法查看。</p></div></div>
+    <div class="actions"><div class="action-group"><button type="button" data-op="delete" class="danger">${icon('trash',14)} 删除</button></div></div>
+  </article>`;
+  }
+
   const metas=[];
   // 作者/分辨率仅在解析完成后显示；为空显示 "-"（未解析的任务不显示这些行）。
   if(w.douyinWorkId){
@@ -816,8 +827,6 @@ function jobDetailHTML(job){
     ?(noteGallery||zipLink||musicRow?`<div class="detail-media no-cover">${noteGallery}${musicRow}${metas.length?`<div class="detail-meta">${metas.join('')}</div>`:''}${canonical}${zipLink?`<div class="action-group">${zipLink}</div>`:''}</div>`:'')
     :(hasMedia?`<div class="detail-media${cover?'':' no-cover'}">${cover}<div class="detail-side">${metas.length?`<div class="detail-meta">${metas.join('')}</div>`:''}${canonical}</div></div>`:'');
 
-  const expiringFiles=files.filter(f=>f.expiresAt);
-  const mediaExpiry=expiringFiles.reduce((e,f)=>!e||f.expiresAt<e?f.expiresAt:e,null);
   const retentionNote=mediaExpiry?`<p class="retention-note">${icon('info',13)} 媒体文件保留至 ${fmtDate(mediaExpiry)}，届时自动清理；删除本任务会同时删除媒体</p>`:'';
 
   return `<article class="job-detail" data-job="${esc(job.id)}">

@@ -129,6 +129,10 @@ select:disabled{color:var(--text-tertiary);background-color:var(--input);backgro
 .error-box>svg{color:var(--danger);margin-top:2px}
 .error-box strong{color:var(--danger);font-size:12px;letter-spacing:.5px}
 .error-box p{margin:4px 0 0;color:var(--text-secondary);font-size:13px}
+.expired-box{display:flex;gap:10px;align-items:flex-start;margin:10px 0;padding:12px 14px;border-left:3px solid var(--border);border-radius:10px;background:var(--input)}
+.expired-box>svg{color:var(--text-tertiary);margin-top:2px}
+.expired-box strong{color:var(--text-secondary);font-size:12px;letter-spacing:.5px}
+.expired-box p{margin:4px 0 0;color:var(--text-secondary);font-size:13px}
 
 /* ================= 文案与复制 ================= */
 .detail-section{margin-top:18px}
