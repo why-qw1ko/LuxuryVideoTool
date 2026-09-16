@@ -619,7 +619,8 @@ $('#admin-view-users').addEventListener('click',e=>{
   if(op==='disable')return setUserActive(row.dataset.id,false);
   if(op==='enable')return setUserActive(row.dataset.id,true);
   if(op==='password')return resetUserPassword(row.dataset.id);
-  if(op==='sessions')return showUserSessions(row.dataset.id,row.querySelector('td:nth-child(2)')?.textContent||'');
+  // 显示名优先从用户缓存取：移动端卡片布局没有 td，querySelector 会取到空串导致会话面板标题丢用户名。
+  if(op==='sessions'){const u=adminUsers.find(x=>x.id===row.dataset.id);return showUserSessions(row.dataset.id,u?.displayName||u?.username||'')}
 });
 async function setUserActive(id,active){
   if(!active&&!(await confirmDialog({title:'禁用用户',message:'禁用后该用户的所有会话会立即下线且无法登录，确定？',confirmText:'禁用'})))return;
@@ -677,11 +678,18 @@ function fileLabel(f){
   if(f.kind==='video'||(f.mimeType||'').startsWith('video/'))return'下载无水印视频';
   return`下载 ${f.name}`;
 }
+// 任务媒体保留期：取所有带 expiresAt 文件的最早到期时间；过期后媒体已清理，列表与详情按“已过期”展示。
+function jobMediaExpiry(job){
+  const files=job?.result?.files||[];
+  return files.filter(f=>f.expiresAt).reduce((e,f)=>!e||f.expiresAt<e?f.expiresAt:e,null);
+}
+function jobExpired(job){const expiry=jobMediaExpiry(job);return !!expiry&&new Date(expiry).getTime()<=Date.now()}
 function jobSignature(job){
   // previewUrl/expiresAt 每次轮询都会变化（预览签名按需生成），不算入签名，否则每 5s 重渲染导致动图/图片闪烁。
+  // 过期标记是稳定布尔值，算入签名：任务在页面停留期间过期时，轮询能自动刷新列表行与详情。
   const result=job.result||null;
   const stable=result?{...result,files:(result.files||[]).map(f=>({id:f.id,kind:f.kind,name:f.name,mimeType:f.mimeType,sizeBytes:f.sizeBytes}))}:null;
-  return [job.status,job.progress,job.updatedAt,job.error?.code,JSON.stringify(stable)].join('|');
+  return [job.status,job.progress,job.updatedAt,job.error?.code,jobExpired(job),JSON.stringify(stable)].join('|');
 }
 
 function jobRowHTML(job){
@@ -692,6 +700,7 @@ function jobRowHTML(job){
   if(w.authorName)meta.push(w.authorName);
   if(w.durationMs)meta.push(fmtDuration(w.durationMs));
   if(meta.length)meta.push(actionLabels[job.action]||'');
+  if(jobExpired(job))meta.push('已过期');
   return `<div class="row-top"><span class="row-title">${esc(title)}</span><span class="row-time">${fmtShort(job.createdAt)}</span></div>
   <div class="row-meta"><span class="dot dot-${tone}"></span>${esc(statusLabels[job.status]||job.status)}${meta.length?' · '+esc(meta.join(' · ')):''}</div>`;
 }
@@ -745,10 +754,9 @@ function jobDetailHTML(job){
   const noteImgs=w.images||[];
   if(w.type==='note')badges.push(noteImgs.length>0&&noteImgs.every(img=>img.animatedUrl)?'<span class="badge badge-note">动图作品</span>':'<span class="badge badge-note">图文作品</span>');
 
-  const expiringFiles=files.filter(f=>f.expiresAt);
-  const mediaExpiry=expiringFiles.reduce((e,f)=>!e||f.expiresAt<e?f.expiresAt:e,null);
+  const mediaExpiry=jobMediaExpiry(job);
   // 保留期已过：媒体已自动清理，详情页只保留标题与删除入口，不再展示媒体与文案内容。
-  if(mediaExpiry&&new Date(mediaExpiry).getTime()<=Date.now()){
+  if(jobExpired(job)){
     return `<article class="job-detail" data-job="${esc(job.id)}">
     <div class="detail-head"><div><h2>${esc(title)}</h2><div class="badges">${badges.join('')}</div></div><span class="job-time" title="${esc(new Date(job.createdAt).toLocaleString())}">${fmtDate(job.createdAt)}</span></div>
     <div class="expired-box">${icon('info',14)}<div><strong>任务已过期</strong><p>内容与媒体文件已过保留期并自动清理，无法查看。</p></div></div>
@@ -848,6 +856,11 @@ function renderDetail(){
   if(sig!==detailSig){
     detailSig=sig;
     $('#detail').innerHTML=jobDetailHTML(currentJob);
+  }
+  // 过期任务不再展示内容，其背景音乐也一并停止，避免继续播放已清理的音频地址。
+  if(jobExpired(currentJob)){
+    if(taskMusic.jobId===currentJob.id&&taskMusic.playing)stopTaskMusic();
+    return;
   }
   syncTaskMusicWithJob(currentJob);
   updateTaskMusicUI();
