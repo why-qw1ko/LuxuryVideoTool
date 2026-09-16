@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -11,6 +13,43 @@ import (
 
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/auth"
 )
+
+var gzipPool = sync.Pool{New: func() any { return gzip.NewWriter(io.Discard) }}
+
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	gz *gzip.Writer
+}
+
+func (w *gzipResponseWriter) WriteHeader(code int) {
+	// 压缩后长度未知，剥掉 FileServer 设置的 Content-Length，否则响应非法。
+	w.Header().Del("Content-Length")
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *gzipResponseWriter) Write(b []byte) (int, error) {
+	return w.gz.Write(b)
+}
+
+// gzipStatic 仅用于静态资源（static 目录下全是可压缩的文本：html/css/js）。
+// 媒体文件下载走独立的 file handler，不经过这里，避免二次压缩浪费 CPU。
+func gzipStatic(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") || r.Header.Get("Range") != "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Add("Vary", "Accept-Encoding")
+		gz := gzipPool.Get().(*gzip.Writer)
+		gz.Reset(w)
+		defer func() {
+			gz.Close()
+			gzipPool.Put(gz)
+		}()
+		next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, gz: gz}, r)
+	})
+}
 
 type statusRecorder struct {
 	http.ResponseWriter
