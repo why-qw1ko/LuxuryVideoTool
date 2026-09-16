@@ -702,8 +702,19 @@ func New(deps Dependencies) http.Handler {
 	if err != nil {
 		panic("invalid embedded web assets: " + err.Error())
 	}
-	webHandler := http.FileServer(http.FS(webFiles))
-	mux.Handle("GET /", webHandler)
+	webHandler := gzipStatic(http.FileServer(http.FS(webFiles)))
+	// embed 文件无修改时间，FileServer 无法生成 Last-Modified，浏览器每次都全量重下静态资源。
+	// 用「版本+提交号」作 ETag：同一次部署内重复访问走 304 零流量，发新版后自然失效。
+	webETag := `"` + version.Version + "-" + version.Commit + `"`
+	mux.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", webETag)
+		w.Header().Set("Cache-Control", "no-cache")
+		if r.Header.Get("If-None-Match") == webETag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		webHandler.ServeHTTP(w, r)
+	}))
 	protected.HandleFunc("POST /api/v1/jobs", func(w http.ResponseWriter, r *http.Request) {
 		if deps.Jobs == nil {
 			writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true)

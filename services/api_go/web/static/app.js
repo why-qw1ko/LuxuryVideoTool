@@ -389,6 +389,19 @@ function renderPager(el,page,totalPages,onPage){
 
 /* ---------- 后台仪表盘 ---------- */
 let adminUsers=[];
+// echarts.min.js 约 1MB，只有管理员仪表盘用到，改为打开仪表盘时才动态加载，避免拖慢登录页。
+let echartsPromise=null;
+function loadEcharts(){
+  if(typeof echarts!=='undefined')return Promise.resolve();
+  if(!echartsPromise)echartsPromise=new Promise((resolve,reject)=>{
+    const s=document.createElement('script');
+    s.src='/vendor/echarts.min.js';
+    s.onload=()=>resolve();
+    s.onerror=()=>{echartsPromise=null;reject(new Error('图表库加载失败'))};
+    document.head.appendChild(s);
+  });
+  return echartsPromise;
+}
 function skeletonRows(count=4){
   return `<div class="skeleton-list" aria-hidden="true">${Array.from({length:count},()=>`<div class="skeleton-row"><span></span><span></span><span></span></div>`).join('')}</div>`;
 }
@@ -397,7 +410,7 @@ async function loadAdminStats(){
   try{
     if(!$('#admin-stats-cards').children.length)$('#admin-stats-cards').innerHTML=skeletonRows(4);
     document.querySelectorAll('.chart-card').forEach(card=>card.classList.add('loading'));
-    const data=await api('/api/v1/admin/stats');
+    const [data]=await Promise.all([api('/api/v1/admin/stats'),loadEcharts()]);
     const stats=data.stats||{};
     // 数据未变化时不重绘，避免轮询导致图表/卡片闪烁
     const sig=JSON.stringify([stats.users,stats.activeUsers,stats.totalJobs,stats.todayJobs,stats.byStatus,stats.byDay]);
