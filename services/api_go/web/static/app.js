@@ -366,7 +366,9 @@ $('#provider-form').addEventListener('submit',async e=>{e.preventDefault();const
 
 /* ---------- 新建任务 ---------- */
 $('#submit-task').innerHTML=icon('arrow-up-right',14)+' 提取内容';
-$('#capture-form').addEventListener('submit',async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{const action=$('#info-only').checked?'info':'full';const data=await api('/api/v1/jobs',{method:'POST',headers:{'Idempotency-Key':uuidv4()},body:JSON.stringify({shareText:$('#share-text').value.trim(),action,options:{force:false,keepVideo:action==='full',languageHints:['zh','en'],hotwords:[]}})});$('#share-text').value='';await loadJobs();if(data.job?.id)selectJob(data.job.id);toast('任务已创建，正在处理','success')}catch(err){toast(err.message,'error')}finally{button.disabled=false}});
+const syncTranscribeOption=()=>{const infoOnly=$('#info-only').checked;$('#with-transcribe').disabled=infoOnly;$('#with-transcribe-wrap').classList.toggle('disabled',infoOnly)};
+$('#info-only').addEventListener('change',syncTranscribeOption);syncTranscribeOption();
+$('#capture-form').addEventListener('submit',async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{const infoOnly=$('#info-only').checked;const action=infoOnly?'info':($('#with-transcribe').checked?'full':'download');const data=await api('/api/v1/jobs',{method:'POST',headers:{'Idempotency-Key':uuidv4()},body:JSON.stringify({shareText:$('#share-text').value.trim(),action,options:{force:false,keepVideo:action==='full',languageHints:['zh','en'],hotwords:[]}})});$('#share-text').value='';await loadJobs();if(data.job?.id)selectJob(data.job.id);toast('任务已创建，正在处理','success')}catch(err){toast(err.message,'error')}finally{button.disabled=false}});
 
 /* ---------- 任务列表 ---------- */
 $('#search-form').addEventListener('submit',e=>{e.preventDefault();jobsPage=1;loadJobs()});
