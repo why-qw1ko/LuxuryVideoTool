@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const DouyinResolverVersion = "3"
+const DouyinResolverVersion = "4"
 
 type Douyin struct {
 	client *SafeClient
@@ -63,7 +63,17 @@ func (d *Douyin) Resolve(ctx context.Context, shareText string) (Work, error) {
 		if ok {
 			return work, nil
 		}
-		logResolveError(ctx, "detail API failed, falling back to share-page parse", detailErr)
+		logResolveError(ctx, "detail API failed, falling back to browser detail", detailErr)
+		browserWork, browserErr := d.resolveViaBrowser(ctx, workID, workType)
+		if browserErr == nil {
+			return browserWork, nil
+		}
+		logResolveError(ctx, "browser detail fallback failed", browserErr)
+		if detailErr == nil {
+			detailErr = browserErr
+		} else {
+			detailErr = fmt.Errorf("%v; browser fallback: %w", detailErr, browserErr)
+		}
 	}
 
 	body, finalURL, err := d.client.Get(ctx, input.URL)
@@ -180,34 +190,57 @@ func (d *Douyin) resolveViaDetailAPI(ctx context.Context, workID, workType strin
 			lastErr = reqErr
 			continue
 		}
-		var payload struct {
-			StatusCode  int            `json:"status_code"`
-			AwemeDetail map[string]any `json:"aweme_detail"`
-			StatusMsg   string         `json:"status_msg"`
-		}
-		if err := json.Unmarshal(body, &payload); err != nil {
-			lastErr = err
+		work, parseErr := d.workFromDetailBody(body, "aweme_detail")
+		if parseErr != nil {
+			lastErr = parseErr
 			continue
 		}
-		if payload.StatusCode != 0 || payload.AwemeDetail == nil {
-			msg := payload.StatusMsg
-			if payload.StatusCode == 403 {
-				msg = "被抖音风控拦截（可能 ttwid 失效，会自动续期后重试）"
-			}
-			lastErr = fmt.Errorf("detail API status %d: %s", payload.StatusCode, msg)
-			continue
-		}
-		work, ok := parseWorkObject(payload.AwemeDetail)
-		if !ok {
-			return Work{}, false, ErrResolveFailed
-		}
-		work.VideoURL = withoutWatermark(work.VideoURL)
-		work.CanonicalURL = canonicalURL(work.Type, work.DouyinWorkID, nil)
-		work.ResolverName, work.ResolverVersion, work.ResolvedAt = "aweme_detail", DouyinResolverVersion, d.now().UTC()
-		work.Metadata = map[string]any{"source": "aweme_detail"}
 		return work, true, nil
 	}
 	return Work{}, false, lastErr
+}
+
+func (d *Douyin) resolveViaBrowser(ctx context.Context, workID, workType string) (Work, error) {
+	if d.ttwid == nil {
+		return Work{}, fmt.Errorf("%w: browser session not configured", ErrResolveFailed)
+	}
+	kind := "video"
+	if workType == "note" {
+		kind = "note"
+	}
+	pageURL := "https://www.douyin.com/" + kind + "/" + workID
+	body, err := d.ttwid.FetchDetail(ctx, pageURL, workID)
+	if err != nil {
+		return Work{}, fmt.Errorf("%w: %v", ErrResolveFailed, err)
+	}
+	return d.workFromDetailBody(body, "browser_detail")
+}
+
+func (d *Douyin) workFromDetailBody(body []byte, source string) (Work, error) {
+	var payload struct {
+		StatusCode  int            `json:"status_code"`
+		AwemeDetail map[string]any `json:"aweme_detail"`
+		StatusMsg   string         `json:"status_msg"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return Work{}, fmt.Errorf("%w: invalid detail response: %v", ErrResolveFailed, err)
+	}
+	if payload.StatusCode != 0 || payload.AwemeDetail == nil {
+		msg := payload.StatusMsg
+		if payload.StatusCode == 403 {
+			msg = "被抖音风控拦截"
+		}
+		return Work{}, fmt.Errorf("%w: detail API status %d: %s", ErrResolveFailed, payload.StatusCode, msg)
+	}
+	work, ok := parseWorkObject(payload.AwemeDetail)
+	if !ok {
+		return Work{}, ErrResolveFailed
+	}
+	work.VideoURL = withoutWatermark(work.VideoURL)
+	work.CanonicalURL = canonicalURL(work.Type, work.DouyinWorkID, nil)
+	work.ResolverName, work.ResolverVersion, work.ResolvedAt = source, DouyinResolverVersion, d.now().UTC()
+	work.Metadata = map[string]any{"source": source}
+	return work, nil
 }
 
 func workFromTree(value any) (Work, bool) {

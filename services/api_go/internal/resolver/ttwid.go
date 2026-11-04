@@ -42,6 +42,7 @@ type douyinTtwid struct {
 // TtwidManager 负责 ttwid 的加载、续期与引导。并发安全。
 type TtwidManager struct {
 	mu          sync.Mutex
+	browserMu   sync.Mutex
 	client      *SafeClient
 	storePath   string
 	browserPath string
@@ -149,53 +150,15 @@ func (m *TtwidManager) save(t *douyinTtwid) {
 // 轮询 CDP cookies 直到出现 ttwid → 关闭浏览器。
 // 注意：抖音首页不触发 ttwid 生成，hintURL 需指向视频/图集等完整应用页。
 func (m *TtwidManager) bootstrap(ctx context.Context, hintURL string) (string, error) {
-	browser := m.browserPath
-	if browser == "" {
-		browser = findBrowserExecutable()
-	}
-	if browser == "" {
-		return "", fmt.Errorf("未找到 Edge/Chrome，无法引导 ttwid；可在环境变量 DOUYIN_BROWSER_PATH 指定浏览器路径")
-	}
+	m.browserMu.Lock()
+	defer m.browserMu.Unlock()
 
-	port, err := freeTCPPort()
+	browser, err := m.launchHeadlessBrowser(ctx)
 	if err != nil {
 		return "", err
 	}
-	userData, err := os.MkdirTemp("", "douyin-cdp-")
-	if err != nil {
-		return "", err
-	}
-	defer os.RemoveAll(userData)
-
-	args := []string{
-		"--headless=new", "--disable-gpu", "--no-sandbox",
-		fmt.Sprintf("--remote-debugging-port=%d", port),
-		"--user-data-dir=" + userData, "--no-first-run",
-		"--disable-background-networking", "--disable-extensions",
-		"--remote-allow-origins=*", "about:blank",
-	}
-	cmd := exec.CommandContext(ctx, browser, args...)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("启动无头浏览器失败: %w", err)
-	}
-	defer func() {
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
-	}()
-
-	pageWS, err := waitForDevtoolsPage(ctx, port)
-	if err != nil {
-		return "", err
-	}
-
-	conn, err := dialCDP(pageWS)
-	if err != nil {
-		return "", err
-	}
-	defer conn.Close()
-
+	defer browser.Close()
+	conn := browser.conn
 	if _, err := conn.Call("Network.enable", nil, 5*time.Second); err != nil {
 		return "", err
 	}
@@ -238,6 +201,78 @@ func (m *TtwidManager) bootstrap(ctx context.Context, hintURL string) (string, e
 	return "", fmt.Errorf("无头浏览器在 %d 秒内未取得 ttwid（请检查网络与浏览器可用性）", 25)
 }
 
+type headlessBrowser struct {
+	cmd      *exec.Cmd
+	conn     *cdpConn
+	userData string
+}
+
+func (b *headlessBrowser) Close() {
+	if b == nil {
+		return
+	}
+	if b.conn != nil {
+		_, _ = b.conn.Call("Browser.close", nil, 2*time.Second)
+		b.conn.Close()
+	}
+	if b.cmd != nil && b.cmd.Process != nil {
+		_ = b.cmd.Process.Kill()
+		_, _ = b.cmd.Process.Wait()
+	}
+	if b.userData != "" {
+		_ = os.RemoveAll(b.userData)
+	}
+}
+
+func (m *TtwidManager) launchHeadlessBrowser(ctx context.Context) (*headlessBrowser, error) {
+	browser := m.browserPath
+	if browser == "" {
+		browser = findBrowserExecutable()
+	}
+	if browser == "" {
+		return nil, fmt.Errorf("未找到 Edge/Chrome；可在环境变量 DOUYIN_BROWSER_PATH 指定浏览器路径")
+	}
+
+	port, err := freeTCPPort()
+	if err != nil {
+		return nil, err
+	}
+	userData, err := os.MkdirTemp("", "douyin-cdp-")
+	if err != nil {
+		return nil, err
+	}
+	args := []string{
+		"--headless=new", "--disable-gpu", "--no-sandbox",
+		fmt.Sprintf("--remote-debugging-port=%d", port),
+		"--user-data-dir=" + userData, "--no-first-run",
+		"--disable-background-networking", "--disable-extensions",
+		"--remote-allow-origins=*", "about:blank",
+	}
+	cmd := exec.CommandContext(ctx, browser, args...)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		_ = os.RemoveAll(userData)
+		return nil, fmt.Errorf("启动无头浏览器失败: %w", err)
+	}
+
+	pageWS, err := waitForDevtoolsPage(ctx, port)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+		_ = os.RemoveAll(userData)
+		return nil, err
+	}
+	conn, err := dialCDP(pageWS)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+		_ = os.RemoveAll(userData)
+		return nil, err
+	}
+	return &headlessBrowser{cmd: cmd, conn: conn, userData: userData}, nil
+}
+
 // --- CDP 最小客户端 ---
 
 type cdpConn struct {
@@ -263,8 +298,8 @@ func (c *cdpConn) Call(method string, params map[string]any, timeout time.Durati
 	_ = c.ws.SetReadDeadline(time.Now().Add(timeout))
 	for {
 		var resp struct {
-			ID     int             `json:"id"`
-			Error  *struct {
+			ID    int `json:"id"`
+			Error *struct {
 				Message string `json:"message"`
 			} `json:"error"`
 			Result json.RawMessage `json:"result"`
@@ -296,7 +331,7 @@ func waitForDevtoolsPage(ctx context.Context, port int) (string, error) {
 		resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/json", port))
 		if err == nil {
 			var tabs []struct {
-				Type                string `json:"type"`
+				Type                 string `json:"type"`
 				WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 			}
 			readErr := json.NewDecoder(resp.Body).Decode(&tabs)

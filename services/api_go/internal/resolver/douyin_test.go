@@ -2,6 +2,21 @@ package resolver
 
 import "testing"
 
+func TestWorkFromDetailBodyBrowserSource(t *testing.T) {
+	d := NewDouyin(nil, nil)
+	body := []byte(`{"status_code":0,"aweme_detail":{"aweme_id":"123","desc":"标题","author":{"nickname":"作者"},"video":{"duration":1200,"width":1080,"height":1920,"play_addr":{"url_list":["https://example.test/playwm/video"]}}}}`)
+	work, err := d.workFromDetailBody(body, "browser_detail")
+	if err != nil {
+		t.Fatalf("workFromDetailBody failed: %v", err)
+	}
+	if work.DouyinWorkID != "123" || work.Type != "video" || work.VideoURL != "https://example.test/play/video" {
+		t.Fatalf("work = %#v", work)
+	}
+	if work.ResolverName != "browser_detail" || work.ResolverVersion != DouyinResolverVersion {
+		t.Fatalf("resolver = %q version = %q", work.ResolverName, work.ResolverVersion)
+	}
+}
+
 func TestWorkFromRouterDataVideo(t *testing.T) {
 	data := map[string]any{"loaderData": map[string]any{"item": map[string]any{
 		"aweme_id": "123", "desc": "标题", "author": map[string]any{"uid": "u1", "nickname": "作者"},
