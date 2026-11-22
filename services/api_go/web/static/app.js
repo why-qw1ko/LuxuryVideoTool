@@ -7,6 +7,9 @@ let adminJobsPage=1,adminJobsPageSize=20,adminJobsTotal=0;
 let taskMusic={jobId:null,source:'',url:'',playing:false};
 let statusChart=null,trendChart=null;
 let lastStatsSig='',lastAdminJobsSig='';
+let sessionEpoch=0,jobsLoadId=0,adminJobsLoadId=0,adminUsersLoadId=0,adminDetailLoadId=0;
+let adminDetailSig='';
+let jobsPending=null,adminJobsPending=null,adminDetailPending=null;
 
 /* ---------- 主题（仅浅色 / 深色） ---------- */
 const THEMES=['light','dark'];
@@ -130,23 +133,35 @@ applyTheme();
 
 /* ---------- 移动端收缩侧边栏 ---------- */
 let sidebarLastFocus=null;
+const sidebarMedia=matchMedia('(max-width:960px)');
+function syncSidebarAccessibility(){
+  const frontSidebar=$('.master-list'),adminSidebar=$('.admin-sidebar');
+  [frontSidebar,adminSidebar].forEach((sidebar,index)=>{
+    if(!sidebar)return;
+    const hidden=!session||(index===0?adminOpen:!adminOpen)||(sidebarMedia.matches&&!sidebar.classList.contains('open'));
+    sidebar.setAttribute('aria-hidden',String(hidden));
+    sidebar.inert=hidden;
+  });
+}
 function setSidebar(open){
   const frontSidebar=$('.master-list'),adminSidebar=$('.admin-sidebar');
   const target=adminOpen?adminSidebar:frontSidebar;
+  open=!!open&&sidebarMedia.matches&&!!session;
   if(open)sidebarLastFocus=document.activeElement;
   if(frontSidebar)frontSidebar.classList.toggle('open',!adminOpen&&open);
   if(adminSidebar)adminSidebar.classList.toggle('open',adminOpen&&open);
   $('#sidebar-backdrop').classList.toggle('hidden',!open);
   $('#sidebar-toggle').setAttribute('aria-expanded',open?'true':'false');
   $('#sidebar-toggle').setAttribute('aria-label',open?'关闭菜单':'打开菜单');
-  if(frontSidebar)frontSidebar.setAttribute('aria-hidden',(!open||adminOpen)?'true':'false');
-  if(adminSidebar)adminSidebar.setAttribute('aria-hidden',(!open||!adminOpen)?'true':'false');
+  syncSidebarAccessibility();
   if(open&&target){
     requestAnimationFrame(()=>target.querySelector('button,a,input,select,textarea')?.focus());
   }else if(sidebarLastFocus&&document.contains(sidebarLastFocus)){
     sidebarLastFocus.focus();
+    sidebarLastFocus=null;
   }
 }
+sidebarMedia.addEventListener('change',()=>setSidebar(false));
 $('#sidebar-toggle').innerHTML=icon('menu',18);
 $('#sidebar-toggle').setAttribute('aria-label','打开菜单');
 $('#sidebar-toggle').addEventListener('click',()=>{
@@ -180,12 +195,16 @@ function showView(name){
   $('#settings-link').classList.toggle('active',name==='settings');
   if(name==='settings')loadProviders();
 }
-function selectJob(id){
-  if(selectedId!==id){
+function selectJob(id,job=null){
+  if(selectedId!==id||job){
     if(taskMusic.jobId&&taskMusic.jobId!==id)stopTaskMusic();
-    selectedId=id;detailSig='';currentJob=id?(jobsCache.find(j=>j.id===id)||null):null;
+    selectedId=id;detailSig='';currentJob=id?(job||jobsCache.find(j=>j.id===id)||null):null;
   }
-  document.querySelectorAll('.job-row').forEach(r=>r.classList.toggle('selected',r.dataset.id===id));
+  document.querySelectorAll('.job-row').forEach(r=>{
+    const selected=r.dataset.id===id;
+    r.classList.toggle('selected',selected);
+    r.setAttribute('aria-current',String(selected));
+  });
   showView(id?'detail':'new');
   if(!id)stopTaskMusic();
   renderDetail();
@@ -201,19 +220,21 @@ function openAdminConsole(){
     toast('已在后台','info');
     return;
   }
-  setSidebar(false);
   adminOpen=true;adminMode=false;selectedId=null;currentJob=null;
+  setSidebar(false);
   lastStatsSig=''; // 重新打开时按当前主题重绘图表，避免沿用旧配色
   show('#app',false);show('#admin-console',true);
   adminShowView('dashboard');
 }
 function closeAdminConsole(){
-  setSidebar(false);
   adminOpen=false;adminMode=false;
+  setSidebar(false);
   show('#admin-console',false);show('#app',true);
   selectJob(null);
 }
 function adminShowView(name){
+  adminDetailLoadId++;
+  if(name!=='detail'){adminMode=false;adminDetailSig=''}
   adminCurrentView=name;
   ['dashboard','jobs','users','detail'].forEach(v=>show('#admin-view-'+v,v===name));
   document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>btn.classList.toggle('active',btn.dataset.adminView===name));
@@ -236,9 +257,15 @@ document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>btn.addEv
 }));
 
 function enter(value){
+  clearInterval(poll);
+  sessionEpoch++;jobsLoadId++;adminJobsLoadId++;adminUsersLoadId++;adminDetailLoadId++;
+  adminDetailSig='';jobsPending=null;adminJobsPending=null;adminDetailPending=null;
+  jobsCache=[];adminJobsCache=[];adminUsers=[];selectedId=null;currentJob=null;detailSig='';
+  lastStatsSig='';lastAdminJobsSig='';
   archiveDownloads.clear();
   save(value);
   adminMode=false;currentView='new';adminOpen=false;jobsPage=1;adminJobsPage=1;
+  setSidebar(false);
   if($('#admin-user-name'))$('#admin-user-name').textContent=value?.user?.displayName||'';
   if($('#admin-user-role'))$('#admin-user-role').textContent=value?.user?.role==='admin'?'管理员':'普通用户';
   if($('#admin-user-avatar'))$('#admin-user-avatar').textContent=(value?.user?.displayName||'?').trim().charAt(0).toUpperCase();
@@ -254,8 +281,9 @@ function enter(value){
     poll=setInterval(()=>{
       if(adminOpen){
         if(adminCurrentView==='dashboard')loadAdminStats();
-        if(adminCurrentView==='jobs')loadAdminJobs();
-      }else loadJobs();
+        if(adminCurrentView==='jobs')loadAdminJobs(true);
+        if(adminCurrentView==='detail'&&currentJob?.id)viewAdminJob(currentJob.id,true,true);
+      }else loadJobs(true);
     },5000);
   }else{
     clearInterval(poll);
@@ -366,16 +394,55 @@ async function loadProviders(){try{const data=await api('/api/v1/admin/settings/
 $('#provider-form').addEventListener('submit',async e=>{e.preventDefault();const body={};const model=$('#asr-model')?.value.trim();if(model)body.asrModel=model;if($('#clear-aliyun').checked)body.aliyunApiKey='';else if($('#aliyun-key').value.trim())body.aliyunApiKey=$('#aliyun-key').value.trim();if($('#clear-silicon').checked)body.siliconFlowApiKey='';else if($('#silicon-key').value.trim())body.siliconFlowApiKey=$('#silicon-key').value.trim();if(!Object.keys(body).length)return toast('请输入需要保存的 Key、模型，或勾选清除','warning');try{await api('/api/v1/admin/settings/providers',{method:'PUT',body:JSON.stringify(body)});$('#aliyun-key').value=$('#silicon-key').value='';$('#clear-aliyun').checked=$('#clear-silicon').checked=false;toast('配置已安全保存并立即生效','success');await loadProviders()}catch(err){toast(err.message,'error')}});
 
 /* ---------- 新建任务 ---------- */
-$('#submit-task').innerHTML=icon('arrow-up-right',14)+' 提取内容';
+$('#submit-task').textContent='开始提取';
 const syncTranscribeOption=()=>{const infoOnly=$('#info-only').checked;$('#with-transcribe').disabled=infoOnly;$('#with-transcribe-wrap').classList.toggle('disabled',infoOnly)};
 $('#info-only').addEventListener('change',syncTranscribeOption);syncTranscribeOption();
-$('#capture-form').addEventListener('submit',async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{const infoOnly=$('#info-only').checked;const action=infoOnly?'info':($('#with-transcribe').checked?'full':'download');const data=await api('/api/v1/jobs',{method:'POST',headers:{'Idempotency-Key':uuidv4()},body:JSON.stringify({shareText:$('#share-text').value.trim(),action,options:{force:false,keepVideo:action==='full',languageHints:['zh','en'],hotwords:[]}})});$('#share-text').value='';await loadJobs();if(data.job?.id)selectJob(data.job.id);toast('任务已创建，正在处理','success')}catch(err){toast(err.message,'error')}finally{button.disabled=false}});
+$('#capture-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const button=e.submitter||$('#submit-task');
+  if(button.disabled)return;
+  const shareText=$('#share-text').value.trim();
+  if(!shareText){$('#share-text').focus();return toast('请先粘贴抖音分享文本或作品链接','warning')}
+  const epoch=sessionEpoch;
+  button.disabled=true;button.setAttribute('aria-busy','true');
+  try{
+    const infoOnly=$('#info-only').checked;
+    const action=infoOnly?'info':($('#with-transcribe').checked?'full':'download');
+    const data=await api('/api/v1/jobs',{method:'POST',headers:{'Idempotency-Key':uuidv4()},body:JSON.stringify({shareText,action,options:{force:false,keepVideo:action==='full',languageHints:['zh','en'],hotwords:[]}})});
+    if(epoch!==sessionEpoch||!session)return;
+    $('#share-text').value='';
+    jobsPage=1;$('#query').value='';$('#status').value='';
+    if(data.job?.id)selectJob(data.job.id,data.job);
+    await loadJobs();
+    if(epoch===sessionEpoch&&session)toast('任务已创建，正在处理','success');
+  }catch(err){if(epoch===sessionEpoch)toast(err.message,'error')}
+  finally{button.disabled=false;button.setAttribute('aria-busy','false')}
+});
 
 /* ---------- 任务列表 ---------- */
 $('#search-form').addEventListener('submit',e=>{e.preventDefault();jobsPage=1;loadJobs()});
-$('#refresh').addEventListener('click',loadJobs);
+$('#refresh').addEventListener('click',()=>{jobsPage=1;loadJobs()});
 $('#status').addEventListener('change',()=>{jobsPage=1;loadJobs()});
-async function loadJobs(){if(!session)return;try{const q=new URLSearchParams({q:$('#query').value.trim(),status:$('#status').value,limit:String(jobsPageSize),offset:String((jobsPage-1)*jobsPageSize)});const data=await api(`/api/v1/jobs?${q}`);jobsTotal=data.total||0;renderList(data.jobs||[]);if($('#job-total'))$('#job-total').textContent=`${jobsTotal} 个任务`;renderPager($('#job-pager'),jobsPage,Math.max(1,Math.ceil(jobsTotal/jobsPageSize)),p=>{jobsPage=p;loadJobs()})}catch(err){if(err.message.includes('登录'))enter(null);else toast(err.message,'error')}}
+async function loadJobs(polling=false){
+  if(!session)return;
+  const q=new URLSearchParams({q:$('#query').value.trim(),status:$('#status').value,limit:String(jobsPageSize),offset:String((jobsPage-1)*jobsPageSize)});
+  if(polling&&jobsPending?.key===String(q)&&jobsPending.epoch===sessionEpoch)return;
+  const requestId=++jobsLoadId,epoch=sessionEpoch,pending={key:String(q),epoch};
+  jobsPending=pending;
+  try{
+    const data=await api(`/api/v1/jobs?${q}`);
+    if(requestId!==jobsLoadId||epoch!==sessionEpoch||!session)return;
+    jobsTotal=data.total||0;
+    const totalPages=Math.max(1,Math.ceil(jobsTotal/jobsPageSize));
+    if(jobsPage>totalPages){jobsPage=totalPages;return loadJobs()}
+    renderList(data.jobs||[]);
+    if($('#job-total'))$('#job-total').textContent=`${jobsTotal} 个任务`;
+    renderPager($('#job-pager'),jobsPage,totalPages,p=>{jobsPage=p;loadJobs()});
+  }catch(err){
+    if(requestId!==jobsLoadId||epoch!==sessionEpoch)return;
+    if(err.message.includes('登录'))enter(null);else toast(err.message,'error');
+  }finally{if(jobsPending===pending)jobsPending=null}
+}
 // 通用分页条：onPage 接收目标页码；单页时不渲染。
 function renderPager(el,page,totalPages,onPage){
   if(!el)return;
@@ -435,17 +502,18 @@ function renderStatCards(stats){
   $('#admin-stats-cards').innerHTML=cards.map(card=>`<div class="stat-card"><span>${esc(card.label)}</span><strong>${esc(card.value)}</strong></div>`).join('');
 }
 function chartColors(){
-  const dark=document.documentElement.dataset.theme==='dark';
-  return {text:dark?'#A2A8BB':'#5C6474',axis:dark?'#2A2E38':'#DFE3EA',grid:dark?'#20232B':'#F3F4F6'};
+  const style=getComputedStyle(document.documentElement);
+  const token=name=>style.getPropertyValue(name).trim();
+  return {text:token('--text-secondary'),axis:token('--border'),grid:token('--input'),card:token('--card'),muted:token('--text-tertiary'),primary:token('--primary'),primary2:token('--primary-2'),primaryLight:token('--primary-light'),accent:token('--accent-2'),success:token('--success'),danger:token('--danger'),warning:token('--warning')};
 }
 function renderStatusChart(byStatus){
   const el=$('#chart-status');
   if(typeof echarts==='undefined'){el.innerHTML='<p class="meta">ECharts 未加载</p>';return}
   if(!statusChart)statusChart=echarts.init(el);
   const labels={queued:'排队中',resolving:'解析信息',downloading:'下载中',extracting:'提取音频',transcribing:'识别中',postprocessing:'生成结果',completed:'已完成',failed:'失败',retry_wait:'等待重试',cancelled:'已取消'};
-  const colors={queued:'#9AA1B2',resolving:'#335CFF',downloading:'#3D5AFE',extracting:'#7D94FF',transcribing:'#7D94FF',postprocessing:'#7D94FF',completed:'#2FA96A',failed:'#E5484D',retry_wait:'#E8912D',cancelled:'#5C6474'};
-  const data=Object.entries(byStatus).map(([key,value])=>({name:labels[key]||key,value,itemStyle:{color:colors[key]||'#335CFF'}})).filter(d=>d.value>0);
   const c=chartColors();
+  const colors={queued:c.muted,resolving:c.primary,downloading:c.primary2,extracting:c.accent,transcribing:c.primary2,postprocessing:c.accent,completed:c.success,failed:c.danger,retry_wait:c.warning,cancelled:c.text};
+  const data=Object.entries(byStatus).map(([key,value])=>({name:labels[key]||key,value,itemStyle:{color:colors[key]||c.primary}})).filter(d=>d.value>0);
   statusChart.setOption({
     color:Object.values(colors),
     animation:true,
@@ -455,7 +523,7 @@ function renderStatusChart(byStatus){
     animationEasingUpdate:'cubicOut',
     tooltip:{trigger:'item',formatter:'{b}: {c} ({d}%)'},
     legend:{bottom:0,textStyle:{color:c.text}},
-    series:[{type:'pie',radius:['38%','64%'],center:['50%','44%'],avoidLabelOverlap:true,itemStyle:{borderColor:document.documentElement.dataset.theme==='dark'?'#17191F':'#FFFFFF',borderWidth:2},label:{color:c.text},data:data.length?data:[{name:'暂无任务',value:1,itemStyle:{color:c.grid}}]}]
+    series:[{type:'pie',radius:['38%','64%'],center:['50%','44%'],avoidLabelOverlap:true,itemStyle:{borderColor:c.card,borderWidth:2},label:{color:c.text},data:data.length?data:[{name:'暂无任务',value:1,itemStyle:{color:c.grid}}]}]
   },true);
 }
 function renderTrendChart(byDay){
@@ -473,29 +541,36 @@ function renderTrendChart(byDay){
     grid:{left:36,right:16,top:24,bottom:28},
     xAxis:{type:'category',data:byDay.map(d=>d.day.slice(5)),axisLine:{lineStyle:{color:c.axis}},axisLabel:{color:c.text}},
     yAxis:{type:'value',minInterval:1,splitLine:{lineStyle:{color:c.axis}},axisLabel:{color:c.text}},
-    series:[{name:'任务数',type:'line',smooth:true,symbolSize:6,data:byDay.map(d=>d.count),itemStyle:{color:'#335CFF'},lineStyle:{width:3},areaStyle:{color:{type:'linear',x:0,y:0,x2:0,y2:1,colorStops:[{offset:0,color:'rgba(51,92,255,.28)'},{offset:1,color:'rgba(51,92,255,.02)'}]}}}]
+    series:[{name:'任务数',type:'line',smooth:true,symbolSize:6,data:byDay.map(d=>d.count),itemStyle:{color:c.primary},lineStyle:{width:3},areaStyle:{color:{type:'linear',x:0,y:0,x2:0,y2:1,colorStops:[{offset:0,color:c.primaryLight},{offset:1,color:c.card}]}}}]
   },true);
 }
 window.addEventListener('resize',()=>{if(statusChart)statusChart.resize();if(trendChart)trendChart.resize()});
 
 $('#admin-jobs-form').addEventListener('submit',e=>{e.preventDefault();adminJobsPage=1;loadAdminJobs()});
-async function loadAdminJobs(){
+async function loadAdminJobs(polling=false){
   if(!session)return;
   const q=new URLSearchParams({q:$('#admin-jobs-q').value.trim(),status:$('#admin-jobs-status').value,userId:$('#admin-jobs-user').value,limit:String(adminJobsPageSize),offset:String((adminJobsPage-1)*adminJobsPageSize)});
+  if(polling&&adminJobsPending?.key===String(q)&&adminJobsPending.epoch===sessionEpoch)return;
+  const requestId=++adminJobsLoadId,epoch=sessionEpoch,pending={key:String(q),epoch};
+  adminJobsPending=pending;
   try{
     const root=$('#admin-jobs-list');
     if(root&&!root.children.length)root.innerHTML=skeletonRows(6);
     const data=await api(`/api/v1/admin/jobs?${q}`);
+    if(requestId!==adminJobsLoadId||epoch!==sessionEpoch||!session)return;
     adminJobsCache=data.jobs||[];
     adminJobsTotal=data.total||0;
+    const totalPages=Math.max(1,Math.ceil(adminJobsTotal/adminJobsPageSize));
+    if(adminJobsPage>totalPages){adminJobsPage=totalPages;return loadAdminJobs()}
     // 数据与筛选条件未变化时不重绘表格，避免轮询闪烁
     const sig=JSON.stringify([String(q),adminJobsTotal,(adminJobsCache||[]).map(jobSignature).join('|')]);
     if(sig===lastAdminJobsSig)return;
     lastAdminJobsSig=sig;
     renderAdminJobs(adminJobsCache);
     if($('#admin-jobs-total'))$('#admin-jobs-total').textContent=`共 ${adminJobsTotal} 个任务`;
-    renderPager($('#admin-jobs-pager'),adminJobsPage,Math.max(1,Math.ceil(adminJobsTotal/adminJobsPageSize)),p=>{adminJobsPage=p;loadAdminJobs()});
-  }catch(err){toast(err.message,'error')}
+    renderPager($('#admin-jobs-pager'),adminJobsPage,totalPages,p=>{adminJobsPage=p;loadAdminJobs()});
+  }catch(err){if(requestId===adminJobsLoadId&&epoch===sessionEpoch)toast(err.message,'error')}
+  finally{if(adminJobsPending===pending)adminJobsPending=null}
 }
 function adminJobOps(job,wrap=true){
   const terminal=['completed','failed','cancelled'].includes(job.status);
@@ -547,15 +622,28 @@ $('#admin-view-jobs').addEventListener('click',e=>{
   if(btn.dataset.op==='view')viewAdminJob(row.dataset.id);
   else operateAdminJob(row.dataset.id,btn.dataset.op);
 });
-async function viewAdminJob(id){
+async function viewAdminJob(id,refresh=false,polling=false){
+  if(!session||!adminOpen)return;
+  if(polling&&adminDetailPending?.id===id&&adminDetailPending.epoch===sessionEpoch)return;
+  const requestId=++adminDetailLoadId,epoch=sessionEpoch,pending={id,epoch};
+  adminDetailPending=pending;
   try{
     const data=await api(`/api/v1/admin/jobs/${encodeURIComponent(id)}`);
+    if(requestId!==adminDetailLoadId||epoch!==sessionEpoch||!session||!adminOpen)return;
+    if(refresh&&(adminCurrentView!=='detail'||currentJob?.id!==id))return;
     adminMode=true;currentJob=data.job;
-    $('#admin-detail').innerHTML=jobDetailHTML(data.job);
+    const sig=id+'|'+jobSignature(data.job);
+    if(sig!==adminDetailSig){
+      adminDetailSig=sig;
+      $('#admin-detail').innerHTML=jobDetailHTML(data.job);
+    }
     syncTaskMusicWithJob(data.job);updateTaskMusicUI();
-    adminShowView('detail');
-    if(matchMedia('(max-width:960px)').matches)setSidebar(false);
-  }catch(err){toast(err.message,'error')}
+    if(!refresh){
+      adminShowView('detail');
+      if(matchMedia('(max-width:960px)').matches)setSidebar(false);
+    }
+  }catch(err){if(requestId===adminDetailLoadId&&epoch===sessionEpoch&&adminOpen)toast(err.message,'error')}
+  finally{if(adminDetailPending===pending)adminDetailPending=null}
 }
 async function operateAdminJob(id,op){
   if(op==='delete'&&!(await confirmDialog({title:'删除任务',message:'确认删除该任务及其文件？此操作不可撤销。',confirmText:'删除'})))return;
@@ -583,15 +671,21 @@ $('#user-create-form').addEventListener('submit',async e=>{
 });
 async function loadAdminUsers(){
   if(!session)return;
+  const requestId=++adminUsersLoadId,epoch=sessionEpoch;
   try{
     const root=$('#admin-users-list');
     if(root&&!root.children.length)root.innerHTML=skeletonRows(5);
     const data=await api('/api/v1/admin/users');
+    if(requestId!==adminUsersLoadId||epoch!==sessionEpoch||!session)return;
     adminUsers=data.users||[];
     renderAdminUsers(adminUsers);
     const select=$('#admin-jobs-user');
-    if(select)select.innerHTML=`<option value="">全部用户</option>`+adminUsers.map(u=>`<option value="${esc(u.id)}">${esc(u.displayName||u.username)}</option>`).join('');
-  }catch(err){toast(err.message,'error')}
+    if(select){
+      const selected=select.value;
+      select.innerHTML=`<option value="">全部用户</option>`+adminUsers.map(u=>`<option value="${esc(u.id)}">${esc(u.displayName||u.username)}</option>`).join('');
+      select.value=adminUsers.some(u=>u.id===selected)?selected:'';
+    }
+  }catch(err){if(requestId===adminUsersLoadId&&epoch===sessionEpoch)toast(err.message,'error')}
 }
 function renderAdminUsers(users){
   const root=$('#admin-users-list');
@@ -737,6 +831,8 @@ function renderList(jobs){
     if(row)row.remove();
     row=document.createElement('div');
     row.className='job-row';row.dataset.id=job.id;row.dataset.sig=jobSignature(job);
+    row.tabIndex=0;row.setAttribute('role','button');
+    row.setAttribute('aria-current',String(job.id===selectedId));
     if(job.id===selectedId)row.classList.add('selected');
     row.innerHTML=jobRowHTML(job);
     frag.appendChild(row);
@@ -897,6 +993,10 @@ function handleContentClick(e){
   if(btn.hasAttribute('data-copy')){e.preventDefault();e.stopPropagation();copyText(btn);return}
   if(btn.dataset.op){const job=btn.closest('[data-job]');if(job)operate(job.dataset.job,btn.dataset.op)}
 }
+$('#job-list').addEventListener('keydown',e=>{
+  const row=e.target.closest('.job-row');
+  if(row&&(e.key==='Enter'||e.key===' ')){e.preventDefault();selectJob(row.dataset.id)}
+});
 $('#app').addEventListener('click',handleContentClick);
 $('#admin-console').addEventListener('click',handleContentClick);
 
@@ -946,16 +1046,20 @@ function promptDialog(opts={}){
 
 async function operate(id,op){
   if(op==='delete'&&!(await confirmDialog({title:'删除任务',message:'确认删除该任务及其文件？此操作不可撤销。',confirmText:'删除'})))return;
-  const base=adminMode?`/api/v1/admin/jobs/${encodeURIComponent(id)}`:`/api/v1/jobs/${encodeURIComponent(id)}`;
+  const inAdmin=adminMode,epoch=sessionEpoch;
+  const base=inAdmin?`/api/v1/admin/jobs/${encodeURIComponent(id)}`:`/api/v1/jobs/${encodeURIComponent(id)}`;
   try{
     await api(base+(op==='delete'?'':`/${op}`),{method:op==='delete'?'DELETE':'POST'});
-    if(adminMode){
+    if(epoch!==sessionEpoch||!session)return;
+    if(inAdmin){
+      if(!adminOpen)return;
       toast(op==='delete'?'任务已删除':op==='cancel'?'已请求取消':'已重新开始','success');
       if(op==='delete'){
         adminMode=false;
         if(adminJobsPage>1&&adminJobsTotal-1<=(adminJobsPage-1)*adminJobsPageSize)adminJobsPage--;
         adminShowView('jobs');
       }
+      else if(adminCurrentView==='detail'&&currentJob?.id===id)await viewAdminJob(id,true);
       else await loadAdminJobs();
       return;
     }
@@ -1314,7 +1418,7 @@ async function openPreview(fileId,name,previewUrl){
     return;
   }
   try{
-    const r=await fetch(`/api/v1/files/${encodeURIComponent(fileId)}`,{headers:{Authorization:`Bearer ${session.accessToken}`}});
+    const r=await fetch(`${adminMode?'/api/v1/admin/files':'/api/v1/files'}/${encodeURIComponent(fileId)}`,{headers:{Authorization:`Bearer ${session.accessToken}`}});
     if(!r.ok)throw new Error('视频加载失败');
     const blob=await r.blob();
     if(previewURL)URL.revokeObjectURL(previewURL);
