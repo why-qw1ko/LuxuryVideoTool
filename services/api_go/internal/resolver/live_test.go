@@ -1,6 +1,6 @@
 package resolver
 
-// 集成测试：对真实抖音链接走完整解析链路（a_bogus + ttwid 引导 + detail API）。
+// 集成测试：对真实抖音链接走接口与浏览器页面的完整解析链路。
 // 需要联网，且首次会调用无头浏览器引导 ttwid，故默认跳过：
 //
 //	RUN_LIVE=1 go test ./internal/resolver/ -run TestResolveLive -v
@@ -21,7 +21,14 @@ func TestResolveLive(t *testing.T) {
 	ttwid := NewTtwidManager(client, os.Getenv("DOUYIN_TTWID_FILE"), os.Getenv("DOUYIN_BROWSER_PATH"))
 	d := NewDouyin(client, ttwid)
 
-	link := "https://v.douyin.com/GkQbHe4KKnk/"
+	link := os.Getenv("DOUYIN_LIVE_URL")
+	if link == "" {
+		link = "https://v.douyin.com/GkQbHe4KKnk/"
+	}
+	expectedType := os.Getenv("DOUYIN_LIVE_TYPE")
+	if expectedType == "" {
+		expectedType = "video"
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
@@ -30,13 +37,13 @@ func TestResolveLive(t *testing.T) {
 		t.Fatalf("Resolve failed: %v", err)
 	}
 	if work.DouyinWorkID == "" || work.Title == "" || work.AuthorName == "" {
-		t.Fatalf("work missing key fields: %+v", work)
+		t.Fatalf("work missing key fields: idPresent=%t titlePresent=%t authorPresent=%t", work.DouyinWorkID != "", work.Title != "", work.AuthorName != "")
 	}
-	if work.Type != "video" || work.VideoURL == "" {
-		t.Fatalf("expected video work with URL: %+v", work)
+	if work.Type != expectedType || !workHasMedia(work) {
+		t.Fatalf("expected %s with media; got type=%s images=%d videoPresent=%t", expectedType, work.Type, len(work.Images), work.VideoURL != "")
 	}
 	if strings.Contains(work.VideoURL, "playwm") {
-		t.Fatalf("video URL still has watermark: %s", work.VideoURL)
+		t.Fatal("video URL still has watermark")
 	}
-	t.Logf("OK: %s | %s | video=%s", work.AuthorName, work.Title, work.VideoURL)
+	t.Logf("OK: id=%s type=%s images=%d author=%s source=%s", work.DouyinWorkID, work.Type, len(work.Images), work.AuthorName, work.ResolverName)
 }

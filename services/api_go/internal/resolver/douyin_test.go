@@ -2,6 +2,26 @@ package resolver
 
 import "testing"
 
+func TestWorkFromDetailBodyNumericID(t *testing.T) {
+	body := []byte(`{"status_code":0,"aweme_detail":{"aweme_id":7704588889991183434,"video":{"play_addr":{"url_list":["https://example.test/video"]}}}}`)
+	work, err := NewDouyin(nil, nil).workFromDetailBody(body, "aweme_detail")
+	if err != nil || work.DouyinWorkID != "7704588889991183434" {
+		t.Fatalf("id=%q err=%v", work.DouyinWorkID, err)
+	}
+}
+
+func TestWorkFromDetailBodyRejectsTrailingData(t *testing.T) {
+	body := `{"status_code":0,"aweme_detail":{"aweme_id":"123","video":{"play_addr":{"url_list":["https://example.test/video"]}}}}`
+	for _, suffix := range []string{`{}`, `null`, `invalid`} {
+		if _, err := NewDouyin(nil, nil).workFromDetailBody([]byte(body+suffix), "aweme_detail"); err == nil {
+			t.Errorf("accepted trailing data %q", suffix)
+		}
+	}
+	if _, err := NewDouyin(nil, nil).workFromDetailBody([]byte(body+"\n\t "), "aweme_detail"); err != nil {
+		t.Fatalf("rejected trailing whitespace: %v", err)
+	}
+}
+
 func TestWorkFromDetailBodyBrowserSource(t *testing.T) {
 	d := NewDouyin(nil, nil)
 	body := []byte(`{"status_code":0,"aweme_detail":{"aweme_id":"123","desc":"标题","author":{"nickname":"作者"},"video":{"duration":1200,"width":1080,"height":1920,"play_addr":{"url_list":["https://example.test/playwm/video"]}}}}`)

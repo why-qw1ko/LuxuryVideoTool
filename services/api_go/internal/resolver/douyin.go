@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -14,7 +15,7 @@ import (
 	"time"
 )
 
-const DouyinResolverVersion = "4"
+const DouyinResolverVersion = "5"
 
 type Douyin struct {
 	client *SafeClient
@@ -41,7 +42,7 @@ func (d *Douyin) Resolve(ctx context.Context, shareText string) (Work, error) {
 	}
 
 	// 主路径：aweme/v1/web/aweme/detail 详情 API（a_bogus 签名 + ttwid cookie）。
-	// 抖音已全局移除分享页 SSR 内嵌数据（videoInfoRes），这是当前唯一稳定取数方式。
+	// 部分分享页缺少内嵌作品数据；详情接口失败时读取浏览器接口或应用页内嵌数据。
 	workID := input.WorkID
 	workType := input.WorkType
 	if workID == "" {
@@ -113,7 +114,7 @@ func (d *Douyin) Resolve(ctx context.Context, shareText string) (Work, error) {
 		if !ok {
 			continue
 		}
-		// 拒绝空壳：抖音已移除 SSR 数据，整树查找会命中仅含 itemId 的页面级对象，
+		// 拒绝空壳：整树查找可能命中仅含 itemId 的页面级对象，
 		// 返回标题/视频/作者全空的作品。这种空壳必须丢弃，否则会污染解析缓存。
 		if isEmptyShell(work) {
 			continue
@@ -211,9 +212,16 @@ func (d *Douyin) resolveViaBrowser(ctx context.Context, workID, workType string)
 	pageURL := "https://www.douyin.com/" + kind + "/" + workID
 	body, err := d.ttwid.FetchDetail(ctx, pageURL, workID)
 	if err != nil {
-		return Work{}, fmt.Errorf("%w: %v", ErrResolveFailed, err)
+		return Work{}, err
 	}
-	return d.workFromDetailBody(body, "browser_detail")
+	work, err := d.workFromDetailBody(body, "browser_detail")
+	if err != nil {
+		return Work{}, err
+	}
+	if work.DouyinWorkID != workID || !workHasMedia(work) {
+		return Work{}, fmt.Errorf("%w: browser returned no media for requested work", ErrResolveFailed)
+	}
+	return work, nil
 }
 
 func (d *Douyin) workFromDetailBody(body []byte, source string) (Work, error) {
@@ -222,8 +230,13 @@ func (d *Douyin) workFromDetailBody(body []byte, source string) (Work, error) {
 		AwemeDetail map[string]any `json:"aweme_detail"`
 		StatusMsg   string         `json:"status_msg"`
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
 		return Work{}, fmt.Errorf("%w: invalid detail response: %v", ErrResolveFailed, err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return Work{}, fmt.Errorf("%w: invalid detail response: trailing data", ErrResolveFailed)
 	}
 	if payload.StatusCode != 0 || payload.AwemeDetail == nil {
 		msg := payload.StatusMsg
@@ -305,11 +318,11 @@ func parseWorkObject(object map[string]any) (Work, bool) {
 	}
 	description := firstString(object, "desc", "description")
 	work := Work{DouyinWorkID: id, Type: "video", Title: description, Description: description}
-	if author := firstMap(object, "author"); author != nil {
+	if author := firstMap(object, "author", "authorInfo"); author != nil {
 		work.AuthorID = firstString(author, "uid", "sec_uid", "secUid", "id")
 		work.AuthorName = firstString(author, "nickname", "name")
 	}
-	work.CoverURL = findURL(firstMap(object, "video"), "cover", "origin_cover", "dynamic_cover")
+	work.CoverURL = findURL(firstMap(object, "video"), "cover", "origin_cover", "originCover", "dynamic_cover", "dynamicCover", "coverUrlList", "originCoverUrlList")
 	work.VideoURL = findURL(firstMap(object, "video"), "play_addr", "playAddr", "download_addr", "downloadAddr")
 	if video := firstMap(object, "video"); video != nil {
 		work.DurationMS = int64(firstNumber(video, "duration"))
@@ -358,6 +371,9 @@ func parseWorkObject(object map[string]any) (Work, bool) {
 			if artist, ok := artists[0].(map[string]any); ok {
 				work.MusicArtist = firstString(artist, "name")
 			}
+		}
+		if work.MusicArtist == "" {
+			work.MusicArtist = firstString(music, "author", "ownerNickname")
 		}
 		if work.MusicArtist == "" {
 			if author := firstMap(music, "author"); author != nil {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -12,6 +13,8 @@ const browserDetailTimeout = 45 * time.Second
 
 const browserDetailCaptureScript = `(() => {
 	window.__douyinDetailResponse = null;
+	window.__douyinDetailLastResponse = null;
+	window.__douyinDetailRequests = 0;
 	const workID = %s;
 	const matches = rawURL => {
 		try {
@@ -23,6 +26,7 @@ const browserDetailCaptureScript = `(() => {
 		}
 	};
 	const remember = (status, body) => {
+		window.__douyinDetailLastResponse = {status, length: typeof body === "string" ? body.length : 0};
 		if (status >= 200 && status < 300 && typeof body === "string" && body.includes("\"aweme_detail\"")) {
 			window.__douyinDetailResponse = {status, body};
 		}
@@ -36,6 +40,7 @@ const browserDetailCaptureScript = `(() => {
 	};
 	XMLHttpRequest.prototype.send = function() {
 		if (matches(this.__douyinURL)) {
+			window.__douyinDetailRequests++;
 			this.addEventListener("loadend", () => {
 				let body = "";
 				try {
@@ -53,17 +58,59 @@ const browserDetailCaptureScript = `(() => {
 
 	const originalFetch = window.fetch;
 	window.fetch = async function(input, init) {
-		const url = typeof input === "string" ? input : input && input.url;
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input && input.url;
+		const matched = matches(url);
+		if (matched) window.__douyinDetailRequests++;
 		const response = await originalFetch.apply(this, arguments);
-		if (matches(url)) {
+		if (matched) {
 			response.clone().text().then(body => remember(response.status, body)).catch(() => {});
 		}
 		return response;
 	};
 })();`
 
-// FetchDetail 让真实浏览器执行抖音当前版本的前端签名逻辑，并从详情接口响应中取回 JSON。
-// 原生的 a_bogus 实现在抖音更新参数与安全头后会失效，此路径作为详情 API 的兼容兜底。
+// 保留原始脚本文本供 Go 解码，避免 JavaScript 把 19 位数字 ID 转成浮点数。
+const browserDetailSnapshotScript = `JSON.stringify((() => {
+	const scripts = [];
+	let size = 0;
+	let oversized = false;
+	for (const script of document.scripts) {
+		const text = script.textContent || "";
+		if (script.id !== "RENDER_DATA" && !/^\s*(?:self\.__pace_f\.push\(|window\._ROUTER_DATA\s*=)/.test(text)) continue;
+		size += text.length;
+		if (size > 8 * 1024 * 1024) {
+			oversized = true;
+			break;
+		}
+		scripts.push(text);
+	}
+	return {
+		detail: window.__douyinDetailResponse || null,
+		lastResponse: window.__douyinDetailLastResponse || null,
+		requests: window.__douyinDetailRequests || 0,
+		state: document.readyState,
+		scripts,
+		oversized
+	};
+})())`
+
+type browserDetailSnapshot struct {
+	Detail *struct {
+		Status int    `json:"status"`
+		Body   string `json:"body"`
+	} `json:"detail"`
+	LastResponse *struct {
+		Status int `json:"status"`
+		Length int `json:"length"`
+	} `json:"lastResponse"`
+	Requests  int      `json:"requests"`
+	State     string   `json:"state"`
+	Scripts   []string `json:"scripts"`
+	Oversized bool     `json:"oversized"`
+}
+
+// FetchDetail 同时读取浏览器的详情响应和公开页面内嵌数据。
+// 服务端直接渲染的页面可能完全不请求详情接口，不能仅等待 XHR / fetch。
 func (m *TtwidManager) FetchDetail(ctx context.Context, pageURL, workID string) ([]byte, error) {
 	m.browserMu.Lock()
 	defer m.browserMu.Unlock()
@@ -90,11 +137,22 @@ func (m *TtwidManager) FetchDetail(ctx context.Context, pageURL, workID string) 
 	if _, err := conn.Call("Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": script}, 5*time.Second); err != nil {
 		return nil, err
 	}
-	if _, err := conn.Call("Page.navigate", map[string]any{"url": pageURL}, 10*time.Second); err != nil {
+	navigation, err := conn.Call("Page.navigate", map[string]any{"url": pageURL}, 10*time.Second)
+	if err != nil {
 		return nil, err
+	}
+	var navigated struct {
+		ErrorText string `json:"errorText"`
+	}
+	if err := json.Unmarshal(navigation, &navigated); err != nil {
+		return nil, fmt.Errorf("%w: invalid browser navigation result", ErrResolveFailed)
+	}
+	if navigated.ErrorText != "" {
+		return nil, fmt.Errorf("%w: browser navigation failed: %s", ErrResolveFailed, navigated.ErrorText)
 	}
 
 	deadline := time.Now().Add(browserDetailTimeout)
+	var snapshot browserDetailSnapshot
 	for time.Now().Before(deadline) {
 		select {
 		case <-browserCtx.Done():
@@ -102,9 +160,12 @@ func (m *TtwidManager) FetchDetail(ctx context.Context, pageURL, workID string) 
 		default:
 		}
 		res, err := conn.Call("Runtime.evaluate", map[string]any{
-			"expression":    "JSON.stringify(window.__douyinDetailResponse || null)",
+			"expression":    browserDetailSnapshotScript,
 			"returnByValue": true,
 		}, 10*time.Second)
+		if err != nil && !isBrowserNavigationContextError(err) {
+			return nil, fmt.Errorf("%w: browser page read failed: %v", ErrResolveFailed, err)
+		}
 		if err == nil {
 			var evaluated struct {
 				Result struct {
@@ -112,19 +173,50 @@ func (m *TtwidManager) FetchDetail(ctx context.Context, pageURL, workID string) 
 				} `json:"result"`
 			}
 			if json.Unmarshal(res, &evaluated) == nil && evaluated.Result.Value != "" && evaluated.Result.Value != "null" {
-				var captured struct {
-					Status int    `json:"status"`
-					Body   string `json:"body"`
-				}
-				if json.Unmarshal([]byte(evaluated.Result.Value), &captured) == nil {
-					if captured.Status < 200 || captured.Status >= 300 || captured.Body == "" {
-						return nil, fmt.Errorf("%w: browser detail API status %d", ErrResolveFailed, captured.Status)
+				if json.Unmarshal([]byte(evaluated.Result.Value), &snapshot) == nil {
+					if snapshot.Detail != nil && snapshot.Detail.Status >= 200 && snapshot.Detail.Status < 300 {
+						body := []byte(snapshot.Detail.Body)
+						work, parseErr := NewDouyin(nil, nil).workFromDetailBody(body, "browser_detail")
+						if parseErr == nil && work.DouyinWorkID == workID && workHasMedia(work) {
+							return body, nil
+						}
 					}
-					return []byte(captured.Body), nil
+					if body, pageErr := detailFromPageScripts(snapshot.Scripts, workID); pageErr == nil {
+						return body, nil
+					}
 				}
 			}
 		}
-		time.Sleep(500 * time.Millisecond)
+		select {
+		case <-browserCtx.Done():
+			return nil, browserCtx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
-	return nil, fmt.Errorf("%w: browser detail API response timed out", ErrResolveFailed)
+	if snapshot.LastResponse != nil {
+		return nil, fmt.Errorf("%w: browser detail API status %d (%d bytes), no matching embedded media", ErrResolveFailed, snapshot.LastResponse.Status, snapshot.LastResponse.Length)
+	}
+	if snapshot.Oversized {
+		return nil, fmt.Errorf("%w: embedded page data too large", ErrResolveFailed)
+	}
+	return nil, fmt.Errorf("%w: browser has no matching API response or embedded media (requests=%d, document=%s)", ErrResolveFailed, snapshot.Requests, snapshot.State)
+}
+
+// 仅重试 CDP 返回的导航上下文切换错误，连接超时等传输错误必须直接返回。
+func isBrowserNavigationContextError(err error) bool {
+	if err == nil {
+		return false
+	}
+	const prefix = "CDP Runtime.evaluate: "
+	message := err.Error()
+	if !strings.HasPrefix(message, prefix) {
+		return false
+	}
+	switch strings.TrimSuffix(strings.TrimPrefix(message, prefix), ".") {
+	case "Cannot find context with specified id", "Cannot find default execution context",
+		"Execution context was destroyed", "Inspected target navigated or closed":
+		return true
+	default:
+		return false
+	}
 }
