@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const DouyinResolverVersion = "6"
+const DouyinResolverVersion = "7"
 
 type Douyin struct {
 	client *SafeClient
@@ -120,6 +120,7 @@ func (d *Douyin) Resolve(ctx context.Context, shareText string) (Work, error) {
 			continue
 		}
 		work.VideoURL = withoutWatermark(work.VideoURL)
+		work.VideoURLCandidates = uniqueMediaURLs(work.VideoURLCandidates, true)
 		work.CanonicalURL = canonicalURL(work.Type, work.DouyinWorkID, finalURL)
 		work.ResolverName, work.ResolverVersion, work.ResolvedAt = candidate.name, DouyinResolverVersion, d.now().UTC()
 		work.Metadata = map[string]any{"source": candidate.name}
@@ -250,6 +251,7 @@ func (d *Douyin) workFromDetailBody(body []byte, source string) (Work, error) {
 		return Work{}, ErrResolveFailed
 	}
 	work.VideoURL = withoutWatermark(work.VideoURL)
+	work.VideoURLCandidates = uniqueMediaURLs(work.VideoURLCandidates, true)
 	work.CanonicalURL = canonicalURL(work.Type, work.DouyinWorkID, nil)
 	work.ResolverName, work.ResolverVersion, work.ResolvedAt = source, DouyinResolverVersion, d.now().UTC()
 	work.Metadata = map[string]any{"source": source}
@@ -323,7 +325,8 @@ func parseWorkObject(object map[string]any) (Work, bool) {
 		work.AuthorName = firstString(author, "nickname", "name")
 	}
 	work.CoverURL = findURL(firstMap(object, "video"), "cover", "origin_cover", "originCover", "dynamic_cover", "dynamicCover", "coverUrlList", "originCoverUrlList")
-	work.VideoURL = findURL(firstMap(object, "video"), "play_addr", "playAddr", "download_addr", "downloadAddr")
+	work.VideoURLCandidates = videoURLCandidates(firstMap(object, "video"))
+	work.VideoURL = firstMediaURL(work.VideoURLCandidates)
 	if video := firstMap(object, "video"); video != nil {
 		work.DurationMS = int64(firstNumber(video, "duration"))
 		work.Width, work.Height = int(firstNumber(video, "width")), int(firstNumber(video, "height"))
@@ -332,16 +335,19 @@ func parseWorkObject(object map[string]any) (Work, bool) {
 	if len(images) > 0 {
 		work.Type = "note"
 		work.VideoURL = ""
+		work.VideoURLCandidates = nil
 		for _, item := range images {
 			if image, ok := item.(map[string]any); ok {
 				// 动图（live photo）的动态版 MP4 在 images[i].video，是 display_image 的兄弟节点，
 				// 必须先保留原 map 引用，rebind 到 display_image 后再取 video 会永远取不到。
 				source := image
+				imageURLs := mediaURLCandidates(image, "url_list", "urlList", "download_url_list", "downloadUrlList")
 				if nested := firstMap(image, "display_image", "displayImage"); nested != nil {
 					image = nested
+					imageURLs = uniqueMediaURLs(append(mediaURLCandidates(image, "url_list", "urlList", "download_url_list", "downloadUrlList"), imageURLs...), false)
 				}
-				if imageURL := findURL(image, "url_list", "urlList", "download_url_list", "downloadUrlList"); imageURL != "" {
-					entry := Image{URL: imageURL, Width: int(firstNumber(image, "width")), Height: int(firstNumber(image, "height"))}
+				if imageURL := firstMediaURL(imageURLs); imageURL != "" {
+					entry := Image{URL: imageURL, URLCandidates: imageURLs, Width: int(firstNumber(image, "width")), Height: int(firstNumber(image, "height"))}
 					// 优先取 CDN play_addr（直接文件、可靠），download_addr 是会 302 的签名接口。
 					// 动图动态版 MP4 通常位于 images[i].video（display_image 的兄弟节点）；个别接口变体会把
 					// video 嵌进 display_image 内部，两种形状都兜底取用，避免漏掉 AnimatedURL。
@@ -350,7 +356,8 @@ func parseWorkObject(object map[string]any) (Work, bool) {
 						video = firstMap(image, "video")
 					}
 					if video != nil {
-						entry.AnimatedURL = withoutWatermark(findURL(video, "play_addr", "playAddr", "download_addr", "downloadAddr"))
+						entry.AnimatedURLCandidates = uniqueMediaURLs(videoURLCandidates(video), true)
+						entry.AnimatedURL = firstMediaURL(entry.AnimatedURLCandidates)
 					}
 					work.Images = append(work.Images, entry)
 				}
@@ -365,7 +372,8 @@ func parseWorkObject(object map[string]any) (Work, bool) {
 	// 作品背景音乐：music.play_url.url_list[0] + title + artists[0].name。
 	// 图文/动图作品通常配有一首背景音乐，查看时随画面播放。
 	if music := firstMap(object, "music"); music != nil {
-		work.MusicURL = findURL(music, "play_url", "playUrl")
+		work.MusicURLCandidates = mediaURLCandidates(music, "play_url", "playUrl")
+		work.MusicURL = firstMediaURL(work.MusicURLCandidates)
 		work.MusicTitle = firstString(music, "title")
 		if artists := firstSlice(music, "artists"); len(artists) > 0 {
 			if artist, ok := artists[0].(map[string]any); ok {

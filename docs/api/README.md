@@ -51,7 +51,9 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 - `POST /api/v1/jobs/{id}/cancel`：立即取消排队任务；本进程处理中任务协作终止下载/解析并持久化取消状态。
 - `POST /api/v1/jobs/{id}/retry`：将失败或已取消的任务重新入队。
 - `GET /api/v1/files/{id}`：鉴权、归属校验后流式返回文件，支持 Range。
-- `GET /api/v1/jobs/{id}/images/archive`：鉴权后将该任务的全部配图/动图打包为 ZIP 流式返回（无此类文件返回 404）。
+- `GET /api/v1/jobs/{id}/images/archive`：鉴权后将该任务仍有效的配图/动图打包为 ZIP 返回，兼容原有客户端（无此类文件返回 404）。
+- `POST /api/v1/jobs/{id}/images/archive-download`：Bearer 鉴权并校验任务归属、完成状态和源文件，返回 `{downloadUrl, expiresAt}`；同源下载地址有效期 5 分钟，只授权指定用户的指定任务下载 ZIP。
+- `GET /api/v1/archive-download/{id}?user=&expires=&signature=`：凭上述短期签名下载，无需 Authorization 头；重新校验归属、任务状态和媒体有效期。与预览、ASR 的签名用途隔离，响应禁止缓存；完整 ZIP 成包后才返回，提供 Content-Length，支持 HEAD、Range。网页通过原生下载交给浏览器显示进度，不再先把整个 ZIP 接收到 JS 内存。
 - `GET /api/v1/media-preview/{id}?expires=&signature=`：同源签名的媒体预览地址（HMAC 签名，约 24 小时有效），供 `<img>`/`<video>` 直接加载，无需 Authorization 头；仅限 image/animated/video 类型。
 
 创建示例：
@@ -63,6 +65,10 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
   "options": {"force": false}
 }
 ```
+
+作品保留首选 `videoUrl`、`musicUrl`、图片的 `url` / `animatedUrl`，并附带按来源顺序去重的 `videoUrlCandidates`、`musicUrlCandidates`、`urlCandidates` / `animatedUrlCandidates`。Worker 在同一种媒体的候选地址间依次切换，最多尝试 8 个；取消或文件超出大小限制时停止，旧记录没有候选列表也能继续下载。新增字段存于原有 `metadata_json`，无需数据库迁移；解析缓存版本为 `7`。
+
+图集任务结果包含 `mediaDownload`：`expected`、`downloaded`、`skipped`、`skippedIndices`（从 1 开始）和 `musicDownloaded`。背景音乐不计入配图成功数；部分媒体失败时，任务完成提示与网页会显示实际保存数量，压缩包包含已保存的媒体。
 
 解析结果缓存默认 6 小时，可用 `RESOLVER_CACHE_TTL` 调整。服务端仅访问 HTTPS 抖音白名单域名，重定向逐跳校验且最多 5 跳，DNS 返回任何非公网地址时拒绝请求。
 

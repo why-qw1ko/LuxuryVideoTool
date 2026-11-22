@@ -236,6 +236,7 @@ document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>btn.addEv
 }));
 
 function enter(value){
+  archiveDownloads.clear();
   save(value);
   adminMode=false;currentView='new';adminOpen=false;jobsPage=1;adminJobsPage=1;
   if($('#admin-user-name'))$('#admin-user-name').textContent=value?.user?.displayName||'';
@@ -813,14 +814,17 @@ function jobDetailHTML(job){
   const mediaFiles=files.filter(f=>f.kind==='image'||f.kind==='animated');
   const noteImages=w.images||[];
   // 按媒体类型和文件名前缀（image-NN）匹配，避免历史静态文件被当作动图、下载失败导致下标错位。
-  const mediaFileForImage=(img,i)=>mediaFiles.find(f=>f.kind===(img.animatedUrl?'animated':'image')&&(f.name||'').indexOf(`image-${String(i+1).padStart(2,'0')}`)===0)||null;
+  const mediaFileForImage=(img,i)=>mediaFiles.find(f=>f.kind===(img.animatedUrl?'animated':'image')&&(f.name||'').indexOf(`image-${String(i+1).padStart(2,'0')}.`)===0)||null;
+  const savedMediaCount=noteImages.filter((img,i)=>mediaFileForImage(img,i)).length;
+  const showMediaSummary=isNote&&job.status==='completed'&&job.action!=='info'&&noteImages.length>0;
+  const mediaSummary=showMediaSummary?`<p class="status-msg">已保存 ${savedMediaCount}/${noteImages.length} 项媒体${savedMediaCount<noteImages.length?'；未保存的媒体不会包含在压缩包中。':'。'}</p>`:'';
   const galleryItems=noteImages.map((img,i)=>{
     const file=mediaFileForImage(img,i);
     const cdnSrc=img.animatedUrl||img.url;
     // 签名预览地址 24h 有效：可用时优先（跨区域稳定），过期则退回 CDN 原址，避免 404 黑框。
     const viewerSrc=(file&&file.previewUrl&&previewUsable(file.previewUrl))?file.previewUrl:cdnSrc;
     const dl=file?`<a class="gallery-dl" href="${fileHref(file)}" data-file data-name="${esc(file.name||'image')}" data-preview="${esc(file.previewUrl||'')}" title="下载">${icon('download',14)}</a>`:'';
-    const badge=`<span class="gallery-badge">${img.animatedUrl?'动图':'图片'}</span>`;
+    const badge=`<span class="gallery-badge">${img.animatedUrl?'动图':'图片'}${showMediaSummary&&!file?' · 未保存':''}</span>`;
     // 回退链在错误发生时现查（不烘焙渲染时的判断），避免页面停留超过 24h 后签名地址过期、
     // 或客户端时钟偏差把新鲜地址误判为过期时，图片/动图永久无法恢复。mediaFallback 每项只尝试一次。
     const preview=file&&file.previewUrl?file.previewUrl:'';
@@ -838,14 +842,14 @@ function jobDetailHTML(job){
   }).join('');
   const noteGallery=isNote&&noteImages.length?`<div class="note-gallery">${galleryItems}</div>`:'';
   // 管理员详情里打包下载走用户自己的接口会因所有权校验失败，故仅在普通用户视图展示。
-  const zipLink=(!adminMode&&isNote&&mediaFiles.length&&job.status==='completed')?`<a class="btn" href="/api/v1/jobs/${encodeURIComponent(job.id)}/images/archive" data-file data-name="${esc((job.work&&job.work.douyinWorkId)||job.id)}_images.zip">${icon('download',14)} 打包下载全部</a>`:'';
+  const zipLink=(!adminMode&&isNote&&mediaFiles.length&&job.status==='completed')?archiveDownloadHTML(job.id,`${(job.work&&job.work.douyinWorkId)||job.id}_images.zip`,savedMediaCount<noteImages.length?`打包下载已保存的 ${savedMediaCount} 项`:'打包下载全部'):'';
 
   const musicFile=files.find(f=>f.kind==='music');
   const musicPlayUrl=musicFile&&musicFile.previewUrl&&previewUsable(musicFile.previewUrl)?musicFile.previewUrl:w.musicUrl;
   const musicRow=isNote&&w.musicUrl?`<div class="music-row"><span class="music-info">${icon('music',13)} <span>${esc(w.musicTitle||'背景音乐')}${w.musicArtist?' · '+esc(w.musicArtist):''}</span></span><button type="button" class="music-toggle" data-op="music" data-music="${esc(w.musicUrl)}" data-play-url="${esc(musicPlayUrl||'')}" data-fallback="${esc(w.musicUrl)}">${icon('play',13)} 播放音乐</button></div>`:'';
   const hasMedia=cover||w.authorName||metas.length;
   const mediaBlock=isNote
-    ?(noteGallery||zipLink||musicRow?`<div class="detail-media no-cover">${noteGallery}${musicRow}${metas.length?`<div class="detail-meta">${metas.join('')}</div>`:''}${canonical}${zipLink?`<div class="action-group">${zipLink}</div>`:''}</div>`:'')
+    ?(noteGallery||zipLink||musicRow?`<div class="detail-media no-cover">${noteGallery}${mediaSummary}${musicRow}${metas.length?`<div class="detail-meta">${metas.join('')}</div>`:''}${canonical}${zipLink}</div>`:'')
     :(hasMedia?`<div class="detail-media${cover?'':' no-cover'}">${cover}<div class="detail-side">${metas.length?`<div class="detail-meta">${metas.join('')}</div>`:''}${canonical}</div></div>`:'');
 
   const retentionNote=mediaExpiry?`<p class="retention-note">${icon('info',13)} 媒体文件保留至 ${fmtDate(mediaExpiry)}，届时自动清理；删除本任务会同时删除媒体</p>`:'';
@@ -888,6 +892,7 @@ function handleContentClick(e){
   if(!btn)return;
   if(btn.dataset.op==='music'){e.preventDefault();e.stopPropagation();toggleTaskMusic(btn.closest('[data-job]')?.dataset.job,btn.dataset.music,btn.dataset.playUrl||btn.dataset.music,btn.dataset.fallback||'');return}
   if(btn.dataset.op==='preview'){e.preventDefault();openPreview(btn.dataset.fid,btn.dataset.name,btn.dataset.preview);return}
+  if(btn.dataset.op==='archive'){e.preventDefault();downloadArchive(btn.closest('[data-archive-download]').dataset.archiveDownload,btn.dataset.name);return}
   if(btn.hasAttribute('data-file')){e.preventDefault();download(btn);return}
   if(btn.hasAttribute('data-copy')){e.preventDefault();e.stopPropagation();copyText(btn);return}
   if(btn.dataset.op){const job=btn.closest('[data-job]');if(job)operate(job.dataset.job,btn.dataset.op)}
@@ -983,11 +988,79 @@ function mediaFallback(el){
   if(fallback){el.dataset.fallback='';el.src=fallback;return;}
   el.style.display='none';
 }
+// 打包下载交给浏览器接收，页面只报告准备和移交状态；下载百分比以浏览器下载列表为准。
+const ARCHIVE_RETRY_DELAY_MS=5000;
+const archiveDownloads=new Map();
+function archiveDownloadKey(jobId){return `${session?.user?.id||''}:${jobId}`}
+function archiveDownloadView(jobId,label='打包下载全部'){
+  const state=archiveDownloads.get(archiveDownloadKey(jobId));
+  const busy=state?.phase==='preparing';
+  const submitted=state?.phase==='submitted';
+  const locked=busy||(submitted&&Date.now()<state.retryAt);
+  const buttonLabel=busy?'正在准备下载…':submitted?(locked?'下载请求已提交':'重新下载'):state?.phase==='error'?'重试打包下载':label;
+  const message=busy?'正在准备下载，请稍候…':submitted?'已交给浏览器下载，请在浏览器的下载列表查看进度、速度和剩余时间。':state?.message||'下载进度会显示在浏览器的下载列表中。';
+  return {busy,locked,label:buttonLabel,message};
+}
+function archiveDownloadHTML(jobId,name,label='打包下载全部'){
+  const view=archiveDownloadView(jobId,label);
+  return `<div data-archive-download="${esc(jobId)}" data-archive-label="${esc(label)}"><div class="action-group"><button type="button" class="btn" data-op="archive" data-name="${esc(name||jobId+'_images.zip')}" aria-busy="${view.busy}"${view.locked?' disabled':''}>${icon('download',14)} ${esc(view.label)}</button></div><p class="status-msg" role="status" aria-live="polite" data-archive-status>${esc(view.message)}</p></div>`;
+}
+function updateArchiveDownloadUI(){
+  document.querySelectorAll('[data-archive-download]').forEach(section=>{
+    const view=archiveDownloadView(section.dataset.archiveDownload,section.dataset.archiveLabel);
+    const button=section.querySelector('[data-op="archive"]');
+    button.disabled=view.locked;
+    button.setAttribute('aria-busy',String(view.busy));
+    button.innerHTML=icon('download',14)+' '+esc(view.label);
+    section.querySelector('[data-archive-status]').textContent=view.message;
+  });
+}
+function startNativeDownload(url,name){
+  const a=document.createElement('a');
+  a.href=url;a.download=name||'download';a.rel='noopener';
+  document.body.appendChild(a);a.click();a.remove();
+}
+function archiveDownloadSessionCurrent(key,state,userId){
+  if(archiveDownloads.get(key)!==state)return false;
+  if(session?.user?.id===userId)return true;
+  if(!session){enter(null);toast('登录已过期，请重新登录','error')}
+  return false;
+}
+async function downloadArchive(jobId,name){
+  if(archiveDownloadView(jobId).locked)return;
+  const userId=session?.user?.id;
+  if(!userId){toast('登录已过期，请重新登录','error');return}
+  const key=archiveDownloadKey(jobId),state={phase:'preparing'};
+  archiveDownloads.set(key,state);
+  updateArchiveDownloadUI();
+  const controller=new AbortController();
+  let timer;
+  // 续期请求由 api 共享，不能只依赖单个 fetch 的 signal 限时。
+  const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new Error('准备下载超时'))},30000)});
+  try{
+    const result=await Promise.race([api(`/api/v1/jobs/${encodeURIComponent(jobId)}/images/archive-download`,{method:'POST',signal:controller.signal}),timeout]);
+    // 准备期间退出或切换账号时，不再触发原账号的下载。
+    if(!archiveDownloadSessionCurrent(key,state,userId))return;
+    if(typeof result.downloadUrl!=='string')throw new Error('未能取得下载地址，请重试');
+    const target=new URL(result.downloadUrl,location.origin);
+    if(target.origin!==location.origin||target.pathname!==`/api/v1/archive-download/${encodeURIComponent(jobId)}`)throw new Error('下载地址无效，请重试');
+    startNativeDownload(target.href,name||`${jobId}_images.zip`);
+    state.phase='submitted';state.retryAt=Date.now()+ARCHIVE_RETRY_DELAY_MS;
+    updateArchiveDownloadUI();
+    setTimeout(()=>{if(archiveDownloads.get(key)===state)updateArchiveDownloadUI()},ARCHIVE_RETRY_DELAY_MS);
+  }catch(err){
+    if(!archiveDownloadSessionCurrent(key,state,userId))return;
+    state.phase='error';
+    state.message=controller.signal.aborted?'准备下载超时，请重试。':`准备下载失败：${err.message||'请重试'}`;
+    updateArchiveDownloadUI();
+    toast(state.message,'error');
+  }finally{clearTimeout(timer)}
+}
 async function download(link){
   // 媒体文件有同源签名流式地址：直接用 <a download>，浏览器流式写入磁盘、立即开始，不用 fetch 整文件。
   const preview=previewUsable(link.dataset.preview)?link.dataset.preview:'';
   if(preview){
-    const a=document.createElement('a');a.href=preview;a.download=link.dataset.name||'download';a.rel='noopener';document.body.appendChild(a);a.click();a.remove();
+    startNativeDownload(preview,link.dataset.name);
     return;
   }
   try{const response=await fetch(link.href,{headers:{Authorization:`Bearer ${session.accessToken}`}});if(!response.ok)throw new Error('下载失败');const blob=await response.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=link.dataset.name;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000)}catch(err){toast(err.message,'error')}

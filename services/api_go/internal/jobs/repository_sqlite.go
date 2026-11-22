@@ -407,11 +407,15 @@ func scanJobFields(row scanner, withOwner bool) (Job, error) {
 			MusicURL    string           `json:"musicUrl"`
 			MusicTitle  string           `json:"musicTitle"`
 			MusicArtist string           `json:"musicArtist"`
+
+			VideoURLCandidates []string `json:"videoUrlCandidates"`
+			MusicURLCandidates []string `json:"musicUrlCandidates"`
 		}
 		if metadata.Valid && json.Unmarshal([]byte(metadata.String), &extra) == nil {
 			work.VideoURL, work.DurationMS, work.Width, work.Height = extra.VideoURL, extra.DurationMS, extra.Width, extra.Height
 			work.Images, work.Hashtags = extra.Images, extra.Hashtags
 			work.MusicURL, work.MusicTitle, work.MusicArtist = extra.MusicURL, extra.MusicTitle, extra.MusicArtist
+			work.VideoURLCandidates, work.MusicURLCandidates = extra.VideoURLCandidates, extra.MusicURLCandidates
 		}
 		job.Work = &work
 		if job.Status == "completed" && job.Result == nil {

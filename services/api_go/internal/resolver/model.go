@@ -21,6 +21,9 @@ type Image struct {
 	// AnimatedURL 是动图（live photo）的动态版地址，通常为 MP4 片段；
 	// 仅动图类图片有值，普通配图为空。
 	AnimatedURL string `json:"animatedUrl,omitempty"`
+
+	URLCandidates         []string `json:"urlCandidates,omitempty"`
+	AnimatedURLCandidates []string `json:"animatedUrlCandidates,omitempty"`
 }
 
 type Work struct {
@@ -47,6 +50,9 @@ type Work struct {
 	ResolverVersion string         `json:"resolverVersion"`
 	ResolvedAt      time.Time      `json:"resolvedAt"`
 	Metadata        map[string]any `json:"-"`
+
+	VideoURLCandidates []string `json:"videoUrlCandidates,omitempty"`
+	MusicURLCandidates []string `json:"musicUrlCandidates,omitempty"`
 }
 
 type Adapter interface {

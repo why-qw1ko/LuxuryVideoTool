@@ -1,17 +1,14 @@
 package httpapi
 
 import (
-	"archive/zip"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -937,86 +934,15 @@ func New(deps Dependencies) http.Handler {
 		withMediaPreviews([]jobs.Job{job}, deps.ASRSigner, time.Now())
 		writeJSON(w, http.StatusOK, map[string]any{"job": job, "requestId": RequestID(r.Context())})
 	})
+	protected.HandleFunc("POST /api/v1/jobs/{id}/images/archive-download", func(w http.ResponseWriter, r *http.Request) {
+		handleArchiveDownloadLink(deps, w, r)
+	})
+	mux.HandleFunc("GET /api/v1/archive-download/{id}", func(w http.ResponseWriter, r *http.Request) {
+		handleSignedArchiveDownload(deps, w, r)
+	})
 	protected.HandleFunc("GET /api/v1/jobs/{id}/images/archive", func(w http.ResponseWriter, r *http.Request) {
-		if deps.Jobs == nil || deps.Files == nil || deps.Storage == nil {
-			writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true)
-			return
-		}
 		principal, _ := Principal(r.Context())
-		job, err := deps.Jobs.Get(r.Context(), principal.UserID, r.PathValue("id"))
-		if errors.Is(err, jobs.ErrNotFound) {
-			writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在", false)
-			return
-		}
-		if err != nil {
-			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务", true)
-			return
-		}
-		if job.Status != "completed" {
-			writeError(w, r, http.StatusConflict, "JOB_NOT_READY", "任务尚未完成，暂不能打包配图", false)
-			return
-		}
-		owned, err := deps.Files.ListByJob(r.Context(), principal.UserID, r.PathValue("id"))
-		if err != nil {
-			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取媒体文件", true)
-			return
-		}
-		var media []ownedfiles.File
-		for _, file := range owned {
-			if file.Kind == "image" || file.Kind == "animated" {
-				media = append(media, file)
-			}
-		}
-		if len(media) == 0 {
-			writeError(w, r, http.StatusNotFound, "FILES_NOT_FOUND", "该任务没有可打包的配图", false)
-			return
-		}
-		base := jobWorkID(job)
-		filename := base + "_images.zip"
-		// 先写入临时文件，全部成功后再流式返回；中途任何错误都能正常返回 5xx，
-		// 避免已返回 200 后才发现 zip 写入失败，客户端拿到截断的坏包。
-		tmp, err := os.CreateTemp("", "douyin-images-*.zip")
-		if err != nil {
-			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法创建打包临时文件", true)
-			return
-		}
-		tmpPath := tmp.Name()
-		defer os.Remove(tmpPath)
-		defer tmp.Close()
-		zw := zip.NewWriter(tmp)
-		writeZipEntry := func(entryName string, file ownedfiles.File) error {
-			handle, err := deps.Storage.Open(file)
-			if err != nil {
-				return err
-			}
-			defer handle.Close()
-			entry, err := zw.Create(entryName)
-			if err != nil {
-				return err
-			}
-			_, err = io.Copy(entry, handle)
-			return err
-		}
-		for index, file := range media {
-			name := fmt.Sprintf("%02d_%s", index+1, url.PathEscape(file.OriginalName))
-			if err := writeZipEntry(name, file); err != nil {
-				_ = zw.Close()
-				writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "打包配图失败", true)
-				return
-			}
-		}
-		if err := zw.Close(); err != nil {
-			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "打包配图失败", true)
-			return
-		}
-		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
-			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "打包配图失败", true)
-			return
-		}
-		w.Header().Set("Content-Type", "application/zip")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(filename))
-		http.ServeContent(w, r, filename, time.Now(), tmp)
+		handleImageArchive(deps, principal.UserID, w, r)
 	})
 	if deps.Auth != nil {
 		mux.Handle("POST /api/v1/auth/logout", requireAuth(deps.Auth, protected))
@@ -1031,6 +957,7 @@ func New(deps Dependencies) http.Handler {
 		mux.Handle("GET /api/v1/jobs", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/jobs/{id}", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/jobs/{id}/images/archive", requireAuth(deps.Auth, protected))
+		mux.Handle("POST /api/v1/jobs/{id}/images/archive-download", requireAuth(deps.Auth, protected))
 		mux.Handle("DELETE /api/v1/jobs/{id}", requireAuth(deps.Auth, protected))
 		mux.Handle("POST /api/v1/jobs/{id}/cancel", requireAuth(deps.Auth, protected))
 		mux.Handle("POST /api/v1/jobs/{id}/retry", requireAuth(deps.Auth, protected))

@@ -172,7 +172,7 @@ func (w *Worker) process(ctx context.Context, owner string, job Job) (resultErr 
 	if err != nil {
 		return w.finishFailed(job, owner, stepID, err)
 	}
-	result, err := w.downloader.Download(jobCtx, work.VideoURL, temporary, final, w.config.MaxVideoBytes)
+	result, err := media.DownloadCandidates(jobCtx, w.downloader, append([]string{work.VideoURL}, work.VideoURLCandidates...), temporary, final, w.config.MaxVideoBytes)
 	if err != nil {
 		return w.finishFailed(job, owner, stepID, err)
 	}
@@ -239,6 +239,8 @@ func (w *Worker) processNote(ctx context.Context, owner string, job Job, work re
 	} else {
 		slog.WarnContext(ctx, "cleanup stale note files: list failed", "job_id", job.ID, "error", err)
 	}
+	completionMessage := "配图下载与文案生成完成"
+	var mediaStats map[string]any
 	if len(work.Images) > 0 {
 		stepID, err := auth.NewID(now)
 		if err != nil {
@@ -249,14 +251,17 @@ func (w *Worker) processNote(ctx context.Context, owner string, job Job, work re
 		}
 		expires := now.Add(w.config.VideoRetention)
 		downloaded := 0
+		savedIndices := make(map[int]bool)
 		for index, img := range work.Images {
 			if ctx.Err() != nil {
 				_ = w.repo.FinishStep(context.Background(), stepID, "cancelled", "", "任务已取消", map[string]any{}, now)
 				return ctx.Err()
 			}
 			url, ext, kind, name := img.URL, ".jpg", "image", fmt.Sprintf("image-%02d.jpg", index+1)
+			candidates := append([]string{img.URL}, img.URLCandidates...)
 			if img.AnimatedURL != "" {
 				url, ext, kind, name = img.AnimatedURL, ".mp4", "animated", fmt.Sprintf("image-%02d.mp4", index+1)
+				candidates = append([]string{img.AnimatedURL}, img.AnimatedURLCandidates...)
 			}
 			if url == "" {
 				continue
@@ -276,7 +281,7 @@ func (w *Worker) processNote(ctx context.Context, owner string, job Job, work re
 			}
 			// 单张配图较短超时，避免外部 CDN 卡死导致任务一直挂着；失败跳过，全部失败才报错。
 			fileCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-			result, err := w.downloader.Download(fileCtx, url, temporary, final, w.config.MaxVideoBytes)
+			result, err := media.DownloadCandidates(fileCtx, w.downloader, candidates, temporary, final, w.config.MaxVideoBytes)
 			cancel()
 			if err != nil {
 				_ = w.storage.Remove(ownedfiles.File{RelativePath: relative})
@@ -286,6 +291,9 @@ func (w *Worker) processNote(ctx context.Context, owner string, job Job, work re
 				}
 				slog.WarnContext(ctx, "note image download failed, skipping", "job_id", job.ID, "index", index+1, "error", err)
 				continue
+			}
+			if kind == "image" {
+				name = fmt.Sprintf("image-%02d%s", index+1, noteImageExtension(result.MIMEType))
 			}
 			// 每张图用递增时间戳创建文件记录，确保按图片顺序返回（created_at + ULID 均可排序）。
 			file, err := ownedfiles.NewFile(now.Add(time.Duration(index)*time.Millisecond), job.UserID, job.ID, kind, relative, name, result.MIMEType, result.SHA256, result.SizeBytes, &expires)
@@ -298,13 +306,15 @@ func (w *Worker) processNote(ctx context.Context, owner string, job Job, work re
 				continue
 			}
 			downloaded++
+			savedIndices[index+1] = true
 		}
 		if downloaded == 0 {
 			return w.finishFailed(job, owner, stepID, media.ErrDownload)
 		}
+		musicFiles := 0
 		if work.MusicURL != "" {
 			if file, err := w.downloadNoteMusic(ctx, job, work, expires, now.Add(time.Duration(len(work.Images))*time.Millisecond)); err == nil {
-				downloaded++
+				musicFiles++
 				slog.InfoContext(ctx, "note music downloaded", "job_id", job.ID, "file_id", file.ID)
 			} else if ctx.Err() != nil {
 				_ = w.repo.FinishStep(context.Background(), stepID, "cancelled", "", "任务已取消", map[string]any{}, now)
@@ -313,7 +323,19 @@ func (w *Worker) processNote(ctx context.Context, owner string, job Job, work re
 				slog.WarnContext(ctx, "note music download failed, using source url fallback", "job_id", job.ID, "error", err)
 			}
 		}
-		if err := w.repo.FinishStep(ctx, stepID, "completed", "", "", map[string]any{"files": downloaded}, now); err != nil {
+		var skippedIndices []int
+		var skippedLabels []string
+		for index := range work.Images {
+			if !savedIndices[index+1] {
+				skippedIndices = append(skippedIndices, index+1)
+				skippedLabels = append(skippedLabels, fmt.Sprint(index+1))
+			}
+		}
+		mediaStats = map[string]any{"files": downloaded + musicFiles, "expected": len(work.Images), "downloaded": downloaded, "skipped": len(skippedIndices), "skippedIndices": skippedIndices, "musicDownloaded": musicFiles > 0}
+		if len(skippedIndices) > 0 {
+			completionMessage = fmt.Sprintf("配图已下载 %d/%d，未下载第 %s 项；文案生成完成", downloaded, len(work.Images), strings.Join(skippedLabels, "、"))
+		}
+		if err := w.repo.FinishStep(ctx, stepID, "completed", "", "", mediaStats, now); err != nil {
 			return err
 		}
 	}
@@ -347,7 +369,31 @@ func (w *Worker) processNote(ctx context.Context, owner string, job Job, work re
 		resultFiles = append(resultFiles, JobFile{ID: file.ID, Kind: file.Kind, Name: file.OriginalName, MIMEType: file.MIMEType, SizeBytes: file.SizeBytes})
 	}
 	result := map[string]any{"rawText": text, "normalizedText": text, "files": resultFiles}
-	return w.repo.CompleteTranscription(ctx, job.ID, owner, result, "配图下载与文案生成完成", now)
+	if mediaStats != nil {
+		result["mediaDownload"] = mediaStats
+	}
+	return w.repo.CompleteTranscription(ctx, job.ID, owner, result, completionMessage, now)
+}
+
+func noteImageExtension(mime string) string {
+	switch strings.ToLower(strings.TrimSpace(strings.Split(mime, ";")[0])) {
+	case "image/png", "image/x-png":
+		return ".png"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	case "image/avif":
+		return ".avif"
+	case "image/heic":
+		return ".heic"
+	case "image/heif":
+		return ".heif"
+	case "image/bmp":
+		return ".bmp"
+	default:
+		return ".jpg"
+	}
 }
 
 func (w *Worker) downloadNoteMusic(ctx context.Context, job Job, work resolver.Work, expires, createdAt time.Time) (ownedfiles.File, error) {
@@ -356,7 +402,7 @@ func (w *Worker) downloadNoteMusic(ctx context.Context, job Job, work resolver.W
 		return ownedfiles.File{}, err
 	}
 	fileCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	result, err := w.downloader.Download(fileCtx, work.MusicURL, temporary, final, w.config.MaxVideoBytes)
+	result, err := media.DownloadCandidates(fileCtx, w.downloader, append([]string{work.MusicURL}, work.MusicURLCandidates...), temporary, final, w.config.MaxVideoBytes)
 	cancel()
 	if err != nil {
 		_ = w.storage.Remove(ownedfiles.File{RelativePath: relative})

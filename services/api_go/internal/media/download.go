@@ -37,7 +37,7 @@ type HTTPDownloader struct{ client *http.Client }
 func NewHTTPDownloader() *HTTPDownloader {
 	resolverDNS := net.DefaultResolver
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
-	transport := &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+	transport := &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 15 * time.Second, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
 			return nil, resolver.ErrURLNotAllowed
@@ -72,10 +72,7 @@ func (d *HTTPDownloader) Download(ctx context.Context, mediaURL, temporaryPath, 
 		return DownloadResult{}, ErrTooLarge
 	}
 	// 连接超时由 Dialer 控制；总超时按配置上限估算，最低 2 分钟、最高 2 小时。
-	total := 2*time.Minute + time.Duration(maxBytes/(2<<20))*time.Second
-	if total > 2*time.Hour {
-		total = 2 * time.Hour
-	}
+	total := mediaDownloadTimeout(maxBytes)
 	downloadCtx, cancel := context.WithTimeout(ctx, total)
 	defer cancel()
 	req, err := http.NewRequestWithContext(downloadCtx, http.MethodGet, target.String(), nil)
@@ -89,11 +86,11 @@ func (d *HTTPDownloader) Download(ctx context.Context, mediaURL, temporaryPath, 
 	req.Header.Set("Accept-Encoding", "identity")
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return DownloadResult{}, fmt.Errorf("%w: %v", ErrDownload, err)
+		return DownloadResult{}, fmt.Errorf("%w: %w", ErrDownload, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return DownloadResult{}, fmt.Errorf("%w: upstream status %d", ErrDownload, resp.StatusCode)
+		return DownloadResult{}, upstreamStatusError(resp.StatusCode)
 	}
 	if resp.ContentLength > maxBytes {
 		return DownloadResult{}, ErrTooLarge
@@ -112,10 +109,13 @@ func (d *HTTPDownloader) Download(ctx context.Context, mediaURL, temporaryPath, 
 	hash := sha256.New()
 	written, err := io.Copy(io.MultiWriter(file, hash), io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
-		return DownloadResult{}, fmt.Errorf("%w: %v", ErrDownload, err)
+		return DownloadResult{}, fmt.Errorf("%w: %w", ErrDownload, err)
 	}
 	if written > maxBytes {
 		return DownloadResult{}, ErrTooLarge
+	}
+	if written == 0 {
+		return DownloadResult{}, fmt.Errorf("%w: empty response body", ErrDownload)
 	}
 	if err := file.Sync(); err != nil {
 		return DownloadResult{}, err
