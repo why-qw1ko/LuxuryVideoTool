@@ -8,6 +8,7 @@ package resolver
 import (
 	"context"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -42,8 +43,25 @@ func TestResolveLive(t *testing.T) {
 	if work.Type != expectedType || !workHasMedia(work) {
 		t.Fatalf("expected %s with media; got type=%s images=%d videoPresent=%t", expectedType, work.Type, len(work.Images), work.VideoURL != "")
 	}
+	animated := 0
+	for _, image := range work.Images {
+		if image.AnimatedURL != "" {
+			animated++
+		}
+	}
+	for name, actual := range map[string]int{"DOUYIN_LIVE_IMAGES_COUNT": len(work.Images), "DOUYIN_LIVE_ANIMATED_COUNT": animated} {
+		if value := os.Getenv(name); value != "" {
+			expected, err := strconv.Atoi(value)
+			if err != nil || expected < 0 {
+				t.Fatalf("invalid %s: expected a nonnegative integer", name)
+			}
+			if actual != expected {
+				t.Fatalf("%s: got %d, want %d", name, actual, expected)
+			}
+		}
+	}
 	if strings.Contains(work.VideoURL, "playwm") {
 		t.Fatal("video URL still has watermark")
 	}
-	t.Logf("OK: id=%s type=%s images=%d author=%s source=%s", work.DouyinWorkID, work.Type, len(work.Images), work.AuthorName, work.ResolverName)
+	t.Logf("OK: id=%s type=%s images=%d animated=%d author=%s source=%s", work.DouyinWorkID, work.Type, len(work.Images), animated, work.AuthorName, work.ResolverName)
 }

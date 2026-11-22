@@ -765,7 +765,7 @@ function jobDetailHTML(job){
   const tone=statusTone[job.status]||'muted';
   const badges=[`<span class="badge badge-${tone}">${esc(statusLabels[job.status]||job.status)}</span>`,`<span class="badge badge-action">${esc(actionLabels[job.action]||job.action)}</span>`];
   const noteImgs=w.images||[];
-  if(w.type==='note')badges.push(noteImgs.length>0&&noteImgs.every(img=>img.animatedUrl)?'<span class="badge badge-note">动图作品</span>':'<span class="badge badge-note">图文作品</span>');
+  if(w.type==='note')badges.push(`<span class="badge badge-note">${noteImgs.length>0&&noteImgs.every(img=>img.animatedUrl)?'动图作品':noteImgs.some(img=>img.animatedUrl)?'含动图':'图文作品'}</span>`);
 
   const mediaExpiry=jobMediaExpiry(job);
   // 保留期已过：媒体已自动清理，详情页只保留标题与删除入口，不再展示媒体与文案内容。
@@ -812,10 +812,10 @@ function jobDetailHTML(job){
   // 图文/动图：图片画廊。动图缩略图直接用动态本体内联动（点开是全屏查看器，非视频播放器）。
   const mediaFiles=files.filter(f=>f.kind==='image'||f.kind==='animated');
   const noteImages=w.images||[];
-  // 按文件名前缀（image-NN）匹配配图，避免某张图下载失败被跳过导致数组下标错位、文件张冠李戴。
-  const mediaFileForImage=i=>mediaFiles.find(f=>(f.name||'').indexOf(`image-${String(i+1).padStart(2,'0')}`)===0)||null;
+  // 按媒体类型和文件名前缀（image-NN）匹配，避免历史静态文件被当作动图、下载失败导致下标错位。
+  const mediaFileForImage=(img,i)=>mediaFiles.find(f=>f.kind===(img.animatedUrl?'animated':'image')&&(f.name||'').indexOf(`image-${String(i+1).padStart(2,'0')}`)===0)||null;
   const galleryItems=noteImages.map((img,i)=>{
-    const file=mediaFileForImage(i);
+    const file=mediaFileForImage(img,i);
     const cdnSrc=img.animatedUrl||img.url;
     // 签名预览地址 24h 有效：可用时优先（跨区域稳定），过期则退回 CDN 原址，避免 404 黑框。
     const viewerSrc=(file&&file.previewUrl&&previewUsable(file.previewUrl))?file.previewUrl:cdnSrc;
@@ -1110,6 +1110,7 @@ function resetPreviewMedia(){
     video.removeEventListener('touchstart',previewGestureHandler);
     previewGestureHandler=null;
   }
+  video.onerror=null;video.oncanplay=null;img.onerror=null;
   video.pause();video.currentTime=0;video.removeAttribute('src');video.removeAttribute('poster');video.removeAttribute('x5-video-player-type');video.load();video.classList.add('hidden');
   img.classList.add('hidden');img.removeAttribute('src');
 }
@@ -1145,6 +1146,7 @@ function renderGalleryPreview(){
   resetPreviewMedia();
   let src=item.src;
   if(!previewUsable(src)&&item.fallback)src=item.fallback;
+  const fallback=item.fallback&&item.fallback!==src?item.fallback:'';
   const count=galleryPreview.items.length>1?` ${galleryPreview.index+1}/${galleryPreview.items.length}`:'';
   $('#preview-title').textContent=(item.title||'预览')+count;
   setPreviewNav(galleryPreview.items.length>1);
@@ -1164,6 +1166,7 @@ function renderGalleryPreview(){
     soundBtn.classList.remove('hidden');
     setPreviewSoundUI(false);
     if(item.poster)video.poster=item.poster;
+    video.onerror=fallback?()=>{video.onerror=null;video.src=fallback;video.load();video.play().catch(()=>{})}:null;
     video.src=src;video.load();
     const autoplay=()=>{video.play().catch(()=>{})};
     autoplay();
@@ -1188,6 +1191,7 @@ function renderGalleryPreview(){
     playPreviewMusic();
   }else{
     soundBtn.classList.add('hidden');
+    img.onerror=fallback?()=>{img.onerror=null;img.src=fallback}:null;
     img.classList.remove('hidden');img.decoding='async';img.src=src;
     // 普通图片点开也播放图文作品的背景音乐。
     playPreviewMusic();

@@ -114,6 +114,88 @@ func TestDetailFromPageScriptsFlightVideoAndAnimatedImage(t *testing.T) {
 	})
 }
 
+func TestDetailFromPageScriptsFlightLivePhotoSrcArray(t *testing.T) {
+	images := make([]any, 42)
+	for i := range images {
+		image := map[string]any{
+			"clipType": 4,
+			"urlList":  []string{fmt.Sprintf("https://example.test/still-%02d.jpg", i)},
+			"video": map[string]any{"playAddr": []any{
+				map[string]any{"src": fmt.Sprintf("https://example.test/playwm/live-%02d.mp4", i)},
+				map[string]any{"src": fmt.Sprintf("https://example.test/playwm/backup-%02d.mp4", i)},
+			}},
+		}
+		if i == 0 {
+			image["clipType"], image["video"] = 2, nil
+		}
+		if i == 1 {
+			image["video"] = map[string]any{"playAddr": []any{
+				map[string]any{"src": "not-a-url"},
+				map[string]any{"src": "https://example.test/playwm/live-01.mp4"},
+			}}
+		}
+		images[i] = image
+	}
+	detail := map[string]any{"awemeId": browserPageTestID, "images": images}
+	work := browserPageWork(t, browserPageFlight(t, browserPageRecord(t, detail)))
+	if work.Type != "note" || len(work.Images) != 42 || work.VideoURL != "" {
+		t.Fatalf("type=%q images=%d video=%q", work.Type, len(work.Images), work.VideoURL)
+	}
+	for i, image := range work.Images {
+		wantAnimated := ""
+		if i > 0 {
+			wantAnimated = fmt.Sprintf("https://example.test/play/live-%02d.mp4", i)
+		}
+		if image.URL != fmt.Sprintf("https://example.test/still-%02d.jpg", i) || image.AnimatedURL != wantAnimated {
+			t.Fatalf("image %d = %#v, want animated URL %q", i, image, wantAnimated)
+		}
+	}
+}
+
+func TestDetailFromPageScriptsFlightVideoSrcArray(t *testing.T) {
+	detail := map[string]any{
+		"awemeId": browserPageTestID,
+		"video": map[string]any{
+			"cover": "https://example.test/cover.jpg",
+			"playAddr": []any{
+				map[string]any{"src": "", "poster": "https://example.test/wrong-poster.jpg"},
+				map[string]any{"src": "https://example.test/playwm/video.mp4"},
+				map[string]any{"src": "https://example.test/playwm/backup.mp4"},
+			},
+		},
+	}
+	work := browserPageWork(t, browserPageFlight(t, browserPageRecord(t, detail)))
+	if work.Type != "video" || work.VideoURL != "https://example.test/play/video.mp4" || work.CoverURL != "https://example.test/cover.jpg" {
+		t.Fatalf("work = %#v", work)
+	}
+}
+
+func TestDetailFromPageScriptsFlightLivePhotoIgnoresUnrelatedURLs(t *testing.T) {
+	detail := map[string]any{
+		"awemeId": browserPageTestID,
+		"images": []any{map[string]any{
+			"clipType": 4,
+			"urlList":  []string{"https://example.test/still.jpg"},
+			"video": map[string]any{
+				"src":   "https://example.test/unrelated.mp4",
+				"cover": "https://example.test/cover.jpg",
+				"playAddr": []any{
+					map[string]any{
+						"src":      "not-a-url",
+						"poster":   "https://example.test/poster.jpg",
+						"metadata": map[string]any{"src": "https://example.test/nested.mp4"},
+					},
+					map[string]any{"cover": "https://example.test/other-cover.jpg"},
+				},
+			},
+		}},
+	}
+	work := browserPageWork(t, browserPageFlight(t, browserPageRecord(t, detail)))
+	if work.Type != "note" || len(work.Images) != 1 || work.Images[0].URL != "https://example.test/still.jpg" || work.Images[0].AnimatedURL != "" {
+		t.Fatalf("work = %#v", work)
+	}
+}
+
 func TestDetailFromPageScriptsJoinsFlightFragments(t *testing.T) {
 	detail := map[string]any{"awemeId": browserPageTestID, "images": []any{
 		map[string]any{"urlList": []string{"https://example.test/a.jpg"}},

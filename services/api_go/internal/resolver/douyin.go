@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const DouyinResolverVersion = "5"
+const DouyinResolverVersion = "6"
 
 type Douyin struct {
 	client *SafeClient
@@ -456,6 +456,13 @@ func findURL(m map[string]any, keys ...string) string {
 			for _, item := range v {
 				if s, ok := item.(string); ok && strings.HasPrefix(s, "http") {
 					return s
+				}
+				// 应用页的 playAddr 也可能是 [{src: "https://..."}]，
+				// 图集中的动态视频使用这种结构，不能只接受字符串数组。
+				if source, ok := item.(map[string]any); ok {
+					if found := findURL(source, "src"); found != "" {
+						return found
+					}
 				}
 			}
 		case map[string]any:
