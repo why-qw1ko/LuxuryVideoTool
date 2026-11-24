@@ -56,7 +56,7 @@
           <button type="submit" class="btn-primary" disabled>登录</button>
         </form>
         <form id="cdk-login-form" class="hidden">
-          <label>CDK 密钥<span class="password-wrap"><input id="login-cdk" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="128" placeholder="请输入一次性密钥" required><button id="toggle-cdk" class="password-eye" type="button" aria-label="显示密钥" title="显示密钥"></button></span></label>
+          <label>CDK 密钥<span class="password-wrap"><input id="login-cdk" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="128" placeholder="请输入 CDK 密钥" required><button id="toggle-cdk" class="password-eye" type="button" aria-label="显示密钥" title="显示密钥"></button></span></label>
           <button type="submit" class="btn-primary" disabled>登录</button>
         </form>
         <details class="connection-settings">
@@ -101,7 +101,7 @@
           <div class="master-foot">
             <span id="job-total"></span>
             <span class="foot-api">API <span id="current-api"></span></span>
-            <button id="settings-link" class="admin-only hidden" type="button" aria-controls="admin-view-usage"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>设置</button>
+            <button id="settings-link" class="ghost admin-only hidden" type="button" aria-controls="admin-view-usage"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>设置</button>
           </div>
         </aside>
 
@@ -116,9 +116,13 @@
                 <div id="capture-options" class="capture-options hidden" role="group" aria-label="提取选项">
                   <label class="check capture-option" id="info-only-wrap"><input id="info-only" type="checkbox"><span>仅解析信息<small>不下载媒体文件</small></span></label>
                   <label class="check capture-option" id="with-transcribe-wrap"><input id="with-transcribe" type="checkbox"><span>转写视频文案<small>下载媒体并识别视频口播，耗时较长</small></span></label>
+                  <label id="capture-asr-provider-wrap" class="hidden">转写服务商
+                    <select id="capture-asr-provider"></select>
+                  </label>
                 </div>
                 <div class="capture-footer"><button id="submit-task" class="btn-primary" type="submit" aria-describedby="capture-action-hint" disabled>开始提取</button><span id="capture-action-hint" role="status">正在读取任务权限…</span></div>
                 <p id="capture-feedback" class="status-msg" role="status"></p>
+                <p id="capture-asr-status" class="field-hint hidden" role="status"></p>
                 <p id="daily-usage" class="field-hint hidden" role="status"></p>
                 <button id="capture-usage-retry" class="ghost hidden" type="button">重新加载任务权限</button>
               </form>
@@ -149,14 +153,35 @@
         </div>
       </aside>
       <main class="admin-content">
-        <section id="admin-view-dashboard" class="admin-view">
+        <section id="admin-view-dashboard" class="admin-view" aria-label="概览">
           <div class="admin-head">
             <div>
               <h2>概览</h2>
+              <p id="admin-stats-status" class="meta" role="status">正在加载统计…</p>
             </div>
             <button id="admin-refresh-stats" class="ghost" type="button"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>刷新</button>
           </div>
           <div id="admin-stats-cards" class="admin-cards"></div>
+          <div class="overview-details">
+            <section class="overview-card" aria-labelledby="overview-queue-title">
+              <h3 id="overview-queue-title">任务处理</h3>
+              <div class="overview-list">
+                <button type="button" class="overview-row" data-overview-status="queued"><span>排队中</span><strong id="overview-queued">—</strong></button>
+                <button type="button" class="overview-row" data-overview-status="processing"><span>处理中</span><strong id="overview-processing">—</strong></button>
+                <button type="button" class="overview-row" data-overview-status="retry_wait"><span>等待重试</span><strong id="overview-retry-wait">—</strong></button>
+                <button type="button" class="overview-row" data-overview-status="failed"><span>失败任务</span><strong id="overview-failed">—</strong></button>
+              </div>
+            </section>
+            <section class="overview-card" aria-labelledby="overview-services-title">
+              <h3 id="overview-services-title">服务与访问</h3>
+              <div class="overview-list">
+                <button type="button" class="overview-row" data-overview-view="providers"><span>转写服务</span><strong id="overview-provider-summary">读取中…</strong></button>
+                <button type="button" class="overview-row" data-overview-view="users"><span>启用账号</span><strong id="overview-active-users">—</strong></button>
+                <button type="button" class="overview-row" data-overview-view="cdks"><span>CDK 管理</span></button>
+                <button type="button" class="overview-row" data-overview-view="usage"><span>使用设置</span></button>
+              </div>
+            </section>
+          </div>
           <div class="admin-charts">
             <div class="chart-card">
               <div class="chart-head"><h3>任务状态分布</h3></div>
@@ -228,7 +253,7 @@
             <label>每个密钥的任务总次数<input id="cdk-task-limit" type="number" min="1" max="100000" step="1" value="1" inputmode="numeric" required></label>
             <button id="cdk-generate" class="btn-primary" type="submit">生成密钥</button>
           </form>
-          <p id="admin-cdk-hint" class="meta">每个密钥只能登录一次，单批最多生成 100 个。任务额度按累计创建次数计算。</p>
+          <p id="admin-cdk-hint" class="meta">额度用完前可重复登录。每批最多生成 100 个，任务额度按累计创建次数计算。</p>
           <div id="admin-cdk-generated" class="admin-cdk-generated hidden">
             <label>完整密钥<textarea id="admin-cdk-codes" rows="3" readonly spellcheck="false" autocomplete="off" aria-describedby="admin-cdk-save-hint"></textarea></label>
             <p id="admin-cdk-save-hint" class="meta">完整密钥只在生成或轮换后显示。请复制保存后再关闭。</p>
@@ -274,24 +299,75 @@
         </section>
 
         <section id="admin-view-providers" class="admin-view panel hidden" aria-labelledby="admin-providers-heading">
-          <div class="admin-head">
-            <div>
-              <h2 id="admin-providers-heading">转写服务</h2>
-              <p class="meta">硅基流动为默认转写服务。阿里云备用需公网 HTTPS 地址。密钥保存后不会回显。</p>
-            </div>
+          <div class="admin-head provider-page-head">
+            <h2 id="admin-providers-heading">转写服务</h2>
+            <button id="providers-refresh" class="ghost" type="button">重新加载</button>
+            <p class="meta">管理可用服务、默认服务及前台选择权限。</p>
           </div>
-          <form id="provider-form">
-            <label>当前转写模型
-              <input id="asr-model" list="asr-model-options" maxlength="256" placeholder="FunAudioLLM/SenseVoiceSmall">
-              <datalist id="asr-model-options">
-                <option value="FunAudioLLM/SenseVoiceSmall"></option>
-              </datalist>
-            </label>
-            <label>阿里云 DashScope API Key<input id="aliyun-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="当前状态：未配置"></label>
-            <label class="check"><input id="clear-aliyun" type="checkbox">清除阿里云 Key</label>
-            <label>硅基流动 API Key<input id="silicon-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="当前状态：未配置"></label>
-            <label class="check"><input id="clear-silicon" type="checkbox">清除硅基流动 Key</label>
-            <button type="submit" class="btn-primary">保存设置</button>
+          <form id="provider-form" autocomplete="off">
+            <fieldset id="provider-fields" disabled>
+              <section class="provider-policy" aria-labelledby="provider-policy-heading">
+                <h3 id="provider-policy-heading">任务分配</h3>
+                <label>默认服务商<select id="default-asr-provider" name="defaultProvider"></select></label>
+                <label class="admin-usage-switch provider-selection-switch">允许用户选择服务商<input name="allowUserSelection" type="checkbox" role="switch"></label>
+                <p id="provider-policy-note" class="meta"></p>
+              </section>
+              <div class="provider-grid">
+                <section class="provider-card" data-provider="siliconflow" aria-labelledby="provider-siliconflow-heading">
+                  <div class="provider-card-head">
+                    <div><h3 id="provider-siliconflow-heading">硅基流动</h3><span data-provider-status class="badge badge-muted">正在加载</span></div>
+                    <input name="enabledProviders" value="siliconflow" type="checkbox" role="switch" aria-label="启用硅基流动">
+                  </div>
+                  <div class="provider-model-fields">
+                    <label>转写模型
+                      <select id="asr-model">
+                        <option value="FunAudioLLM/SenseVoiceSmall">SenseVoiceSmall</option>
+                        <option value="TeleAI/TeleSpeechASR">TeleSpeechASR</option>
+                        <option value="custom">自定义模型</option>
+                      </select>
+                    </label>
+                    <label id="asr-model-custom-wrap" class="hidden">自定义模型 ID
+                      <input id="asr-model-custom" maxlength="256" placeholder="例如 TeleAI/TeleSpeechASR">
+                    </label>
+                  </div>
+                  <label>API Key<input name="siliconFlowApiKey" type="password" autocomplete="new-password" maxlength="4096" placeholder="输入新 Key"></label>
+                  <div class="provider-card-actions">
+                    <button data-provider-test type="button" class="ghost">测试连接</button>
+                    <button data-provider-clear type="button" class="ghost provider-clear">清除 Key</button>
+                  </div>
+                  <p data-provider-result class="meta provider-result" role="status"></p>
+                </section>
+                <section class="provider-card" data-provider="aliyun" aria-labelledby="provider-aliyun-heading">
+                  <div class="provider-card-head">
+                    <div><h3 id="provider-aliyun-heading">阿里云</h3><span data-provider-status class="badge badge-muted">正在加载</span></div>
+                    <input name="enabledProviders" value="aliyun" type="checkbox" role="switch" aria-label="启用阿里云">
+                  </div>
+                  <p class="meta provider-model">Paraformer · 需公网 HTTPS 地址</p>
+                  <label>API Key<input name="aliyunApiKey" type="password" autocomplete="new-password" maxlength="4096" placeholder="输入新 Key"></label>
+                  <div class="provider-card-actions">
+                    <button data-provider-test type="button" class="ghost">测试连接</button>
+                    <button data-provider-clear type="button" class="ghost provider-clear">清除 Key</button>
+                  </div>
+                  <p data-provider-result class="meta provider-result" role="status"></p>
+                </section>
+                <section class="provider-card" data-provider="deepseek" aria-labelledby="provider-deepseek-heading">
+                  <div class="provider-card-head">
+                    <div><h3 id="provider-deepseek-heading">DeepSeek</h3><span data-provider-status class="badge badge-muted">正在加载</span></div>
+                    <input name="enabledProviders" value="deepseek" type="checkbox" role="switch" aria-label="启用DeepSeek">
+                  </div>
+                  <p class="meta provider-model">DeepSeek 语音识别</p>
+                  <label>API Key<input name="deepseekApiKey" type="password" autocomplete="new-password" maxlength="4096" placeholder="输入新 Key"></label>
+                  <div class="provider-card-actions">
+                    <button data-provider-test type="button" class="ghost">测试连接</button>
+                    <button data-provider-clear type="button" class="ghost provider-clear">清除 Key</button>
+                  </div>
+                  <p data-provider-result class="meta provider-result" role="status"></p>
+                </section>
+              </div>
+              <p class="meta provider-hint">测试使用已保存的配置和内置示例音频，可能产生少量转写费用。</p>
+              <button type="submit" class="btn-primary">保存转写设置</button>
+            </fieldset>
+            <p id="provider-status" class="meta" role="status">正在加载配置…</p>
           </form>
         </section>
 

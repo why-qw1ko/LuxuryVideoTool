@@ -14,9 +14,14 @@ import (
 
 type Budget struct { DailyCNY, MonthlyCNY, PricePerMinuteCNY float64 }
 type ProviderFactory func(context.Context) (Provider, Provider)
+type ProviderRouter func(context.Context, string) (Provider, Provider)
+type ProviderSet struct {
+	Primary, Fallback Provider
+}
 type Service struct {
 	primary, fallback Provider
 	providers         ProviderFactory
+	router            ProviderRouter
 	repo              *Repository
 	budget            Budget
 	now               func() time.Time
@@ -24,11 +29,33 @@ type Service struct {
 }
 func NewService(primary, fallback Provider, repo *Repository, budget Budget) *Service { return &Service{primary: primary, fallback: fallback, repo: repo, budget: budget, now: time.Now} }
 func (s *Service) SetProviderFactory(factory ProviderFactory) { s.providers = factory }
+func (s *Service) SetProviderRouter(router ProviderRouter) { s.router = router }
+
+func (s *Service) SelectProviders(ctx context.Context, requested string) ProviderSet {
+	if s.router != nil {
+		primary, fallback := s.router(ctx, requested)
+		if requested != "" {
+			fallback = nil
+		}
+		return ProviderSet{Primary: primary, Fallback: fallback}
+	}
+	if requested != "" {
+		return ProviderSet{}
+	}
+	if s.providers != nil {
+		primary, fallback := s.providers(ctx)
+		return ProviderSet{Primary: primary, Fallback: fallback}
+	}
+	return ProviderSet{Primary: s.primary, Fallback: s.fallback}
+}
 
 func (s *Service) Transcribe(ctx context.Context, jobID, audioPath, audioURL string, duration time.Duration, languages, hotwords []string) (TranscribeResult, error) {
 	return s.TranscribeSegment(ctx, jobID, 0, audioPath, audioURL, duration, languages, hotwords, nil)
 }
 func (s *Service) TranscribeSegment(ctx context.Context, jobID string, index int, audioPath, audioURL string, duration time.Duration, languages, hotwords []string, progress func(done bool) error) (TranscribeResult, error) {
+	return s.TranscribeSelectedSegment(ctx, s.SelectProviders(ctx, ""), jobID, index, audioPath, audioURL, duration, languages, hotwords, progress)
+}
+func (s *Service) TranscribeSelectedSegment(ctx context.Context, providers ProviderSet, jobID string, index int, audioPath, audioURL string, duration time.Duration, languages, hotwords []string, progress func(done bool) error) (TranscribeResult, error) {
 	s.budgetMu.Lock()
 	defer s.budgetMu.Unlock()
 	budget := s.budget
@@ -37,10 +64,7 @@ func (s *Service) TranscribeSegment(ctx context.Context, jobID string, index int
 	if err := s.checkBudget(ctx, budget, estimate); err != nil {
 		return TranscribeResult{}, err
 	}
-	primary, fallback := s.primary, s.fallback
-	if s.providers != nil {
-		primary, fallback = s.providers(ctx)
-	}
+	primary, fallback := providers.Primary, providers.Fallback
 	if primary == nil {
 		return TranscribeResult{}, ErrAuth
 	}

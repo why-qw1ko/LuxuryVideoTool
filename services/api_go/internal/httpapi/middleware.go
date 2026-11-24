@@ -40,7 +40,6 @@ func gzipStatic(next http.Handler) http.Handler {
 			return
 		}
 		w.Header().Set("Content-Encoding", "gzip")
-		w.Header().Add("Vary", "Accept-Encoding")
 		gz := gzipPool.Get().(*gzip.Writer)
 		gz.Reset(w)
 		defer func() {

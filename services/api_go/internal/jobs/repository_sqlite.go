@@ -271,8 +271,11 @@ func (r *SQLiteRepository) Stats(ctx context.Context, now time.Time) (Stats, err
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs`).Scan(&stats.Total); err != nil {
 		return Stats{}, fmt.Errorf("count jobs: %w", err)
 	}
-	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE created_at >= ?`, millis(todayStart)).Scan(&stats.Today); err != nil {
+	now = now.In(taskQuotaLocation)
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, taskQuotaLocation)
+	tomorrowStart := todayStart.AddDate(0, 0, 1)
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE created_at >= ? AND created_at < ?`,
+		millis(todayStart), millis(tomorrowStart)).Scan(&stats.Today); err != nil {
 		return Stats{}, fmt.Errorf("count today jobs: %w", err)
 	}
 	rows, err := r.db.QueryContext(ctx, `SELECT status, COUNT(*) FROM jobs GROUP BY status`)
@@ -291,7 +294,10 @@ func (r *SQLiteRepository) Stats(ctx context.Context, now time.Time) (Stats, err
 	if err := rows.Err(); err != nil {
 		return Stats{}, err
 	}
-	dayRows, err := r.db.QueryContext(ctx, `SELECT date(created_at/1000,'unixepoch') AS day, COUNT(*) FROM jobs WHERE created_at >= ? GROUP BY day`, millis(todayStart.AddDate(0, 0, -13)))
+	_, offsetSeconds := now.Zone()
+	dayRows, err := r.db.QueryContext(ctx, `SELECT date(created_at/1000 + ?, 'unixepoch') AS day, COUNT(*)
+		FROM jobs WHERE created_at >= ? AND created_at < ? GROUP BY day`,
+		offsetSeconds, millis(todayStart.AddDate(0, 0, -13)), millis(tomorrowStart))
 	if err != nil {
 		return Stats{}, fmt.Errorf("count jobs by day: %w", err)
 	}
@@ -309,8 +315,8 @@ func (r *SQLiteRepository) Stats(ctx context.Context, now time.Time) (Stats, err
 		return Stats{}, err
 	}
 	for offset := 13; offset >= 0; offset-- {
-		day := todayStart.AddDate(0, 0, -offset)
-		stats.ByDay = append(stats.ByDay, DayCount{Day: day.Format("2006-01-02"), Count: byDay[day.Format("2006-01-02")]})
+		day := todayStart.AddDate(0, 0, -offset).Format(time.DateOnly)
+		stats.ByDay = append(stats.ByDay, DayCount{Day: day, Count: byDay[day]})
 	}
 	return stats, nil
 }
@@ -335,7 +341,7 @@ func (r *SQLiteRepository) create(ctx context.Context, job Job, started bool, da
 	if started {
 		startedAt = job.CreatedAt.UnixMilli()
 	}
-	options, err := json.Marshal(map[string]any{"keepVideo": job.KeepVideo, "languageHints": job.LanguageHints, "hotwords": job.Hotwords})
+	options, err := json.Marshal(jobOptions{KeepVideo: job.KeepVideo, LanguageHints: job.LanguageHints, Hotwords: job.Hotwords, ASRProvider: job.ASRProvider})
 	if err != nil {
 		return err
 	}
@@ -415,6 +421,13 @@ func scanJobOwner(row scanner) (Job, error) {
 	return scanJobFields(row, true)
 }
 
+type jobOptions struct {
+	KeepVideo     bool     `json:"keepVideo"`
+	LanguageHints []string `json:"languageHints"`
+	Hotwords      []string `json:"hotwords"`
+	ASRProvider   string   `json:"asrProvider,omitempty"`
+}
+
 func scanJobFields(row scanner, withOwner bool) (Job, error) {
 	var job Job
 	var force int
@@ -449,13 +462,10 @@ func scanJobFields(row scanner, withOwner bool) (Job, error) {
 			job.Result = result
 		}
 	}
-	var options struct {
-		KeepVideo     bool     `json:"keepVideo"`
-		LanguageHints []string `json:"languageHints"`
-		Hotwords      []string `json:"hotwords"`
-	}
+	var options jobOptions
 	if json.Unmarshal([]byte(optionsJSON), &options) == nil {
 		job.KeepVideo, job.LanguageHints, job.Hotwords = options.KeepVideo, options.LanguageHints, options.Hotwords
+		job.ASRProvider = options.ASRProvider
 	}
 	if errorCode.Valid {
 		job.Error = &JobError{Code: errorCode.String, Message: errorMessage.String}

@@ -99,6 +99,12 @@ func TestCDKHTTPFlow(t *testing.T) {
 		t.Helper()
 		return request(http.MethodPost, cdkLoginPath, map[string]any{"code": code, "device": device}, "", want)
 	}
+	exhausted := func(code string) {
+		t.Helper()
+		if body := login(code, http.StatusTooManyRequests).Body.String(); !strings.Contains(body, `"code":"CDK_LIMIT_REACHED"`) {
+			t.Fatal(body)
+		}
+	}
 	crossSite := webRequest(http.MethodPost, cdkLoginPath, map[string]any{"code": key.Code, "device": device}, nil)
 	crossSite.Header.Set("Origin", "https://different.example")
 	crossSiteResponse := httptest.NewRecorder()
@@ -120,7 +126,12 @@ func TestCDKHTTPFlow(t *testing.T) {
 	if len(cookies) != 1 || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode {
 		t.Fatal("web CDK login lacks protected refresh cookie")
 	}
-	login(key.Code, http.StatusUnauthorized)
+	relogin := login(key.Code, http.StatusOK)
+	var repeated tokenResponse
+	if err := json.Unmarshal(relogin.Body.Bytes(), &repeated); err != nil || repeated.User.ID != cdkPair.User.ID ||
+		repeated.AccessToken == cdkPair.AccessToken {
+		t.Fatalf("CDK repeat login did not create a new session on the original account: %v", err)
+	}
 	request(http.MethodGet, cdkAdminPath, nil, cdkPair.AccessToken, http.StatusForbidden)
 	for _, action := range []string{"/reset", "/rotate"} {
 		request(http.MethodPost, keyPath+action, nil, "", http.StatusUnauthorized)
@@ -165,7 +176,10 @@ func TestCDKHTTPFlow(t *testing.T) {
 	if body := submit("second", http.StatusTooManyRequests).Body.String(); !strings.Contains(body, "CDK_LIMIT_REACHED") {
 		t.Fatal(body)
 	}
+	exhausted(key.Code)
+	request(http.MethodGet, "/api/v1/jobs/"+created.Job.ID, nil, active, http.StatusOK)
 	request(http.MethodPatch, keyPath, map[string]int{"taskLimit": 2}, token, http.StatusOK)
+	login(key.Code, http.StatusOK)
 	if body := submit("second", http.StatusTooManyRequests).Body.String(); !strings.Contains(body, "DAILY_TASK_LIMIT") {
 		t.Fatal(body)
 	}
@@ -189,6 +203,7 @@ func TestCDKHTTPFlow(t *testing.T) {
 	if body := submit("third", http.StatusTooManyRequests).Body.String(); !strings.Contains(body, "CDK_LIMIT_REACHED") {
 		t.Fatal(body)
 	}
+	exhausted(key.Code)
 
 	// A replay in flight when the key is rotated must not revoke the replacement account session.
 	repository := auth.NewSQLiteRepository(db)
@@ -210,13 +225,22 @@ func TestCDKHTTPFlow(t *testing.T) {
 	}
 	login(key.Code, http.StatusUnauthorized)
 	request(http.MethodGet, "/api/v1/jobs/usage", nil, active, http.StatusUnauthorized)
+	request(http.MethodGet, "/api/v1/jobs/usage", nil, repeated.AccessToken, http.StatusUnauthorized)
+	exhausted(newCode)
+
+	updated.Item = auth.CDK{}
+	reset := request(http.MethodPost, keyPath+"/reset", nil, token, http.StatusOK)
+	if err := json.Unmarshal(reset.Body.Bytes(), &updated); err != nil || updated.Item.ID != key.ID || updated.Item.Code != "" ||
+		updated.Item.Status != "unused" || updated.Item.TaskLimit != 2 || updated.Item.TaskCount != 0 {
+		t.Fatalf("invalid reset response, decode error = %v", err)
+	}
 	newLogin := login(newCode, http.StatusOK)
 	var newPair tokenResponse
 	if err := json.Unmarshal(newLogin.Body.Bytes(), &newPair); err != nil || newPair.User.ID != cdkPair.User.ID || newPair.User.DisplayName != updated.Item.Prefix {
 		t.Fatalf("rotated CDK did not reuse its account, decode error = %v", err)
 	}
-	login(newCode, http.StatusUnauthorized)
-	for _, oldCookies := range [][]*http.Cookie{cookies, refreshed.Result().Cookies()} {
+	login(newCode, http.StatusOK)
+	for _, oldCookies := range [][]*http.Cookie{cookies, refreshed.Result().Cookies(), relogin.Result().Cookies()} {
 		replayed := httptest.NewRecorder()
 		handler.ServeHTTP(replayed, webRequest(http.MethodPost, "/api/v1/auth/refresh", nil, oldCookies))
 		if replayed.Code != http.StatusUnauthorized {
@@ -228,16 +252,6 @@ func TestCDKHTTPFlow(t *testing.T) {
 	}
 	active = newPair.AccessToken
 	request(http.MethodGet, "/api/v1/jobs/"+created.Job.ID, nil, active, http.StatusOK)
-	if body := submit("third", http.StatusTooManyRequests).Body.String(); !strings.Contains(body, "CDK_LIMIT_REACHED") {
-		t.Fatal(body)
-	}
-
-	updated.Item = auth.CDK{}
-	reset := request(http.MethodPost, keyPath+"/reset", nil, token, http.StatusOK)
-	if err := json.Unmarshal(reset.Body.Bytes(), &updated); err != nil || updated.Item.ID != key.ID || updated.Item.Code != "" ||
-		updated.Item.Status != "redeemed" || updated.Item.TaskLimit != 2 || updated.Item.TaskCount != 0 {
-		t.Fatalf("invalid reset response, decode error = %v", err)
-	}
 	policy.DailyTaskLimit = 1
 	if err := store.SetUsage(ctx, policy, admin.ID); err != nil {
 		t.Fatal(err)
@@ -285,7 +299,8 @@ func TestCDKCredentialMigrationPreservesRedemptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	device := auth.Device{ID: "pc", Name: "PC", Platform: "windows", AppVersion: "1"}
-	if _, err := service.LoginCDK(ctx, items[0].Code, device); err != nil {
+	first, err := service.LoginCDK(ctx, items[0].Code, device)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `ALTER TABLE login_cdks DROP COLUMN code_redeemed_at;
@@ -295,15 +310,16 @@ func TestCDKCredentialMigrationPreservesRedemptions(t *testing.T) {
 	if err := database.Migrate(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.LoginCDK(ctx, items[0].Code, device); !errors.Is(err, auth.ErrInvalidCDK) {
-		t.Fatalf("previously used CDK login after migration: %v", err)
+	repeated, err := service.LoginCDK(ctx, items[0].Code, device)
+	if err != nil || repeated.User.ID != first.User.ID {
+		t.Fatalf("previously used CDK did not retain its original account after migration: %v", err)
 	}
 	if _, err := service.LoginCDK(ctx, items[1].Code, device); err != nil {
 		t.Fatalf("unused CDK login after migration: %v", err)
 	}
 }
 
-func TestCDKConcurrentRedemptionAndTaskQuota(t *testing.T) {
+func TestCDKConcurrentLoginAndTaskQuota(t *testing.T) {
 	ctx := context.Background()
 	service, db, closeDB := testAuthService(t)
 	defer closeDB()
@@ -317,20 +333,27 @@ func TestCDKConcurrentRedemptionAndTaskQuota(t *testing.T) {
 	for range cap(results) {
 		attempts.Go(func() {
 			pair, err := service.LoginCDK(ctx, items[0].Code, device)
-			switch {
-			case err == nil:
-				results <- pair
-			case !errors.Is(err, auth.ErrInvalidCDK):
-				t.Errorf("redeem CDK: %v", err)
+			if err != nil {
+				t.Errorf("log in with CDK: %v", err)
+				return
 			}
+			results <- pair
 		})
 	}
 	attempts.Wait()
 	close(results)
-	if len(results) != 1 {
-		t.Fatalf("successful concurrent redemptions = %d, want 1", len(results))
+	if len(results) != cap(results) {
+		t.Fatalf("successful concurrent logins = %d, want %d", len(results), cap(results))
 	}
-	userID := (<-results).User.ID
+	first := <-results
+	userID := first.User.ID
+	sessions := map[string]bool{first.SessionID: true}
+	for pair := range results {
+		if pair.User.ID != userID || sessions[pair.SessionID] {
+			t.Fatal("concurrent CDK login duplicated the user account or reused a session")
+		}
+		sessions[pair.SessionID] = true
+	}
 	jobService := jobs.NewService(jobs.NewSQLiteRepository(db), nil)
 	accepted := make(chan struct{}, 8)
 	for index := range cap(accepted) {
@@ -354,6 +377,9 @@ func TestCDKConcurrentRedemptionAndTaskQuota(t *testing.T) {
 	usage, err := service.CDKUsage(ctx, userID)
 	if err != nil || usage != (auth.CDKUsage{Used: 2, Limit: 2}) {
 		t.Fatalf("CDK usage = %+v, error = %v", usage, err)
+	}
+	if _, err := service.LoginCDK(ctx, items[0].Code, device); !errors.Is(err, auth.ErrCDKExhausted) {
+		t.Fatalf("exhausted CDK login error = %v, want exhaustion", err)
 	}
 }
 

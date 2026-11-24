@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -74,31 +75,48 @@ func run() error {
 	}
 	runtimeSettings.SetFallback(settings.AliyunKey, cfg.DashScopeAPIKey)
 	runtimeSettings.SetFallback(settings.SiliconFlowKey, cfg.SiliconFlowAPIKey)
+	runtimeSettings.SetFallback(settings.DeepSeekKey, cfg.DeepSeekAPIKey)
 	runtimeSettings.SetFallback(settings.ASRModel, cfg.ASRModel)
 	signer := ownedfiles.NewSigner(signingKey, cfg.PublicBaseURL)
+	aliyunAvailable := publicHTTPSURL(cfg.PublicBaseURL)
 	asrService := asr.NewService(nil, nil, asr.NewRepository(db), asr.Budget{
 		DailyCNY: cfg.DailyASRBudgetCNY, MonthlyCNY: cfg.MonthlyASRBudgetCNY, PricePerMinuteCNY: cfg.ASRPricePerMinuteCNY,
 	})
-	asrService.SetProviderFactory(func(ctx context.Context) (asr.Provider, asr.Provider) {
-		aliyunKey := runtimeSettings.Resolve(ctx, settings.AliyunKey, cfg.DashScopeAPIKey)
-		siliconKey := runtimeSettings.Resolve(ctx, settings.SiliconFlowKey, cfg.SiliconFlowAPIKey)
-		asrModel := runtimeSettings.Resolve(ctx, settings.ASRModel, cfg.ASRModel)
-		if asrModel == "" {
-			asrModel = cfg.ASRModel
+	providerFactory := func(config settings.ProviderConfig) asr.Provider {
+		if !config.Available {
+			return nil
 		}
-		var silicon, aliyun asr.Provider
-		if siliconKey != "" {
-			silicon = asr.NewSiliconFlow(siliconKey, "", asrModel)
-		}
-		if aliyunKey != "" && cfg.PublicBaseURL != "" {
-			provider := asr.NewParaformer(aliyunKey, cfg.DashScopeEndpoint, "paraformer-v2")
+		switch config.ID {
+		case settings.ProviderSiliconFlow:
+			return asr.NewSiliconFlow(config.APIKey, "", config.Model)
+		case settings.ProviderAliyun:
+			provider := asr.NewParaformer(config.APIKey, cfg.DashScopeEndpoint, config.Model)
 			provider.VocabularyID = cfg.ASRVocabularyID
-			aliyun = provider
+			return provider
+		case settings.ProviderDeepSeek:
+			return asr.NewDeepSeek(config.APIKey, "")
+		default:
+			return nil
 		}
-		if silicon == nil {
-			return aliyun, nil
+	}
+	asrService.SetProviderRouter(func(ctx context.Context, requested string) (asr.Provider, asr.Provider) {
+		providers, err := runtimeSettings.Providers(ctx, aliyunAvailable)
+		if err != nil {
+			return nil, nil
 		}
-		return silicon, aliyun
+		if requested != "" {
+			chosen := providers.Config(requested)
+			if !chosen.Enabled {
+				return nil, nil
+			}
+			return providerFactory(chosen), nil
+		}
+		primary := providers.Config(providers.Status.EffectiveDefaultProvider)
+		aliyun := providers.Config(settings.ProviderAliyun)
+		if providers.Status.DefaultProvider == "" && primary.ID == settings.ProviderSiliconFlow && aliyun.Enabled {
+			return providerFactory(primary), providerFactory(aliyun)
+		}
+		return providerFactory(primary), nil
 	})
 	transcriber := &jobs.Transcriber{ASR: asrService, FFmpeg: media.FFmpeg{Path: cfg.FFmpegPath, Timeout: 30 * time.Minute, LogLimit: 16 * 1024}, Probe: media.Probe{Path: cfg.FFprobePath, Timeout: time.Minute}, Signer: signer, FileRepo: fileRepository, Storage: storage, TempRetention: cfg.TempRetention}
 	thumbnails := media.NewThumbnailer(cfg.FFmpegPath)
@@ -118,7 +136,8 @@ func run() error {
 		Addr: cfg.HTTPAddr,
 		Handler: httpapi.New(httpapi.Dependencies{
 			Build: version.Current(), Auth: authService, Jobs: jobService, Files: fileRepository, Storage: storage, Thumbnails: thumbnails, Covers: media.NewCoverFetcher(), ASRSigner: signer, Audit: audit.New(db, signingKey),
-			Ready: readiness, LoginRateLimit: cfg.LoginRateLimit, Settings: runtimeSettings, AliyunAvailable: cfg.PublicBaseURL != "", AllowInsecureProviderSettings: cfg.AllowInsecureProviderSettings,
+			Ready: readiness, LoginRateLimit: cfg.LoginRateLimit, Settings: runtimeSettings, AliyunAvailable: aliyunAvailable,
+			ASRProviderFactory: providerFactory, AllowInsecureProviderSettings: cfg.AllowInsecureProviderSettings,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
@@ -154,4 +173,10 @@ func run() error {
 		defer cancel()
 		return server.Shutdown(shutdownCtx)
 	}
+}
+
+func publicHTTPSURL(value string) bool {
+	parsed, err := url.Parse(value)
+	return err == nil && parsed.Scheme == "https" && parsed.Hostname() != "" &&
+		parsed.User == nil && parsed.RawQuery == "" && !parsed.ForceQuery && parsed.Fragment == ""
 }

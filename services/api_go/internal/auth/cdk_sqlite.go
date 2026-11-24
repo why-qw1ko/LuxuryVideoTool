@@ -117,25 +117,34 @@ func (r *SQLiteRepository) RevokeCDK(ctx context.Context, id string, now time.Ti
 	return item, nil
 }
 
-func (r *SQLiteRepository) RedeemCDK(ctx context.Context, hash string, user User, newSession func(User) (Session, error)) error {
+func (r *SQLiteRepository) CreateCDKSession(ctx context.Context, hash string, user User, newSession func(User) (Session, error)) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	// Claim this credential once, reusing the same account after a rotation.
+	// Check quota in the write transaction that binds the first account or reuses an existing one.
 	// The deferred foreign key permits first-time account creation in this transaction.
 	at := millis(user.CreatedAt)
 	var userID string
-	err = tx.QueryRowContext(ctx, `UPDATE login_cdks SET code_redeemed_at = ?,
+	err = tx.QueryRowContext(ctx, `UPDATE login_cdks SET code_redeemed_at = COALESCE(code_redeemed_at, ?),
 		redeemed_at = COALESCE(redeemed_at, ?), user_id = COALESCE(user_id, ?)
-		WHERE code_hash = ? AND code_redeemed_at IS NULL AND revoked_at IS NULL
+		WHERE code_hash = ? AND revoked_at IS NULL AND task_count < task_limit
 		RETURNING user_id`, at, at, user.ID, hash).Scan(&userID)
 	if errors.Is(err, sql.ErrNoRows) {
+		var exhausted bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
+			SELECT 1 FROM login_cdks WHERE code_hash = ? AND revoked_at IS NULL AND task_count >= task_limit
+		)`, hash).Scan(&exhausted); err != nil {
+			return fmt.Errorf("check CDK task quota: %w", err)
+		}
+		if exhausted {
+			return ErrCDKExhausted
+		}
 		return ErrInvalidCDK
 	}
 	if err != nil {
-		return fmt.Errorf("redeem CDK: %w", err)
+		return fmt.Errorf("prepare CDK session: %w", err)
 	}
 	if userID == user.ID {
 		if err := insertUser(ctx, tx, user); err != nil {

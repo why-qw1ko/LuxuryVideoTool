@@ -13,6 +13,7 @@ var (
 	ErrIdempotencyConflict = errors.New("idempotency key reused with different request")
 	ErrDailyTaskLimit = errors.New("daily task limit reached")
 	ErrTaskActionDisabled = errors.New("task action disabled")
+	ErrASRProviderUnavailable = errors.New("ASR provider unavailable")
 	ErrNotCancellable = errors.New("job not cancellable")
 	ErrNotRetryable = errors.New("job not retryable")
 	ErrNotDeletable = errors.New("job not deletable")
@@ -29,6 +30,7 @@ type Job struct {
 	InputText      string         `json:"-"`
 	InputURL       string         `json:"-"`
 	Action         string         `json:"action"`
+	ASRProvider    string         `json:"asrProvider,omitempty"`
 	Status         string         `json:"status"`
 	Progress       int            `json:"progress"`
 	StatusMessage  string         `json:"statusMessage"`
@@ -59,6 +61,8 @@ type CreateInput struct {
 	Action string
 	DailyTaskLimit int
 	ActionDisabled bool
+	ASRProvider string
+	ASRProviderUnavailable bool
 	Force bool
 	KeepVideo bool
 	LanguageHints []string

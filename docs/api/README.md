@@ -10,15 +10,13 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 ## 认证
 
 - `POST /api/v1/auth/login`：用户名、密码及设备信息登录。
-- `POST /api/v1/auth/cdk/login` 接收 `{code, device}`。每个密钥只能成功登录一次，获得普通用户权限；网页沿用登录 Cookie 续期。密钥无效、已使用或已吊销时返回 `401 AUTH_INVALID_CDK`。
+- `POST /api/v1/auth/cdk/login` 接收 `{code, device}`。额度用完前可使用同一密钥重复登录原账号，获得普通用户权限。网页沿用登录 Cookie 续期。密钥无效或已吊销时返回 `401 AUTH_INVALID_CDK`，次数用尽时返回 `429 CDK_LIMIT_REACHED`。
 - `POST /api/v1/auth/password` 接收 `{currentPassword, newPassword}`。新密码须为 6 至 12 个字符，升级前已设置的密码继续有效。修改成功后撤销其他会话，当前会话保持登录。
 - `POST /api/v1/auth/refresh`：消费一次 Refresh Token，返回轮换后的新 Token 对。网页端（`appVersion` 以 `web-` 开头）的 Refresh Token 只写入 httpOnly Cookie（`SameSite=Strict`，HTTPS/回环地址附加 `Secure`），请求体为空、凭 Cookie 续期，并校验 Origin 同源；原生客户端仍通过请求体携带 Refresh Token。
 - `POST /api/v1/auth/logout`：撤销当前 Bearer Token 对应会话。
 - `GET /api/v1/auth/sessions`：列出当前用户未撤销、未过期的设备会话。
 - `DELETE /api/v1/auth/sessions/{id}`：撤销当前用户指定会话。
 - `DELETE /api/v1/admin/sessions/{id}`：管理员撤销任意用户会话。
-- `GET /api/v1/admin/settings/providers`：管理员查看阿里云/硅基流动 API Key 状态及阿里云当前是否具备公网调用条件；不返回密钥原文。
-- `PUT /api/v1/admin/settings/providers`：管理员保存或清除供应商 API Key；服务端使用 JWT 主密钥派生密钥加密存储，并立即用于新任务。
 
 ## 管理 API（仅管理员，普通用户一律 403）
 
@@ -27,9 +25,16 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 - `GET /api/v1/admin/settings/usage` 返回 `{settings, requestId}`。设置包含 `dailyTaskLimit`、`allowInfo`、`allowDownload`、`allowTranscribe`。
 - `PUT /api/v1/admin/settings/usage` 接收上述四个字段并立即保存。三个任务开关分别控制 `info`、`download`、`transcribe/full` 的新建请求。
 
+### 转写服务
+
+- `GET /api/v1/admin/settings/providers` 返回 `{providers, requestId}`。包含 `items`（`id`、`enabled`、`configured`、`available`、`model`）、`defaultProvider`、`effectiveDefaultProvider` 和 `allowUserSelection`。供应商 ID 为 `siliconflow`、`aliyun`、`deepseek`。
+- `PUT /api/v1/admin/settings/providers` 支持部分更新，包括 `siliconFlowApiKey`、`aliyunApiKey`、`deepseekApiKey`、硅基流动模型 `asrModel`、`enabledProviders`、`defaultProvider`、`allowUserSelection`。默认服务须已启用，空字符串表示自动选择已就绪的服务。指定的默认服务不可用时，系统停止接受依赖默认服务的转写任务。允许自主选择时，用户仍可明确选择其他可用服务。密钥加密存储，仅返回状态。阿里云要求服务端配置可公开访问的 HTTPS 地址。
+- `DELETE /api/v1/admin/settings/providers/{id}/key` 清除指定供应商的生效密钥，同时屏蔽同一供应商的环境变量密钥。保存新密钥后再次启用该凭据。
+- `POST /api/v1/admin/settings/providers/{id}/test` 使用该供应商当前保存的配置处理约一秒的合成 WAV，返回 `{provider, durationMs, message, requestId}`。服务商可能计入转写用量。失败区分缺少配置、鉴权失败、限流、额度不足及超时。
+
 ### 仪表盘统计
 
-- `GET /api/v1/admin/stats`：返回用户总数、启用账号数、任务总数、今日任务数、各状态任务数（`byStatus`）以及近 14 天每日任务数（`byDay`），供仪表盘图表使用。
+- `GET /api/v1/admin/stats` 返回用户总数、启用账号数、任务总数、今日任务数、各状态任务数（`byStatus`）以及近 14 天每日任务数（`byDay`）。今日和每日趋势均按北京时间划分。
 
 ### 用户管理
 
@@ -47,9 +52,9 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 - `POST /api/v1/admin/cdks` 接收 `{count, taskLimit}`。一次生成 1 至 100 个密钥，每个密钥可分配 1 至 100000 次累计新建任务额度。
 - `PATCH /api/v1/admin/cdks/{id}` 接收 `{taskLimit}`，修改该密钥的任务总额度，已用次数保留。
 - `POST /api/v1/admin/cdks/{id}/reset` 将累计已用次数清零，保留总额度、每日用量和任务历史，返回 `{item, requestId}`。
-- `POST /api/v1/admin/cdks/{id}/rotate` 返回 `{item, requestId}`，`item.code` 含新密钥。旧密钥及其会话立即失效，新密钥可登录一次，继续使用原账号、剩余额度和任务历史。已吊销的 CDK 禁止重置次数及轮换，返回 `409 CDK_REVOKED`。
+- `POST /api/v1/admin/cdks/{id}/rotate` 返回 `{item, requestId}`，`item.code` 含新密钥。旧密钥及其会话立即失效，新密钥沿用原账号、剩余额度和任务历史。已吊销的 CDK 禁止重置次数及轮换，返回 `409 CDK_REVOKED`。
 - `DELETE /api/v1/admin/cdks/{id}` 吊销密钥及其登录会话，保留密钥记录和任务历史。
-- CDK 会话的 `GET /api/v1/jobs/usage` 额外返回 `usage.cdk`，含 `used`、`limit`。累计额度用完时新建任务返回 `429 CDK_LIMIT_REACHED`。每日额度继续适用，幂等重放、任务重试和删除均不改变累计用量。
+- CDK 会话的 `GET /api/v1/jobs/usage` 额外返回 `usage.cdk`，含 `used`、`limit`。累计额度用完时新建任务返回 `429 CDK_LIMIT_REACHED`，当前会话仍可查看任务历史。每日额度继续适用，幂等重放、任务重试和删除均不改变累计用量。
 
 ### 任务管理（跨用户）
 
@@ -67,6 +72,7 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 - `GET /api/v1/jobs`：当前用户的历史任务，支持 `q/status/action/limit/offset` 搜索、筛选与分页。
 - 两个任务列表接口均支持 `view=summary`。摘要只包含列表展示字段，文案、文件和签名通过任务详情接口读取。现有客户端省略 `view` 时继续获取完整列表。
 - `GET /api/v1/jobs/usage` 返回当前账号的每日用量 `usage.{used, limit, resetAt}` 和新建权限 `usage.{allowInfo, allowDownload, allowTranscribe}`。`limit` 为 `0` 时代表不限。每账号在北京时间零点重置，每个新建任务计 1 次，重试、幂等重放和删除均不会增加或退回次数。
+- `usage.asr` 包含生效的 `defaultProvider`、`allowUserSelection` 和已启用且已配置的服务 `providers`（每项含 `id`）。创建 `transcribe/full` 任务时可通过 `options.asrProvider` 明确选择供应商。省略时使用默认服务。所选服务不可用或管理员关闭自主选择时返回 `403 ASR_PROVIDER_UNAVAILABLE`。
 - 创建任务达到额度时返回 `429 DAILY_TASK_LIMIT` 和 `Retry-After`。任务类型暂停新建时返回 `403 TASK_ACTION_DISABLED`。
 - `DELETE /api/v1/jobs/{id}`：删除已完成、失败或取消的任务及其文件记录；进行中的任务须先取消。
 - `POST /api/v1/jobs/{id}/cancel`：立即取消排队任务；本进程处理中任务协作终止下载/解析并持久化取消状态。
@@ -99,7 +105,7 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 
 `download` 请求立即返回 `queued`；后台 Worker 默认单并发，持久化 Lease 为 60 秒、心跳为 15 秒，服务重启后重新领取过期任务。媒体临时写入后原子改名，登记 SHA-256、MIME 和字节数；视频与图文/动图配图默认保留 168 小时（`RETENTION_VIDEO_HOURS`），由后台每小时自动清理，删除任务会同时删除其媒体。
 
-`transcribe/full` 依次执行解析、下载、MP3 提取、9 分钟分段（重叠 1 秒）、ASR 与结果生成。默认使用 `siliconflow_sensevoice/FunAudioLLM/SenseVoiceSmall`，由服务端直接上传本地音频，不需要公网地址。配置阿里云 Key 和 `PUBLIC_BASE_URL` 后，硅基流动出现可重试服务错误、超时或限流时可切换至阿里 Paraformer；认证、输入和预算错误不会切换。
+`transcribe/full` 依次执行解析、下载、音频提取、分段、ASR 与结果生成。硅基流动和阿里云使用 MP3。DeepSeek 使用单声道 PCM WAV，分段适配 120 秒和 8 MiB 上限。管理员可在网页选择默认服务。自动选择模式下，优先使用硅基流动，阿里云已启用且可用时，硅基流动出现可重试服务错误、超时或限流可切换至阿里云。明确指定服务商的任务使用对应服务。
 
 **图文/动图（note）作品**：无需 ASR。`download`、`transcribe` 和 `full` 会下载配图（动图下载动态版 MP4），并以作品配文（desc）作为文案生成结果；网页端提供逐图下载与打包 ZIP。纯解析（`info`）首次请求同步返回任务结果，手动重试进入队列，全程只读取作品信息。
 

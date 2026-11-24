@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -33,6 +34,44 @@ func (f FFmpeg) SplitMP3(ctx context.Context, workDir, input, pattern string, to
 	timeout := f.Timeout; if timeout <= 0 { timeout = 30*time.Minute }
 	for index, start := 0, time.Duration(0); start < total; index, start = index+1, start+step { length := min(segment, total-start); name := fmt.Sprintf(pattern, index); args := []string{"-nostdin", "-hide_banner", "-y", "-ss", fmt.Sprintf("%.3f", start.Seconds()), "-t", fmt.Sprintf("%.3f", length.Seconds()), "-i", input, "-ar", "16000", "-ac", "1", "-b:a", "48k", name}; runCtx, cancel := context.WithTimeout(ctx, timeout); cmd := exec.CommandContext(runCtx, f.Path, args...); cmd.Dir = workDir; log := &limitedBuffer{limit: f.LogLimit}; if log.limit <= 0 { log.limit = 16*1024 }; cmd.Stdout, cmd.Stderr = log, log; err := cmd.Run(); cancel(); if err != nil { return nil, fmt.Errorf("%w: exit=%v log=%q", ErrFFmpeg, err, log.String()) }; result = append(result, SegmentFile{Path: filepath.Join(workDir, name), Start: start, End: start+length}) }
 	return result, nil
+}
+
+// ExtractWAVSegments writes DeepSeek-compatible PCM WAV without re-encoding
+// an intermediate MP3. A second of headroom leaves room for FFmpeg's packet cuts.
+func (f FFmpeg) ExtractWAVSegments(ctx context.Context, outputDir, input string) ([]string, error) {
+	timeout := f.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Minute
+	}
+	limit := f.LogLimit
+	if limit <= 0 {
+		limit = 16 * 1024
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, f.Path, "-nostdin", "-hide_banner", "-y",
+		"-i", input, "-map", "0:a:0", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+		"-f", "segment", "-segment_format", "wav", "-segment_time", "119", "-reset_timestamps", "1", "segment-%06d.wav")
+	cmd.Dir = outputDir
+	log := &limitedBuffer{limit: limit}
+	cmd.Stdout, cmd.Stderr = log, log
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("%w: exit=%v log=%q", ErrFFmpeg, err, log.String())
+	}
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), "segment-") && strings.HasSuffix(entry.Name(), ".wav") {
+			paths = append(paths, filepath.Join(outputDir, entry.Name()))
+		}
+	}
+	if len(paths) == 0 {
+		return nil, ErrFFmpeg
+	}
+	return paths, nil
 }
 func (p Probe) Duration(ctx context.Context, input string) (time.Duration, error) { timeout := p.Timeout; if timeout <= 0 { timeout = time.Minute }; runCtx, cancel := context.WithTimeout(ctx, timeout); defer cancel(); output, err := exec.CommandContext(runCtx, p.Path, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", input).Output(); if err != nil { return 0, fmt.Errorf("probe duration: %w", err) }; seconds, err := strconv.ParseFloat(strings.TrimSpace(string(output)), 64); if err != nil || seconds <= 0 { return 0, ErrFFmpeg }; return time.Duration(seconds*float64(time.Second)), nil }
 

@@ -107,6 +107,16 @@ func registerUsageRoutes(mux, protected *http.ServeMux, deps Dependencies) {
 		usage["allowInfo"] = policy.AllowInfo
 		usage["allowDownload"] = policy.AllowDownload
 		usage["allowTranscribe"] = policy.AllowTranscribe
+		selection := settings.ProviderSelection{Providers: []settings.ProviderOption{}}
+		if policy.AllowTranscribe && deps.Settings != nil {
+			providers, err := deps.Settings.Providers(r.Context(), deps.AliyunAvailable)
+			if err != nil {
+				writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取转写服务配置", true)
+				return
+			}
+			selection = providers.Selection()
+		}
+		usage["asr"] = selection
 		if principal.IsCDK {
 			cdkUsage, err := deps.Auth.CDKUsage(r.Context(), principal.UserID)
 			if err != nil {

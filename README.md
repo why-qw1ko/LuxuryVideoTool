@@ -27,7 +27,7 @@ Luxury Capture 是一个自托管的抖音内容解析、下载与转写工具�
 - 视频：下载无水印视频并转写口播文案。
 - 图文/动图：下载全部配图（动图含动态版 MP4），画廊预览、逐张下载或打包 ZIP，配文即文案，支持作品背景音乐播放。
 - 使用 FFmpeg / FFprobe 提取音频。
-- 默认通过硅基流动 SenseVoice 转写口播文案。
+- 支持硅基流动、阿里云和 DeepSeek 转写口播文案。管理员可控制启用的服务、默认服务和用户选择权限。
 - 可导出 TXT、Markdown 和 meta JSON。
 - 支持任务进度、历史记录、搜索、重试、取消和删除；媒体保留到期自动清理，删除任务同时删除媒体。
 - 支持管理员在网页中配置 API Key 与转写模型。
@@ -170,6 +170,7 @@ DOUYIN_BROWSER_PATH=
 ASR_PROVIDER=siliconflow_sensevoice
 ASR_MODEL=FunAudioLLM/SenseVoiceSmall
 SILICONFLOW_API_KEY=
+DEEPSEEK_API_KEY=
 DAILY_ASR_BUDGET_CNY=5
 MONTHLY_ASR_BUDGET_CNY=20
 # 自托管内网/私有部署想通过纯 HTTP 远程配置 API Key 时设为 1（默认 0，公网保持关闭）
@@ -183,6 +184,7 @@ ALLOW_INSECURE_PROVIDER_SETTINGS=0
 - `FFMPEG_PATH` / `FFPROBE_PATH`：媒体处理工具路径。
 - `DOUYIN_BROWSER_PATH`：Linux 服务器建议显式配置 Chromium 路径。
 - `SILICONFLOW_API_KEY`：也可由管理员登录网页后保存。
+- `DEEPSEEK_API_KEY`：可用环境变量设置，或由管理员在「转写服务」配置并测试连接。
 - `DAILY_ASR_BUDGET_CNY` / `MONTHLY_ASR_BUDGET_CNY`：ASR 费用预算上限。
 
 真实密钥、`.env`、数据库和 `secrets/` 不得提交到仓库。

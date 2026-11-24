@@ -136,6 +136,47 @@ func TestDailyTaskLimitPreservesUsageAcrossTaskChanges(t *testing.T) {
 	checkUsage("first", 2, resetAt.Add(24*time.Hour))
 }
 
+func TestStatsUsesBeijingMidnight(t *testing.T) {
+	ctx := context.Background()
+	midnight := time.Date(2026, time.November, 24, 16, 0, 0, 0, time.UTC)
+	now := midnight.Add(-time.Millisecond)
+	service := newQuotaService(t, &now)
+	for _, creation := range []struct {
+		key string
+		at  time.Time
+	}{
+		{"before-midnight", midnight.Add(-time.Millisecond)},
+		{"at-midnight", midnight},
+		{"after-midnight", midnight.Add(time.Millisecond)},
+	} {
+		now = creation.at
+		_, _, err := service.CreateDownload(ctx, CreateInput{
+			UserID: "first", ShareText: "https://www.douyin.com/video/123", IdempotencyKey: creation.key,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	now = midnight.Add(-time.Millisecond)
+	stats, err := service.Stats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Today != 1 || len(stats.ByDay) != 14 || stats.ByDay[13] != (DayCount{Day: "2026-11-24", Count: 1}) {
+		t.Fatalf("stats before Beijing midnight = %+v", stats)
+	}
+	now = midnight
+	stats, err = service.Stats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Today != 2 || len(stats.ByDay) != 14 || stats.ByDay[12] != (DayCount{Day: "2026-11-24", Count: 1}) ||
+		stats.ByDay[13] != (DayCount{Day: "2026-11-25", Count: 2}) {
+		t.Fatalf("stats after Beijing midnight = %+v", stats)
+	}
+}
+
 func TestDailyTaskLimitConcurrentCreations(t *testing.T) {
 	now := time.Date(2026, time.November, 24, 12, 0, 0, 0, time.UTC)
 	service := newQuotaService(t, &now)

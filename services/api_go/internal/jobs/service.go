@@ -61,9 +61,12 @@ func (s *Service) CreateDownload(ctx context.Context, input CreateInput) (Job, b
 	if input.ActionDisabled {
 		return Job{}, false, ErrTaskActionDisabled
 	}
+	if input.ASRProviderUnavailable {
+		return Job{}, false, ErrASRProviderUnavailable
+	}
 	parsed, err := resolver.ExtractInput(input.ShareText); if err != nil { return Job{}, false, err }
 	now := s.now().UTC(); id, err := auth.NewID(now); if err != nil { return Job{}, false, err }
-	job := Job{ID: id, UserID: input.UserID, InputText: input.ShareText, InputURL: parsed.URL.String(), Action: input.Action, Status: "queued", Progress: 0, StatusMessage: "等待处理", IdempotencyKey: input.IdempotencyKey, ForceRefresh: input.Force, KeepVideo: input.KeepVideo, LanguageHints: input.LanguageHints, Hotwords: input.Hotwords, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}
+	job := Job{ID: id, UserID: input.UserID, InputText: input.ShareText, InputURL: parsed.URL.String(), Action: input.Action, Status: "queued", Progress: 0, StatusMessage: "等待处理", IdempotencyKey: input.IdempotencyKey, ForceRefresh: input.Force, KeepVideo: input.KeepVideo, LanguageHints: input.LanguageHints, Hotwords: input.Hotwords, ASRProvider: input.ASRProvider, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}
 	if existing, reused, err := s.createJob(ctx, input, job); err != nil || reused {
 		return existing, reused, err
 	}
@@ -79,7 +82,7 @@ func (s *Service) findIdempotentJob(ctx context.Context, input CreateInput) (Job
 	if existing.InputText != input.ShareText || existing.Action != input.Action || existing.ForceRefresh != input.Force {
 		return Job{}, ErrIdempotencyConflict
 	}
-	if input.Action != "info" && (existing.KeepVideo != input.KeepVideo ||
+	if input.Action != "info" && (existing.KeepVideo != input.KeepVideo || existing.ASRProvider != input.ASRProvider ||
 		!sameStrings(existing.LanguageHints, input.LanguageHints) || !sameStrings(existing.Hotwords, input.Hotwords)) {
 		return Job{}, ErrIdempotencyConflict
 	}

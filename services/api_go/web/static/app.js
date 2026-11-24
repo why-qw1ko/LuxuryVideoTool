@@ -252,7 +252,7 @@ function openAdminConsole(view='dashboard'){
 let adminReturnFocus='#admin-console-btn';
 function closeAdminConsole(){
   resetAdminPasswordForm();
-  $('#provider-form').reset();
+  resetProviderSettings();
   adminOpen=false;adminMode=false;
   setSidebar(false);
   show('#admin-console',false);show('#app',true);
@@ -265,7 +265,7 @@ function adminShowView(name){
   adminDetailLoadId++;
   if(name!=='detail'){adminMode=false;adminDetailSig=''}
   if(adminCurrentView==='password'&&name!=='password')resetAdminPasswordForm();
-  if(adminCurrentView==='providers'&&name!=='providers')$('#provider-form').reset();
+  if(adminCurrentView==='providers'&&name!=='providers')resetProviderSettings();
   adminCurrentView=name;
   ['dashboard','jobs','users','cdks','usage','providers','password','detail'].forEach(v=>show('#admin-view-'+v,v===name));
   document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>{
@@ -273,7 +273,7 @@ function adminShowView(name){
     btn.classList.toggle('active',current);
     btn.setAttribute('aria-current',current?'page':'false');
   });
-  if(name==='dashboard')loadAdminStats();
+  if(name==='dashboard')loadAdminStats(true);
   if(name==='jobs'){loadAdminUsers();loadAdminJobs()}
   if(name==='users')loadAdminUsers();
   if(name==='cdks')void loadAdminCDKs();
@@ -287,7 +287,7 @@ $('#admin-refresh-stats').addEventListener('click',async e=>{
   const btn=e.currentTarget;
   btn.disabled=true;
   btn.classList.add('loading');
-  try{await loadAdminStats()}finally{btn.disabled=false;btn.classList.remove('loading')}
+  try{await loadAdminStats(true)}finally{btn.disabled=false;btn.classList.remove('loading')}
 });
 $('#admin-detail-back').addEventListener('click',()=>adminShowView('jobs'));
 document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>btn.addEventListener('click',()=>{
@@ -369,6 +369,7 @@ function enter(value){
   resetCapturePermissions();
   jobsCache=[];adminJobsCache=[];adminUsers=[];selectedId=null;currentJob=null;detailSig='';
   lastStatsSig='';lastAdminJobsSig='';
+  adminStatsPending=null;
   archiveDownloads.clear();
   videoPreviewURLs.clear();
   if(!$('#preview-modal').classList.contains('hidden')){
@@ -383,7 +384,7 @@ function enter(value){
   if($('#admin-user-avatar'))$('#admin-user-avatar').textContent=(value?.user?.displayName||'?').trim().charAt(0).toUpperCase();
   show('#login',!value);show('#app',!!value);show('#admin-console',false);
   resetAdminPasswordForm();
-  $('#provider-form').reset();
+  resetProviderSettings();
   resetCDKView();
   syncHeaderActions();
   // 未登录时隐藏左上角菜单按钮：导航抽屉是登录后的功能，登录页点了只会打开空的抽屉。
@@ -403,7 +404,7 @@ function enter(value){
 
 /* ---------- 登录 / 退出 / 连接 ---------- */
 $('#api-url').value=location.origin;
-if($('#current-api'))$('#current-api').textContent=location.origin;
+if($('#current-api')){$('#current-api').textContent=location.origin;$('.foot-api').title=location.origin;}
 $('#api-form').addEventListener('submit',e=>{e.preventDefault();try{const target=normaliseAPI($('#api-url').value);if(target===location.origin)return toast('当前已连接此 API 服务');location.assign(`${target}/`)}catch(err){toast(err.message,'error')}});
 function loginDevice(){
   return {id:localStorage.dc_device||(localStorage.dc_device=uuidv4()),name:navigator.platform||'Web 浏览器',platform:'windows',appVersion:'web-0.1.0'};
@@ -436,7 +437,7 @@ async function logout(){
   if(!session||logoutPendingEpoch===epoch)return;
   logoutPendingEpoch=epoch;
   try{
-    const message=session.user?.isCdk?'退出后需使用新的 CDK 密钥登录。确认退出？':'确认退出当前账号？';
+    const message=session.user?.isCdk?'额度用完前可使用当前 CDK 密钥重新登录。确认退出？':'确认退出当前账号？';
     if(!(await confirmDialog({title:'退出登录',message,confirmText:'退出',danger:false}))||epoch!==sessionEpoch)return;
     if(refreshing?.epoch===epoch)await refreshing.promise.catch(()=>false);
     if(epoch!==sessionEpoch||!session)return;
@@ -532,39 +533,157 @@ async function saveOwnPassword(values){
   }catch(err){if(epoch===sessionEpoch)toast(err.message,'error');return false}
 }
 
-/* ---------- API Key 设置 ---------- */
-function providerViewActive(epoch){
-  return epoch===sessionEpoch&&adminOpen&&adminCurrentView==='providers';
+/* ---------- 转写服务设置 ---------- */
+const asrProviderNames={siliconflow:'硅基流动',aliyun:'阿里云',deepseek:'DeepSeek'};
+const siliconModels=['FunAudioLLM/SenseVoiceSmall','TeleAI/TeleSpeechASR'];
+const providersPath='/api/v1/admin/settings/providers';
+let providerSettings=null,providerOperation=null;
+
+function resetProviderSettings(){
+  providerSettings=null;
+  providerOperation=null;
+  $('#provider-form').reset();
+  $('#provider-fields').disabled=true;
+  $('#providers-refresh').disabled=false;
+  document.querySelectorAll('[data-provider-result]').forEach(el=>el.textContent='');
 }
-async function loadProviders(){
-  const epoch=sessionEpoch;
+
+function providerStatus(text, tone, target){
+  if(target.textContent!==text)target.textContent=text;
+  target.classList.toggle('failed',tone==='error');
+  target.classList.toggle('success',tone==='success');
+}
+
+function enabledProviderOptions(preferred){
+  const select=$('#default-asr-provider');
+  const ids=[...document.querySelectorAll('#provider-form input[name="enabledProviders"]:checked')].map(input=>input.value);
+  const selected=preferred??select.value;
+  select.innerHTML='<option value="">自动选择可用服务</option>'+ids.map(id=>`<option value="${esc(id)}">${esc(asrProviderNames[id])}</option>`).join('');
+  select.value=ids.includes(selected)?selected:'';
+}
+
+function syncSiliconModel(){
+  const custom=$('#asr-model').value==='custom';
+  show('#asr-model-custom-wrap',custom);
+  $('#asr-model-custom').disabled=!custom;
+  $('#asr-model-custom').required=custom;
+}
+
+function renderProviderSettings(settings, applyDraft){
+  providerSettings=settings;
+  const effective=asrProviderNames[settings.effectiveDefaultProvider];
+  const configured=asrProviderNames[settings.defaultProvider];
+  $('#provider-policy-note').textContent=effective?`当前默认服务为「${effective}」。`:
+    configured?`默认服务「${configured}」不可用。可重新配置，或更改默认服务。`:'当前没有可用的默认服务。';
+  for(const card of document.querySelectorAll('#provider-form [data-provider]')){
+    const item=settings.items.find(provider=>provider.id===card.dataset.provider);
+    if(!item)continue;
+    const badge=card.querySelector('[data-provider-status]');
+    badge.textContent=item.available?'已配置':item.configured?'缺少公网 HTTPS 地址':'未配置';
+    badge.className='badge badge-'+(item.available?'success':item.configured?'warning':'muted');
+    card.querySelector('[data-provider-test]').disabled=!item.available;
+    card.querySelector('[data-provider-clear]').disabled=!item.configured;
+    card.querySelector('input[type=password]').placeholder=item.configured?'输入新 Key 以替换':'输入 API Key';
+    if(applyDraft)card.querySelector('input[role=switch]').checked=item.enabled;
+  }
+  if(applyDraft){
+    $('#provider-form').elements.namedItem('allowUserSelection').checked=settings.allowUserSelection;
+    enabledProviderOptions(settings.defaultProvider);
+    const model=settings.items.find(provider=>provider.id==='siliconflow')?.model||siliconModels[0];
+    $('#asr-model').value=siliconModels.includes(model)?model:'custom';
+    $('#asr-model-custom').value=siliconModels.includes(model)?'':model;
+    syncSiliconModel();
+  }
+}
+
+async function runProviderOperation(action, card, options, trigger){
+  if(providerOperation||!adminOpen||adminCurrentView!=='providers'||session?.user?.role!=='admin')return;
+  const request={epoch:sessionEpoch};
+  providerOperation=request;
+  const active=()=>providerOperation===request&&request.epoch===sessionEpoch&&adminOpen&&adminCurrentView==='providers';
+  const id=card?.dataset.provider;
+  const result=card?.querySelector('[data-provider-result]')||$('#provider-status');
+  const fields=$('#provider-fields'),refresh=$('#providers-refresh');
   try{
-    const {providers:p}=await api('/api/v1/admin/settings/providers');
-    if(!providerViewActive(epoch))return;
-    $('#aliyun-key').placeholder=`当前状态：${p.aliyunConfigured?(p.aliyunAvailable?'已配置，可作备用':'已配置，但缺少公网地址'):'未配置'}`;
-    $('#silicon-key').placeholder=`当前状态：${p.siliconFlowConfigured?'已配置，默认使用':'未配置'}`;
-    $('#asr-model').value=p.asrModel||'FunAudioLLM/SenseVoiceSmall';
-  }catch(err){if(providerViewActive(epoch))toast(err.message,'error')}
+    if(action==='clear'){
+      const confirmed=await confirmDialog({
+        title:'清除 API Key',
+        message:`清除 ${asrProviderNames[id]} 的 API Key？该服务将停止接收新任务，直至重新配置。`,
+        confirmText:'清除 Key',
+      });
+      if(!active()||!confirmed){if(active())trigger?.focus();return}
+    }
+    fields.disabled=true;
+    refresh.disabled=true;
+    providerStatus({load:'正在加载配置…',save:'正在保存配置…',test:'正在测试连接…',clear:'正在清除 Key…'}[action],'',result);
+    const endpoint=action==='test'?`${providersPath}/${id}/test`:action==='clear'?`${providersPath}/${id}/key`:providersPath;
+    const response=await api(endpoint,options);
+    if(!active())return;
+    if(action==='test'){
+      providerStatus(`连接正常 · ${response.durationMs} ms`,'success',result);
+      return;
+    }
+    renderProviderSettings(response.providers,action!=='clear');
+    if(action==='clear'){
+      card.querySelector('input[type=password]').value='';
+      providerStatus('API Key 已清除','success',result);
+    }else if(action==='save'){
+      document.querySelectorAll('#provider-form input[type=password]').forEach(input=>input.value='');
+      document.querySelectorAll('[data-provider-result]').forEach(el=>providerStatus('','',el));
+      providerStatus('转写设置已保存','success',result);
+    }else{
+      providerStatus('','',result);
+    }
+  }catch(err){
+    if(active())providerStatus(err.message,'error',result);
+  }finally{
+    if(active()){
+      providerOperation=null;
+      fields.disabled=!providerSettings;
+      refresh.disabled=false;
+      if(trigger?.isConnected){
+        if(!trigger.disabled)trigger.focus();
+        else if(action==='clear')card.querySelector('input[type=password]').focus();
+      }
+    }
+  }
 }
-$('#provider-form').addEventListener('submit',async e=>{
+function loadProviders(){
+  return runProviderOperation('load',null,{cache:'no-store'});
+}
+$('#providers-refresh').addEventListener('click',loadProviders);
+$('#asr-model').addEventListener('change',syncSiliconModel);
+$('#provider-form').addEventListener('change',e=>{
+  if(e.target.name==='enabledProviders')enabledProviderOptions();
+});
+$('#provider-form').addEventListener('click',e=>{
+  const button=e.target.closest('[data-provider-test],[data-provider-clear]');
+  if(!button)return;
+  const card=button.closest('[data-provider]');
+  if(button.hasAttribute('data-provider-test'))return runProviderOperation('test',card,{method:'POST'},button);
+  return runProviderOperation('clear',card,{method:'DELETE'},button);
+});
+$('#provider-form').addEventListener('submit',e=>{
   e.preventDefault();
-  const epoch=sessionEpoch;
-  if(!providerViewActive(epoch))return;
-  const body={},model=$('#asr-model').value.trim();
-  if(model)body.asrModel=model;
-  if($('#clear-aliyun').checked)body.aliyunApiKey='';
-  else if($('#aliyun-key').value.trim())body.aliyunApiKey=$('#aliyun-key').value.trim();
-  if($('#clear-silicon').checked)body.siliconFlowApiKey='';
-  else if($('#silicon-key').value.trim())body.siliconFlowApiKey=$('#silicon-key').value.trim();
-  if(!Object.keys(body).length)return toast('请输入需要保存的 Key、模型，或勾选清除','warning');
-  try{
-    await api('/api/v1/admin/settings/providers',{method:'PUT',body:JSON.stringify(body)});
-    if(!providerViewActive(epoch))return;
-    $('#aliyun-key').value=$('#silicon-key').value='';
-    $('#clear-aliyun').checked=$('#clear-silicon').checked=false;
-    toast('配置已保存并生效','success');
-    await loadProviders();
-  }catch(err){if(providerViewActive(epoch))toast(err.message,'error')}
+  if(!providerSettings||!e.currentTarget.reportValidity())return;
+  const data=new FormData(e.currentTarget);
+  const body={
+    defaultProvider:data.get('defaultProvider')||'',
+    allowUserSelection:data.has('allowUserSelection'),
+    enabledProviders:data.getAll('enabledProviders'),
+  };
+  const model=$('#asr-model').value==='custom'?$('#asr-model-custom').value.trim():$('#asr-model').value;
+  if(!model){
+    $('#asr-model-custom').focus();
+    providerStatus('请输入自定义模型 ID','error',$('#provider-status'));
+    return;
+  }
+  if(model!==providerSettings.items.find(item=>item.id==='siliconflow')?.model)body.asrModel=model;
+  for(const name of ['siliconFlowApiKey','aliyunApiKey','deepseekApiKey']){
+    const key=data.get(name)?.trim();
+    if(key)body[name]=key;
+  }
+  return runProviderOperation('save',null,{method:'PUT',body:JSON.stringify(body)},e.submitter);
 });
 
 /* ---------- 管理后台：使用设置 ---------- */
@@ -622,7 +741,29 @@ $('#admin-usage-form').addEventListener('submit',e=>{
 
 /* ---------- 新建任务 ---------- */
 let dailyUsageRequestId=0;
-let capturePermissions=null,captureUsageError=false;
+let capturePermissions=null,captureUsageError=false,captureASR=null,captureCDKExhausted=false;
+function renderCaptureProvider(action){
+  const canChoose=action==='full'&&captureASR?.allowUserSelection===true&&captureASR.providers.length>0;
+  show('#capture-asr-provider-wrap',canChoose);
+  const status=$('#capture-asr-status');
+  const unavailable=capturePermissions?.allowTranscribe===false&&captureASR?.transcribePermitted;
+  const defaultLabel=action==='full'&&!canChoose&&captureASR?.defaultProvider&&asrProviderNames[captureASR.defaultProvider];
+  const message=unavailable?(action?'当前没有可用的转写服务。':''):(defaultLabel?`转写服务商：${defaultLabel}`:'');
+  if(status.textContent!==message)status.textContent=message;
+  show('#capture-asr-status',!!message);
+}
+function updateCaptureProvider(asr,transcribePermitted){
+  const ids=(asr?.providers||[]).map(item=>item.id).filter(id=>Object.hasOwn(asrProviderNames,id));
+  const select=$('#capture-asr-provider'),value=select.value;
+  const next=asr?{providers:ids,defaultProvider:asr.defaultProvider,allowUserSelection:asr.allowUserSelection,transcribePermitted}:null;
+  if(JSON.stringify(next)!==JSON.stringify(captureASR)){
+    const label=asrProviderNames[asr?.defaultProvider];
+    const placeholder=label?`跟随默认设置（${esc(label)}）`:'请选择转写服务商';
+    select.innerHTML=`<option value=""${label?'':' disabled'}>${placeholder}</option>`+ids.map(id=>`<option value="${esc(id)}">${esc(asrProviderNames[id])}</option>`).join('');
+    select.value=asr?.allowUserSelection&&ids.includes(value)?value:'';
+  }
+  captureASR=next;
+}
 function captureAction(){
   if(!capturePermissions)return null;
   if(capturePermissions.allowInfo&&$('#info-only').checked)return 'info';
@@ -631,16 +772,22 @@ function captureAction(){
 }
 function renderCaptureAction(){
   const action=captureAction(),button=$('#submit-task');
+  const needsProvider=action==='full'&&captureASR&&!captureASR.defaultProvider&&!$('#capture-asr-provider').value;
   const hints={info:'仅获取作品信息。',full:'下载媒体并转写视频口播。',download:'下载媒体。图文作品保留原配文。'};
   const anyAllowed=capturePermissions&&adminUsagePermissionFields.some(name=>capturePermissions[name]);
   const hint=$('#capture-action-hint');
-  const message=action?hints[action]:!capturePermissions?
+  const message=captureCDKExhausted?'CDK 任务次数已用完，请联系管理员。':needsProvider?'请选择转写服务商。':action?hints[action]:!capturePermissions?
     (captureUsageError?'无法加载任务权限。':'正在读取任务权限…'):
-    (anyAllowed?'请选择任务类型。':'管理员已关闭所有新建任务类型。');
+    (anyAllowed?'请选择任务类型。':captureASR?.transcribePermitted?'当前没有可用的转写服务。':'管理员已关闭所有新建任务类型。');
   if(hint.textContent!==message)hint.textContent=message;
-  button.disabled=!action||button.getAttribute('aria-busy')==='true';
+  button.disabled=!action||needsProvider||captureCDKExhausted||button.getAttribute('aria-busy')==='true';
+  renderCaptureProvider(action);
 }
 function applyCapturePermissions(policy){
+  if(!policy||policy.asr)updateCaptureProvider(policy?.asr,policy?.allowTranscribe);
+  else if(captureASR)captureASR.transcribePermitted=policy.allowTranscribe;
+  const hasProvider=!captureASR||!!captureASR.defaultProvider||(captureASR.allowUserSelection&&captureASR.providers.length>0);
+  if(policy)policy={...policy,allowTranscribe:policy.allowTranscribe&&hasProvider};
   const changed=adminUsagePermissionFields.some(name=>policy?.[name]!==capturePermissions?.[name]);
   capturePermissions=policy;
   const {allowInfo,allowDownload,allowTranscribe}=policy||{};
@@ -661,6 +808,7 @@ function applyCapturePermissions(policy){
 function resetCapturePermissions(){
   $('#submit-task').setAttribute('aria-busy','false');
   captureUsageError=false;
+  captureCDKExhausted=false;
   show('#capture-usage-retry',false);
   applyCapturePermissions(null);
 }
@@ -676,8 +824,9 @@ async function refreshDailyUsage(){
     if(adminUsagePermissionFields.some(name=>typeof usage?.[name]!=='boolean'))throw new Error('任务权限数据不可用');
     captureUsageError=false;
     show('#capture-usage-retry',false);
-    applyCapturePermissions(usage);
     const {used,limit,cdk}=usage;
+    captureCDKExhausted=!!cdk&&cdk.used>=cdk.limit;
+    applyCapturePermissions(usage);
     const daily=limit>0?`今日剩余 ${Math.max(0,limit-used)} / ${limit} 次 · 北京时间零点重置`:`今日已用 ${used} 次 · 不限次数`;
     const lifetime=cdk?`CDK 剩余 ${Math.max(0,cdk.limit-cdk.used)} / ${cdk.limit} 次`:'';
     label.textContent=lifetime&&limit>0?`${lifetime} · ${daily}`:lifetime||daily;
@@ -692,6 +841,7 @@ async function refreshDailyUsage(){
 }
 
 $('#capture-usage-retry').addEventListener('click',refreshDailyUsage);
+$('#capture-asr-provider').addEventListener('change',renderCaptureAction);
 for(const [selected,other] of [['#info-only','#with-transcribe'],['#with-transcribe','#info-only']]){
   $(selected).addEventListener('change',()=>{
     if($(selected).checked)$(other).checked=false;
@@ -711,7 +861,10 @@ $('#capture-form').addEventListener('submit',async e=>{
   feedback.textContent=action==='info'?'正在读取作品信息…':'正在提交任务…';
   button.disabled=true;button.setAttribute('aria-busy','true');
   try{
-    const data=await api('/api/v1/jobs',{method:'POST',headers:{'Idempotency-Key':uuidv4()},body:JSON.stringify({shareText,action,options:{force:false,keepVideo:action==='full',languageHints:['zh','en'],hotwords:[]}})});
+    const options={force:false,keepVideo:action==='full',languageHints:['zh','en'],hotwords:[]};
+    const provider=$('#capture-asr-provider').value;
+    if(action==='full'&&captureASR?.allowUserSelection&&captureASR.providers.includes(provider))options.asrProvider=provider;
+    const data=await api('/api/v1/jobs',{method:'POST',headers:{'Idempotency-Key':uuidv4()},body:JSON.stringify({shareText,action,options})});
     if(epoch!==sessionEpoch||!session)return;
     feedback.textContent='';
     $('#share-text').value='';
@@ -821,36 +974,94 @@ function loadEcharts(){
 function skeletonRows(count=4){
   return `<div class="skeleton-list" aria-hidden="true">${Array.from({length:count},()=>`<div class="skeleton-row"><span></span><span></span><span></span></div>`).join('')}</div>`;
 }
-async function loadAdminStats(){
-  if(!session)return;
-  pollRequestedAt.stats=Date.now();
-  try{
-    if(!$('#admin-stats-cards').children.length)$('#admin-stats-cards').innerHTML=skeletonRows(4);
+let adminStatsPending=null;
+const overviewTime=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',hour12:false,hour:'2-digit',minute:'2-digit'});
+
+async function loadAdminStats(force=false){
+  if(!session||!adminOpen||adminCurrentView!=='dashboard'||adminStatsPending)return;
+  const request={epoch:sessionEpoch};
+  adminStatsPending=request;
+  const current=()=>adminStatsPending===request&&request.epoch===sessionEpoch&&adminOpen&&adminCurrentView==='dashboard';
+  const now=Date.now(),status=$('#admin-stats-status');
+  pollRequestedAt.stats=now;
+  const updateProviders=force||now-(pollRequestedAt.overviewProviders??0)>=IDLE_POLL_MS;
+  if(updateProviders){
+    pollRequestedAt.overviewProviders=now;
+    void api(providersPath,{cache:'no-store'}).then(({providers})=>{
+      if(request.epoch!==sessionEpoch||!adminOpen||adminCurrentView!=='dashboard')return;
+      const ready=providers.items.filter(item=>item.enabled&&item.available).length;
+      const defaultName=asrProviderNames[providers.effectiveDefaultProvider];
+      $('#overview-provider-summary').textContent=ready?`${ready} 项可用 · ${defaultName||'默认服务不可用'}`:'暂无可用服务';
+    }).catch(()=>{
+      if(request.epoch===sessionEpoch&&adminOpen&&adminCurrentView==='dashboard')$('#overview-provider-summary').textContent='读取失败';
+    });
+  }
+  if(!lastStatsSig){
+    $('#admin-stats-cards').innerHTML=skeletonRows(4);
     document.querySelectorAll('.chart-card').forEach(card=>card.classList.add('loading'));
-    const [data]=await Promise.all([api('/api/v1/admin/stats'),loadEcharts()]);
-    const stats=data.stats||{};
-    adminStatsHaveActive=Object.entries(stats.byStatus||{}).some(([status,count])=>count>0&&jobIsActive(status));
-    // 数据未变化时不重绘，避免轮询导致图表/卡片闪烁
-    const sig=JSON.stringify([stats.users,stats.activeUsers,stats.totalJobs,stats.todayJobs,stats.byStatus,stats.byDay]);
-    if(sig===lastStatsSig){document.querySelectorAll('.chart-card').forEach(card=>card.classList.remove('loading'));return}
-    lastStatsSig=sig;
-    renderStatCards(stats);
-    renderStatusChart(stats.byStatus||{});
-    renderTrendChart(stats.byDay||[]);
-    document.querySelectorAll('.chart-card').forEach(card=>card.classList.remove('loading'));
-    // 图表高度随布局自适应，绘制完成后校准一次尺寸
-    requestAnimationFrame(()=>{if(statusChart)statusChart.resize();if(trendChart)trendChart.resize()});
-  }catch(err){document.querySelectorAll('.chart-card').forEach(card=>card.classList.remove('loading'));toast(err.message,'error')}
+  }
+  try{
+    const {stats}=await api('/api/v1/admin/stats',{cache:'no-store'});
+    if(!current())return;
+    const {byStatus={},byDay=[]}=stats;
+    adminStatsHaveActive=Object.entries(byStatus).some(([state,count])=>count>0&&jobIsActive(state));
+    const sig=JSON.stringify([stats.users,stats.activeUsers,stats.totalJobs,stats.todayJobs,byStatus,byDay]);
+    const fresh=sig!==lastStatsSig;
+    if(fresh)renderStatCards(stats);
+    providerStatus(`北京时间 ${overviewTime.format(new Date())} 更新`,'',status);
+    if(fresh){
+      await loadEcharts().catch(()=>null);
+      if(!current())return;
+      lastStatsSig=sig;
+      renderStatusChart(byStatus);
+      renderTrendChart(byDay);
+      requestAnimationFrame(()=>{statusChart?.resize();trendChart?.resize()});
+    }
+  }catch(err){
+    if(current())providerStatus(err.message,'error',status);
+  }finally{
+    if(adminStatsPending===request){
+      adminStatsPending=null;
+      document.querySelectorAll('.chart-card').forEach(card=>card.classList.remove('loading'));
+    }
+  }
 }
+
 function renderStatCards(stats){
+  const counts=stats.byStatus||{};
+  const processing=['resolving','downloading','extracting','transcribing','postprocessing'].reduce((sum,state)=>sum+(counts[state]||0),0);
+  const queued=counts.queued||0,retry=counts.retry_wait||0,failed=counts.failed||0,completed=counts.completed||0;
   const cards=[
-    {label:'用户总数',value:stats.users??'-'},
-    {label:'启用账号',value:stats.activeUsers??'-'},
-    {label:'任务总数',value:stats.totalJobs??'-'},
-    {label:'今日任务',value:stats.todayJobs??'-'},
+    {label:'今日新建',value:stats.todayJobs,detail:`累计 ${stats.totalJobs} 个任务`},
+    {label:'待处理任务',value:queued+processing+retry,detail:`${queued} 个排队 · ${processing} 个处理中`},
+    {label:'已完成任务',value:completed,detail:completed+failed?`成功率 ${Math.round(completed/(completed+failed)*100)}%（完成或失败）`:'暂无完成或失败任务'},
+    {label:'已启用账号',value:stats.activeUsers,detail:`共 ${stats.users} 个账号`},
   ];
-  $('#admin-stats-cards').innerHTML=cards.map(card=>`<div class="stat-card"><span>${esc(card.label)}</span><strong>${esc(card.value)}</strong></div>`).join('');
+  $('#admin-stats-cards').innerHTML=cards.map(({label,value,detail})=>`<div class="stat-card"><span>${esc(label)}</span><strong>${esc(value??'—')}</strong><small>${esc(detail)}</small></div>`).join('');
+  $('#overview-queued').textContent=String(queued);
+  $('#overview-processing').textContent=String(processing);
+  $('#overview-retry-wait').textContent=String(retry);
+  $('#overview-failed').textContent=String(failed);
+  $('#overview-active-users').textContent=`${stats.activeUsers} / ${stats.users}`;
 }
+
+$('#admin-view-dashboard').addEventListener('click',e=>{
+  const button=e.target.closest('[data-overview-view],[data-overview-status]');
+  if(!button)return;
+  const status=button.dataset.overviewStatus;
+  const view=status?'jobs':button.dataset.overviewView;
+  if(status){
+    $('#admin-jobs-q').value='';
+    $('#admin-jobs-user').value='';
+    $('#admin-jobs-status').value=status;
+    adminJobsPage=1;
+  }
+  adminShowView(view);
+  const heading=$(`#admin-view-${view} h2`);
+  heading?.setAttribute('tabindex','-1');
+  heading?.focus();
+});
+
 function chartColors(){
   const style=getComputedStyle(document.documentElement);
   const token=name=>style.getPropertyValue(name).trim();
@@ -864,6 +1075,7 @@ function renderStatusChart(byStatus){
   const c=chartColors();
   const colors={queued:c.muted,resolving:c.primary,downloading:c.primary2,extracting:c.accent,transcribing:c.primary2,postprocessing:c.accent,completed:c.success,failed:c.danger,retry_wait:c.warning,cancelled:c.text};
   const data=Object.entries(byStatus).map(([key,value])=>({name:labels[key]||key,value,itemStyle:{color:colors[key]||c.primary}})).filter(d=>d.value>0);
+  const hasTasks=data.length>0;
   statusChart.setOption({
     color:Object.values(colors),
     animation:true,
@@ -871,9 +1083,10 @@ function renderStatusChart(byStatus){
     animationEasing:'cubicOut',
     animationDurationUpdate:180,
     animationEasingUpdate:'cubicOut',
-    tooltip:{trigger:'item',formatter:'{b}: {c} ({d}%)'},
-    legend:{bottom:0,textStyle:{color:c.text}},
-    series:[{type:'pie',radius:['38%','64%'],center:['50%','44%'],avoidLabelOverlap:true,itemStyle:{borderColor:c.card,borderWidth:2},label:{color:c.text},data:data.length?data:[{name:'暂无任务',value:1,itemStyle:{color:c.grid}}]}]
+    title:{show:!hasTasks,text:'暂无任务',left:'center',top:'center',textStyle:{color:c.muted,fontSize:14,fontWeight:400}},
+    tooltip:{show:hasTasks,trigger:'item',formatter:'{b}: {c} ({d}%)'},
+    legend:{show:hasTasks,bottom:0,textStyle:{color:c.text}},
+    series:[{type:'pie',radius:['38%','64%'],center:['50%',hasTasks?'44%':'50%'],avoidLabelOverlap:true,silent:!hasTasks,itemStyle:{borderColor:c.card,borderWidth:2},label:{show:hasTasks,color:c.text},labelLine:{show:hasTasks},data:hasTasks?data:[{value:1,itemStyle:{color:c.grid}}]}]
   },true);
 }
 function renderTrendChart(byDay){
@@ -1246,6 +1459,9 @@ function jobDetailHTML(job){
   const videoFile=files.find(f=>f.kind==='video'||((f.mimeType||'').startsWith('video/')&&f.kind!=='animated'));
   const tone=statusTone[job.status]||'muted';
   const badges=[`<span class="badge badge-${tone}">${esc(statusLabels[job.status]||job.status)}</span>`,`<span class="badge badge-action">${esc(actionLabels[job.action]||job.action)}</span>`];
+  const serviceNames={siliconflow_sensevoice:'硅基流动',aliyun_paraformer:'阿里云',deepseek_asr:'DeepSeek'};
+  const transcriptionService=serviceNames[job.result?.asrProvider]||(job.asrProvider&&asrProviderNames[job.asrProvider]);
+  if(transcriptionService&&w.type!=='note')badges.push(`<span class="badge badge-muted" title="转写服务">${esc(transcriptionService)}</span>`);
   const noteImgs=w.images||[];
   if(w.type==='note')badges.push(`<span class="badge badge-note">${noteImgs.length>0&&noteImgs.every(img=>img.animatedUrl)?'动图作品':noteImgs.some(img=>img.animatedUrl)?'含动图':'图文作品'}</span>`);
 

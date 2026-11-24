@@ -14,6 +14,8 @@ const listCode = section('async function loadJobs(', '// 通用分页条');
 const adminListCode = section('async function loadAdminJobs(', 'function adminJobOps(');
 const usersCode = section('async function loadAdminUsers(){', 'function renderAdminUsers(');
 const captureCode = section('const adminUsagePermissionFields=', '/* ---------- 任务列表 ---------- */');
+const providerCode = section('const asrProviderNames=', '/* ---------- 管理后台：使用设置 ---------- */');
+const overviewCode = section('let adminStatsPending=null;', 'function chartColors(');
 const allCapturePermissions = {allowInfo: true, allowDownload: true, allowTranscribe: true};
 const selectionCode = section('function selectJob(', "$('#new-task-btn').addEventListener");
 const sidebarCode = section('let sidebarLastFocus=null;', "$('#sidebar-toggle').innerHTML");
@@ -70,7 +72,8 @@ function harness(code = listCode) {
     enter(value) { context.sessionEpoch++; context.session = value; },
     showView(name) { context.currentView = name; },
     renderDetail() { if (context.currentJob) details.push(context.currentJob); },
-    show() {}, stopTaskMusic() {}, setSidebar() {}, closePreview() {}, resetCDKView() {}, resetCapturePermissions() {},
+    show() {}, stopTaskMusic() {}, setSidebar() {}, closePreview() {}, resetCDKView() {}, resetCapturePermissions() {}, resetProviderSettings() {},
+    asrProviderNames: {siliconflow: '硅基流动', aliyun: '阿里云', deepseek: 'DeepSeek'},
     refreshDailyUsage() {}, uuidv4() { return 'idempotency-key'; },
   });
   vm.runInContext(code, context);
@@ -407,6 +410,88 @@ test('任务权限读取失败可重试，较早的响应不会重新打开已�
   assert.equal(visible.get('#capture-usage-retry'), false);
   assert.equal(visible.get('#info-only-wrap'), false);
   assert.equal(h.context.captureAction(), 'download');
+});
+
+test('转写服务选项遵循后台许可，提交仅携带当前可用的服务商', async () => {
+  const h = harness(selectionCode + captureCode + listCode), visible = new Map();
+  h.context.show = (selector, on) => visible.set(selector, on);
+  const asr = {allowUserSelection: true, defaultProvider: 'siliconflow', providers: [{id: 'siliconflow'}, {id: 'deepseek'}]};
+  const policy = {...allCapturePermissions, asr};
+  h.context.applyCapturePermissions(policy);
+  const transcribe = h.node('#with-transcribe');
+  transcribe.checked = true;
+  transcribe.listeners.change();
+  assert.equal(visible.get('#capture-asr-provider-wrap'), true);
+  const provider = h.node('#capture-asr-provider');
+  assert.match(provider.innerHTML, /DeepSeek/);
+  provider.value = 'deepseek';
+  h.node('#share-text').value = 'https://www.douyin.com/video/123';
+  const submit = h.node('#capture-form').listeners.submit({preventDefault() {}});
+  assert.equal(JSON.parse(h.requests[0].options.body).options.asrProvider, 'deepseek');
+  h.requests[0].resolve({});
+  await tick();
+  h.requests[1].resolve({jobs: [], total: 0});
+  await submit;
+
+  h.context.applyCapturePermissions({...policy, asr: {...asr, allowUserSelection: false}});
+  assert.equal(visible.get('#capture-asr-provider-wrap'), false);
+  assert.equal(provider.value, '');
+  assert.match(h.node('#capture-asr-status').textContent, /硅基流动/);
+  h.context.applyCapturePermissions({...policy, asr: {...asr, defaultProvider: ''}});
+  assert.equal(visible.get('#capture-asr-provider-wrap'), true);
+  assert.equal(h.node('#submit-task').disabled, true);
+  assert.match(h.node('#capture-action-hint').textContent, /请选择转写服务商/);
+  provider.value = 'deepseek';
+  provider.listeners.change();
+  assert.equal(h.node('#submit-task').disabled, false);
+  h.context.applyCapturePermissions({...policy, allowDownload: false, allowInfo: false, asr: {...asr, defaultProvider: '', allowUserSelection: false}});
+  assert.equal(visible.get('#with-transcribe-wrap'), false);
+  assert.equal(h.node('#submit-task').disabled, true);
+  assert.match(h.node('#capture-action-hint').textContent, /没有可用的转写服务/);
+});
+
+test('服务商测试与清除使用各自接口，取消清除时不发送请求', async () => {
+  const h = harness(providerCode);
+  h.context.session.user.role = 'admin';
+  h.context.adminOpen = true;
+  h.context.adminCurrentView = 'providers';
+  const card = {dataset: {provider: 'deepseek'}, querySelector: name => h.node('deepseek ' + name)};
+  const command = h.context.runProviderOperation;
+  const probe = command('test', card, {method: 'POST'});
+  assert.equal(h.requests[0].url, '/api/v1/admin/settings/providers/deepseek/test');
+  assert.equal(h.node('#provider-fields').disabled, true);
+  h.requests[0].resolve({durationMs: 350});
+  await probe;
+  assert.match(card.querySelector('[data-provider-result]').textContent, /350 ms/);
+  h.context.confirmDialog = async () => false;
+  await command('clear', card, {method: 'DELETE'});
+  assert.equal(h.requests.length, 1);
+  h.context.confirmDialog = async () => true;
+  const clear = command('clear', card, {method: 'DELETE'});
+  await tick();
+  assert.equal(h.requests[1].url, '/api/v1/admin/settings/providers/deepseek/key');
+  assert.equal(h.requests[1].options.method, 'DELETE');
+  h.requests[1].resolve({providers: {items: [], effectiveDefaultProvider: ''}});
+  await clear;
+  assert.equal(card.querySelector('[data-provider-result]').textContent, 'API Key 已清除');
+  assert.equal(h.node('#provider-fields').disabled, false);
+});
+
+test('概览按任务阶段聚合，失败入口打开任务管理并应用状态筛选', () => {
+  const h = harness(overviewCode);
+  h.context.renderStatCards({users: 8, activeUsers: 6, totalJobs: 10, todayJobs: 4,
+    byStatus: {queued: 1, downloading: 2, transcribing: 1, retry_wait: 2, failed: 1, completed: 3}});
+  assert.equal(h.node('#overview-processing').textContent, '3');
+  assert.equal(h.node('#overview-retry-wait').textContent, '2');
+  assert.match(h.node('#admin-stats-cards').innerHTML, /75%/);
+  h.context.adminShowView = view => { h.context.adminCurrentView = view; };
+  h.context.adminJobsPage = 3;
+  h.node('#admin-view-dashboard').listeners.click({
+    target: {closest: () => ({dataset: {overviewStatus: 'failed'}})},
+  });
+  assert.equal(h.context.adminCurrentView, 'jobs');
+  assert.equal(h.context.adminJobsPage, 1);
+  assert.equal(h.node('#admin-jobs-status').value, 'failed');
 });
 
 test('后台执行的任务切换到失败时，详情只通知一次', async () => {

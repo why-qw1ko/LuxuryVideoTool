@@ -42,7 +42,7 @@ function bindLoginForms(){
 }
 
 const adminCDKPath='/api/v1/admin/cdks',adminCDKPageSize=25;
-const adminCDKStates={unused:['待使用','muted'],redeemed:['已使用','success'],revoked:['已吊销','danger']};
+const adminCDKStates={unused:['待使用','muted'],redeemed:['已登录','success'],revoked:['已吊销','danger']};
 const adminCDKConfirmations={
   reset:{
     title:'重置已用次数',confirmText:'重置',success:'已用次数已重置',
@@ -50,7 +50,7 @@ const adminCDKConfirmations={
   },
   rotate:{
     title:'轮换密钥',confirmText:'轮换',success:'密钥已轮换，请复制保存新密钥',
-    message:item=>`轮换 ${item.prefix}… 会立即使原密钥和登录会话失效。新密钥仅在本次操作后显示。`,
+    message:item=>`轮换 ${item.prefix}… 会立即使原密钥和登录会话失效。新密钥沿用当前额度，仅在本次操作后显示。`,
   },
   revoke:{
     title:'吊销密钥',confirmText:'吊销',success:'密钥已吊销',
@@ -121,7 +121,8 @@ async function loadAdminCDKs(page=adminCDKPage){
 
 function renderAdminCDKs(list,items){
   list.innerHTML=`<ul class="admin-cdk-items">${items.map(item=>{
-    const [label,tone]=adminCDKStates[item.status]||['未知','muted'];
+    const state=item.status!=='revoked'&&item.taskCount>=item.taskLimit?['次数用尽','warning']:adminCDKStates[item.status];
+    const [label,tone]=state||['未知','muted'];
     const actions=item.status==='revoked'?'':`<div class="admin-card-actions">
       <button type="button" data-cdk-action="quota">修改次数</button>
       <button type="button" data-cdk-action="reset">重置次数</button>

@@ -35,7 +35,11 @@ func registerCDKRoutes(mux *http.ServeMux, deps Dependencies, limiter *loginLimi
 		}
 		pair, err := deps.Auth.LoginCDK(r.Context(), input.Code, input.Device)
 		if errors.Is(err, auth.ErrInvalidCDK) {
-			writeError(w, r, http.StatusUnauthorized, "AUTH_INVALID_CDK", "CDK 密钥无效、已使用或已作废", false)
+			writeError(w, r, http.StatusUnauthorized, "AUTH_INVALID_CDK", "CDK 密钥无效或已吊销", false)
+			return
+		}
+		if errors.Is(err, auth.ErrCDKExhausted) {
+			writeError(w, r, http.StatusTooManyRequests, "CDK_LIMIT_REACHED", "CDK 任务次数已用完，请联系管理员调整额度", false)
 			return
 		}
 		if err != nil {

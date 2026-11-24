@@ -182,7 +182,6 @@ select:disabled{color:var(--text-tertiary);background-color:var(--input);backgro
 @keyframes skeleton{0%{background-position:120% 0}100%{background-position:-120% 0}}
 
 
-#provider-form{max-width:600px}
 .detail-head{padding-bottom:20px;border-bottom:1px solid var(--border);margin-bottom:24px}
 .detail-section{padding-top:20px;border-top:1px solid var(--border)}
 .result{background:var(--input);border-color:transparent}

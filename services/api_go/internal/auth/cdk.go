@@ -18,10 +18,11 @@ const (
 )
 
 var (
-	ErrInvalidCDK = errors.New("invalid or unavailable CDK")
-	ErrCDKInput   = errors.New("invalid CDK settings")
-	ErrCDKRevoked = errors.New("CDK is revoked")
-	cdkEncoding   = base32.StdEncoding.WithPadding(base32.NoPadding)
+	ErrInvalidCDK   = errors.New("invalid or unavailable CDK")
+	ErrCDKExhausted = errors.New("CDK task quota exhausted")
+	ErrCDKInput     = errors.New("invalid CDK settings")
+	ErrCDKRevoked   = errors.New("CDK is revoked")
+	cdkEncoding     = base32.StdEncoding.WithPadding(base32.NoPadding)
 )
 
 type CDK struct {
@@ -49,7 +50,7 @@ type CDKRepository interface {
 	ResetCDKTaskCount(ctx context.Context, id string) (CDK, error)
 	RotateCDK(ctx context.Context, id, prefix, hash string, now time.Time) (CDK, error)
 	RevokeCDK(ctx context.Context, id string, now time.Time) (CDK, error)
-	RedeemCDK(ctx context.Context, hash string, user User, newSession func(User) (Session, error)) error
+	CreateCDKSession(ctx context.Context, hash string, user User, newSession func(User) (Session, error)) error
 	CDKUsage(ctx context.Context, userID string) (CDKUsage, error)
 }
 
@@ -72,7 +73,7 @@ func (s *Service) LoginCDK(ctx context.Context, code string, device Device) (Tok
 		Role: RoleUser, IsActive: true, IsCDK: true, CreatedAt: now, UpdatedAt: now, LastLoginAt: &now,
 	}
 	var pair TokenPair
-	if err := s.repository.RedeemCDK(ctx, HashRefreshToken(code), user, func(user User) (Session, error) {
+	if err := s.repository.CreateCDKSession(ctx, HashRefreshToken(code), user, func(user User) (Session, error) {
 		var session Session
 		var err error
 		pair, session, err = s.newSession(user, device, now)

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/asr"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/audit"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/auth"
 	ownedfiles "github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/files"
@@ -44,6 +46,7 @@ type Dependencies struct {
 	LoginRateLimit  int
 	Settings        *settings.Service
 	AliyunAvailable bool
+	ASRProviderFactory func(settings.ProviderConfig) asr.Provider
 	// AllowInsecureProviderSettings 允许在纯 HTTP（无 TLS）下配置 API Key。
 	// 仅用于自托管的内网/私有部署；公网必须保持默认的 HTTPS 校验。
 	AllowInsecureProviderSettings bool
@@ -282,73 +285,6 @@ func New(deps Dependencies) http.Handler {
 		}
 		recordAudit(deps.Audit, r, principal.UserID, "admin.session_revoke", r.PathValue("id"), nil)
 		writeJSON(w, http.StatusOK, map[string]any{"requestId": RequestID(r.Context())})
-	})
-	protected.HandleFunc("GET /api/v1/admin/settings/providers", func(w http.ResponseWriter, r *http.Request) {
-		principal, _ := Principal(r.Context())
-		if principal.Role != auth.RoleAdmin {
-			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "仅管理员可查看 API 配置", false)
-			return
-		}
-		if deps.Settings == nil {
-			writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "配置服务尚未就绪", true)
-			return
-		}
-		status, err := deps.Settings.Status(r.Context())
-		if err != nil {
-			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取 API 配置", true)
-			return
-		}
-		status.AliyunAvailable = deps.AliyunAvailable
-		writeJSON(w, http.StatusOK, map[string]any{"providers": status, "requestId": RequestID(r.Context())})
-	})
-	protected.HandleFunc("PUT /api/v1/admin/settings/providers", func(w http.ResponseWriter, r *http.Request) {
-		principal, _ := Principal(r.Context())
-		if principal.Role != auth.RoleAdmin {
-			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "仅管理员可修改 API 配置", false)
-			return
-		}
-		if !secureSettingsRequest(r) && !deps.AllowInsecureProviderSettings {
-			writeError(w, r, http.StatusForbidden, "HTTPS_REQUIRED", "远程配置 API Key 必须使用 HTTPS（自托管内网可设置环境变量 ALLOW_INSECURE_PROVIDER_SETTINGS=1 放行）", false)
-			return
-		}
-		if deps.Settings == nil {
-			writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "配置服务尚未就绪", true)
-			return
-		}
-		var input struct {
-			AliyunAPIKey      *string `json:"aliyunApiKey"`
-			SiliconFlowAPIKey *string `json:"siliconFlowApiKey"`
-			ASRModel          *string `json:"asrModel"`
-		}
-		if err := decodeJSON(w, r, &input); err != nil {
-			return
-		}
-		if input.AliyunAPIKey == nil && input.SiliconFlowAPIKey == nil && input.ASRModel == nil {
-			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "至少提交一个 API Key 或模型配置", false)
-			return
-		}
-		if input.AliyunAPIKey != nil {
-			if err := deps.Settings.Set(r.Context(), settings.AliyunKey, *input.AliyunAPIKey, principal.UserID); err != nil {
-				writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "阿里 API Key 无效", false)
-				return
-			}
-		}
-		if input.SiliconFlowAPIKey != nil {
-			if err := deps.Settings.Set(r.Context(), settings.SiliconFlowKey, *input.SiliconFlowAPIKey, principal.UserID); err != nil {
-				writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "硅基流动 API Key 无效", false)
-				return
-			}
-		}
-		if input.ASRModel != nil {
-			if err := deps.Settings.Set(r.Context(), settings.ASRModel, *input.ASRModel, principal.UserID); err != nil {
-				writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "模型配置无效", false)
-				return
-			}
-		}
-		recordAudit(deps.Audit, r, principal.UserID, "admin.provider_settings.update", "", map[string]any{"aliyunChanged": input.AliyunAPIKey != nil, "siliconFlowChanged": input.SiliconFlowAPIKey != nil, "modelChanged": input.ASRModel != nil})
-		status, _ := deps.Settings.Status(r.Context())
-		status.AliyunAvailable = deps.AliyunAvailable
-		writeJSON(w, http.StatusOK, map[string]any{"providers": status, "requestId": RequestID(r.Context())})
 	})
 	protected.HandleFunc("GET /api/v1/admin/stats", func(w http.ResponseWriter, r *http.Request) {
 		principal, _ := Principal(r.Context())
@@ -726,12 +662,11 @@ func New(deps Dependencies) http.Handler {
 		panic("invalid embedded web assets: " + err.Error())
 	}
 	webHandler := gzipStatic(http.FileServer(http.FS(webFiles)))
-	// embed 文件无修改时间，FileServer 无法生成 Last-Modified，浏览器每次都全量重下静态资源。
-	// 用「版本+提交号」作 ETag：同一次部署内重复访问走 304 零流量，发新版后自然失效。
-	webETag := `"` + version.Version + "-" + version.Commit + `"`
+	webETag := web.StaticETag()
 	mux.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("ETag", webETag)
 		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Vary", "Accept-Encoding")
 		if r.Header.Get("If-None-Match") == webETag {
 			w.WriteHeader(http.StatusNotModified)
 			return
@@ -757,6 +692,7 @@ func New(deps Dependencies) http.Handler {
 				KeepVideo     bool     `json:"keepVideo"`
 				LanguageHints []string `json:"languageHints"`
 				Hotwords      []string `json:"hotwords"`
+				ASRProvider   string   `json:"asrProvider"`
 			} `json:"options"`
 		}
 		if err := decodeJSON(w, r, &input); err != nil {
@@ -766,15 +702,31 @@ func New(deps Dependencies) http.Handler {
 			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "不支持的任务类型", false)
 			return
 		}
+		transcription := input.Action == "transcribe" || input.Action == "full"
+		requestedProvider := input.Options.ASRProvider
+		if requestedProvider != "" && (!transcription || !settings.ValidProvider(requestedProvider)) {
+			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "转写服务选项不合法", false)
+			return
+		}
 		policy, limit, err := userUsagePolicy(r.Context(), deps.Settings, principal.UserID)
 		if err != nil {
 			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务使用设置", true)
 			return
 		}
+		providerUnavailable := requestedProvider != ""
+		if transcription && policy.AllowTranscribe && deps.Settings != nil {
+			providers, err := deps.Settings.Providers(r.Context(), deps.AliyunAvailable)
+			if err != nil {
+				writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取转写服务配置", true)
+				return
+			}
+			providerUnavailable = !providers.Allows(requestedProvider)
+		}
 		creation := jobs.CreateInput{
 			UserID: principal.UserID, ShareText: input.ShareText, IdempotencyKey: key, Force: input.Options.Force,
 			Action: input.Action, KeepVideo: input.Options.KeepVideo, LanguageHints: input.Options.LanguageHints, Hotwords: input.Options.Hotwords,
 			DailyTaskLimit: limit, ActionDisabled: !policy.Allows(input.Action),
+			ASRProvider: requestedProvider, ASRProviderUnavailable: providerUnavailable,
 		}
 		var job jobs.Job
 		var reused bool
@@ -797,6 +749,10 @@ func New(deps Dependencies) http.Handler {
 		}
 		if errors.Is(err, jobs.ErrTaskActionDisabled) {
 			writeError(w, r, http.StatusForbidden, "TASK_ACTION_DISABLED", "管理员已暂停新建此类任务", false)
+			return
+		}
+		if errors.Is(err, jobs.ErrASRProviderUnavailable) {
+			writeError(w, r, http.StatusForbidden, "ASR_PROVIDER_UNAVAILABLE", "转写服务不可用或已限制选择，请刷新后重试", false)
 			return
 		}
 		if errors.Is(err, jobs.ErrIdempotencyConflict) {
@@ -947,11 +903,22 @@ func New(deps Dependencies) http.Handler {
 		handleFileDownload(deps.Storage, file, w, r)
 	})
 	mux.HandleFunc("GET /api/v1/asr-source/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if deps.Files == nil || deps.Storage == nil || deps.ASRSigner == nil || !deps.ASRSigner.Validate(r.PathValue("id"), r.URL.Query().Get("expires"), r.URL.Query().Get("signature"), time.Now()) {
+		id := r.PathValue("id")
+		if deps.ASRSigner == nil || !deps.ASRSigner.Validate(id, r.URL.Query().Get("expires"), r.URL.Query().Get("signature"), time.Now()) {
 			http.NotFound(w, r)
 			return
 		}
-		file, err := deps.Files.FindByID(r.Context(), r.PathValue("id"))
+		if id == asr.ConnectionSampleID {
+			w.Header().Set("Content-Type", "audio/wav")
+			w.Header().Set("Cache-Control", "private, no-store")
+			http.ServeContent(w, r, "asr-probe.wav", time.Time{}, bytes.NewReader(asr.ConnectionSampleWAV()))
+			return
+		}
+		if deps.Files == nil || deps.Storage == nil {
+			http.NotFound(w, r)
+			return
+		}
+		file, err := deps.Files.FindByID(r.Context(), id)
 		if err != nil || file.Kind != "asr_source" {
 			http.NotFound(w, r)
 			return
@@ -1026,6 +993,7 @@ func New(deps Dependencies) http.Handler {
 		handleImageArchive(deps, principal.UserID, w, r)
 	})
 	registerUsageRoutes(mux, protected, deps)
+	registerProviderRoutes(mux, protected, deps)
 	if deps.Auth != nil {
 		mux.Handle("POST /api/v1/auth/logout", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/auth/sessions", requireAuth(deps.Auth, protected))
@@ -1033,8 +1001,6 @@ func New(deps Dependencies) http.Handler {
 		mux.Handle("POST /api/v1/auth/password", requireAuth(deps.Auth, protected))
 		mux.Handle("DELETE /api/v1/admin/sessions/{id}", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/admin/stats", requireAuth(deps.Auth, protected))
-		mux.Handle("GET /api/v1/admin/settings/providers", requireAuth(deps.Auth, protected))
-		mux.Handle("PUT /api/v1/admin/settings/providers", requireAuth(deps.Auth, protected))
 		mux.Handle("POST /api/v1/jobs", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/jobs", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/jobs/{id}", requireAuth(deps.Auth, protected))

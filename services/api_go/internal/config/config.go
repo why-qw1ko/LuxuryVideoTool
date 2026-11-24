@@ -38,6 +38,7 @@ type Config struct {
 	DashScopeEndpoint string
 	ASRVocabularyID   string
 	SiliconFlowAPIKey string
+	DeepSeekAPIKey    string
 	DailyASRBudgetCNY float64
 	MonthlyASRBudgetCNY float64
 	ASRPricePerMinuteCNY float64
@@ -104,6 +105,7 @@ func Load() (Config, error) {
 		DashScopeEndpoint: stringEnv("DASHSCOPE_ENDPOINT", "https://dashscope.aliyuncs.com/api/v1"),
 		ASRVocabularyID:   strings.TrimSpace(os.Getenv("ASR_VOCABULARY_ID")),
 		SiliconFlowAPIKey: strings.TrimSpace(os.Getenv("SILICONFLOW_API_KEY")),
+		DeepSeekAPIKey:    strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY")),
 		DailyASRBudgetCNY: dailyBudget,
 		MonthlyASRBudgetCNY: monthlyBudget,
 		ASRPricePerMinuteCNY: pricePerMinute,
