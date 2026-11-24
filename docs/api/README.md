@@ -20,13 +20,19 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 
 ## 管理 API（仅管理员，普通用户一律 403）
 
+### 使用设置
+
+- `GET /api/v1/admin/settings/usage` 返回 `{settings, requestId}`。设置包含 `dailyTaskLimit`、`allowInfo`、`allowDownload`、`allowTranscribe`、`dailyAsrBudgetCny`、`monthlyAsrBudgetCny`、`asrPricePerMinuteCny`。
+- `PUT /api/v1/admin/settings/usage` 接收上述七个字段并立即保存。任务类型开关分别控制 `info`、`download`、`transcribe/full` 的新建请求。预算从下一个转写分段起生效，按 UTC 日和月统计。预算填 0 表示该周期不限，估算单价填 0 时新调用的估算费用为 0。删除任务会保留预算汇总。
+
 ### 仪表盘统计
 
 - `GET /api/v1/admin/stats`：返回用户总数、启用账号数、任务总数、今日任务数、各状态任务数（`byStatus`）以及近 14 天每日任务数（`byDay`），供仪表盘图表使用。
 
 ### 用户管理
 
-- `GET /api/v1/admin/users`：列出全部用户（不含密码哈希）。
+- `GET /api/v1/admin/users`：列出全部用户（不含密码哈希），`dailyTaskLimitOverride` 为 `null` 时继承全局额度。
+- `PUT /api/v1/admin/users/{id}/daily-task-limit` 接收 `{dailyTaskLimit}`。`null` 继承默认值，`0` 不限，正整数设置该用户独立额度。
 - `POST /api/v1/admin/users`：创建用户，请求体 `{username, displayName, password, role}`；密码至少 12 位，用户名重复返回 409。
 - `POST /api/v1/admin/users/{id}/password`：重置密码（至少 12 位），并立即撤销该用户全部会话。
 - `PATCH /api/v1/admin/users/{id}/active`：启用/禁用账号，请求体 `{active: bool}`；禁用会撤销该用户全部会话，不能禁用当前登录账号。
@@ -47,6 +53,9 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 - `POST /api/v1/jobs`：Bearer 鉴权，必须携带 `Idempotency-Key`；当前接受 `info`、`download`、`transcribe` 与 `full`。
 - `GET /api/v1/jobs/{id}`：只返回当前用户拥有的任务及结构化作品信息。
 - `GET /api/v1/jobs`：当前用户的历史任务，支持 `q/status/action/limit/offset` 搜索、筛选与分页。
+- 两个任务列表接口均支持 `view=summary`。摘要只包含列表展示字段，文案、文件和签名通过任务详情接口读取。现有客户端省略 `view` 时继续获取完整列表。
+- `GET /api/v1/jobs/usage` 返回当前账号的 `{usage: {used, limit, resetAt}, requestId}`。`0` 代表不限。每账号在北京时间零点重置，每个新建任务计 1 次，重试、幂等重放和删除均不会增加或退回次数。
+- 创建任务达到额度时返回 `429 DAILY_TASK_LIMIT` 和 `Retry-After`。任务类型暂停新建时返回 `403 TASK_ACTION_DISABLED`。
 - `DELETE /api/v1/jobs/{id}`：删除已完成、失败或取消的任务及其文件记录；进行中的任务须先取消。
 - `POST /api/v1/jobs/{id}/cancel`：立即取消排队任务；本进程处理中任务协作终止下载/解析并持久化取消状态。
 - `POST /api/v1/jobs/{id}/retry`：将失败或已取消的任务重新入队。

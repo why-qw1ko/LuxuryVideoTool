@@ -11,6 +11,8 @@ import (
 var (
 	ErrNotFound = errors.New("job not found")
 	ErrIdempotencyConflict = errors.New("idempotency key reused with different request")
+	ErrDailyTaskLimit = errors.New("daily task limit reached")
+	ErrTaskActionDisabled = errors.New("task action disabled")
 	ErrNotCancellable = errors.New("job not cancellable")
 	ErrNotRetryable = errors.New("job not retryable")
 	ErrNotDeletable = errors.New("job not deletable")
@@ -55,6 +57,8 @@ type JobError struct {
 type CreateInput struct {
 	UserID, ShareText, IdempotencyKey string
 	Action string
+	DailyTaskLimit int
+	ActionDisabled bool
 	Force bool
 	KeepVideo bool
 	LanguageHints []string
@@ -75,6 +79,33 @@ type JobPage struct {
 	Total int `json:"total"`
 	Limit int `json:"limit"`
 	Offset int `json:"offset"`
+}
+
+type JobSummary struct {
+	ID               string       `json:"id"`
+	Action           string       `json:"action"`
+	Status           string       `json:"status"`
+	Progress         int          `json:"progress"`
+	CreatedAt        time.Time    `json:"createdAt"`
+	UpdatedAt        time.Time    `json:"updatedAt"`
+	Work             *WorkSummary `json:"work,omitempty"`
+	MediaExpiresAt   *time.Time   `json:"mediaExpiresAt,omitempty"`
+	OwnerUsername    string       `json:"ownerUsername,omitempty"`
+	OwnerDisplayName string       `json:"ownerDisplayName,omitempty"`
+}
+
+type WorkSummary struct {
+	Title      string   `json:"title"`
+	AuthorName string   `json:"authorName,omitempty"`
+	DurationMS int64    `json:"durationMs,omitempty"`
+	Hashtags   []string `json:"hashtags,omitempty"`
+}
+
+type JobSummaryPage struct {
+	Items  []JobSummary
+	Total  int
+	Limit  int
+	Offset int
 }
 
 type DayCount struct {
@@ -104,16 +135,17 @@ type Step struct {
 
 type Repository interface {
 	FindByIdempotencyKey(ctx context.Context, userID, key string) (Job, error)
-	CreateInfo(ctx context.Context, job Job) error
+	CreateJob(ctx context.Context, job Job, dailyTaskLimit int) error
+	DailyTaskUsage(ctx context.Context, userID, day string) (int, error)
 	CompleteInfo(ctx context.Context, jobID string, work resolver.Work, at time.Time) error
 	Fail(ctx context.Context, jobID, code, message string, at time.Time) error
 	FindByID(ctx context.Context, userID, jobID string) (Job, error)
 	FindAnyByID(ctx context.Context, jobID string) (Job, error)
 	List(ctx context.Context, input ListInput) (JobPage, error)
 	ListAll(ctx context.Context, input ListInput) (JobPage, error)
+	ListSummaries(ctx context.Context, input ListInput, withOwner bool) (JobSummaryPage, error)
 	Stats(ctx context.Context, now time.Time) (Stats, error)
 	Delete(ctx context.Context, userID, jobID string) error
-	CreateQueued(ctx context.Context, job Job) error
 	ClaimNext(ctx context.Context, owner string, now time.Time, lease time.Duration) (Job, error)
 	Heartbeat(ctx context.Context, jobID, owner string, now time.Time, lease time.Duration) error
 	SetResolved(ctx context.Context, jobID, owner string, work resolver.Work, at time.Time) error
@@ -134,4 +166,13 @@ type Repository interface {
 	DeleteFilesByKind(ctx context.Context, jobID, kind string) error
 }
 
-type JobFile struct { ID string `json:"id"`; Kind string `json:"kind"`; Name string `json:"name"`; MIMEType string `json:"mimeType"`; SizeBytes int64 `json:"sizeBytes"`; ExpiresAt *time.Time `json:"expiresAt,omitempty"`; PreviewURL string `json:"previewUrl,omitempty"` }
+type JobFile struct {
+	ID           string     `json:"id"`
+	Kind         string     `json:"kind"`
+	Name         string     `json:"name"`
+	MIMEType     string     `json:"mimeType"`
+	SizeBytes    int64      `json:"sizeBytes"`
+	ExpiresAt    *time.Time `json:"expiresAt,omitempty"`
+	PreviewURL   string     `json:"previewUrl,omitempty"`
+	ThumbnailURL string     `json:"thumbnailUrl,omitempty"`
+}

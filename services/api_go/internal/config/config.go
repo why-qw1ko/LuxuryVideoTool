@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -151,7 +152,17 @@ func positiveIntEnv(name string, fallback int) (int, error) {
 
 func boundedIntEnv(name string, fallback, minValue, maxValue int) (int, error) { value, err := positiveIntEnv(name, fallback); if err != nil { return 0, err }; if value < minValue || value > maxValue { return 0, fmt.Errorf("%s must be between %d and %d", name, minValue, maxValue) }; return value, nil }
 func positiveInt64Env(name string, fallback int64) (int64, error) { raw := strings.TrimSpace(os.Getenv(name)); if raw == "" { return fallback, nil }; value, err := strconv.ParseInt(raw, 10, 64); if err != nil || value <= 0 { return 0, fmt.Errorf("%s must be a positive integer", name) }; return value, nil }
-func nonNegativeFloatEnv(name string, fallback float64) (float64, error) { raw := strings.TrimSpace(os.Getenv(name)); if raw == "" { return fallback, nil }; value, err := strconv.ParseFloat(raw, 64); if err != nil || value < 0 { return 0, fmt.Errorf("%s must be a non-negative number", name) }; return value, nil }
+func nonNegativeFloatEnv(name string, fallback float64) (float64, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, fmt.Errorf("%s must be a finite non-negative number", name)
+	}
+	return value, nil
+}
 func boolEnv(name string, fallback bool) bool {
 	raw := strings.TrimSpace(os.Getenv(name))
 	switch strings.ToLower(raw) {

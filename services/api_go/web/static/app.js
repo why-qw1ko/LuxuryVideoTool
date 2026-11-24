@@ -7,9 +7,10 @@ let adminJobsPage=1,adminJobsPageSize=20,adminJobsTotal=0;
 let taskMusic={jobId:null,source:'',url:'',playing:false};
 let statusChart=null,trendChart=null;
 let lastStatsSig='',lastAdminJobsSig='';
-let sessionEpoch=0,jobsLoadId=0,adminJobsLoadId=0,adminUsersLoadId=0,adminDetailLoadId=0;
+let sessionEpoch=0,jobsLoadId=0,jobDetailLoadId=0,adminJobsLoadId=0,adminUsersLoadId=0,adminDetailLoadId=0;
 let adminDetailSig='';
-let jobsPending=null,adminJobsPending=null,adminDetailPending=null;
+let jobsPending=null,jobDetailPending=null,adminJobsPending=null,adminDetailPending=null;
+let pollRequestedAt={},adminStatsHaveActive=false;
 
 /* ---------- 主题（仅浅色 / 深色） ---------- */
 const THEMES=['light','dark'];
@@ -29,6 +30,7 @@ const ICONS={
   settings:'<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   'log-out':'<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/>',
   search:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  image:'<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>',
   play:'<polygon points="6 3 20 12 6 21 6 3"/>',
   copy:'<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   check:'<path d="M20 6 9 17l-5-5"/>',
@@ -194,11 +196,13 @@ function showView(name){
   $('#new-task-btn').classList.toggle('active',name==='new');
   $('#settings-link').classList.toggle('active',name==='settings');
   if(name==='settings')loadProviders();
+  if(name==='new'&&!document.hidden)void refreshDailyUsage();
 }
 function selectJob(id,job=null){
   if(selectedId!==id||job){
     if(taskMusic.jobId&&taskMusic.jobId!==id)stopTaskMusic();
-    selectedId=id;detailSig='';currentJob=id?(job||jobsCache.find(j=>j.id===id)||null):null;
+    jobDetailLoadId++;
+    selectedId=id;detailSig='';currentJob=id?job:null;
   }
   document.querySelectorAll('.job-row').forEach(r=>{
     const selected=r.dataset.id===id;
@@ -207,7 +211,9 @@ function selectJob(id,job=null){
   });
   showView(id?'detail':'new');
   if(!id)stopTaskMusic();
-  renderDetail();
+  if(id&&currentJob)renderDetail();
+  if(id&&!currentJob)$('#detail').innerHTML=skeletonRows();
+  if(id&&!job)loadJobDetail(id);
   if(matchMedia('(max-width:960px)').matches)setSidebar(false);
   if(id&&matchMedia('(max-width:960px)').matches)$('#view-detail').scrollIntoView({behavior:'smooth',block:'start'});
 }
@@ -231,16 +237,18 @@ function closeAdminConsole(){
   setSidebar(false);
   show('#admin-console',false);show('#app',true);
   selectJob(null);
+  pollVisibleJobs(true);
 }
 function adminShowView(name){
   adminDetailLoadId++;
   if(name!=='detail'){adminMode=false;adminDetailSig=''}
   adminCurrentView=name;
-  ['dashboard','jobs','users','detail'].forEach(v=>show('#admin-view-'+v,v===name));
+  ['dashboard','jobs','users','usage','detail'].forEach(v=>show('#admin-view-'+v,v===name));
   document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>btn.classList.toggle('active',btn.dataset.adminView===name));
   if(name==='dashboard')loadAdminStats();
   if(name==='jobs'){loadAdminUsers();loadAdminJobs()}
   if(name==='users')loadAdminUsers();
+  if(name==='usage')requestAdminUsageSettings();
 }
 $('#admin-console-btn').addEventListener('click',openAdminConsole);
 $('#admin-back-front').addEventListener('click',closeAdminConsole);
@@ -256,13 +264,58 @@ document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>btn.addEv
   if(matchMedia('(max-width:960px)').matches)setSidebar(false);
 }));
 
+const ACTIVE_POLL_MS=5000,IDLE_POLL_MS=30000;
+function jobIsActive(status){return !['completed','failed','cancelled'].includes(status)}
+function jobHasExpiredPreview(job,now=Date.now()){
+  return !jobExpired(job)&&(job?.result?.files||[]).some(file=>
+    [file.previewUrl,file.thumbnailUrl].some(url=>{
+      const expires=previewExpiry(url);
+      return expires!==null&&expires<=now;
+    }));
+}
+function pollVisibleJobs(force=false){
+  if(!session||document.hidden)return;
+  const now=Date.now();
+  const due=(key,active)=>force||active||now-(pollRequestedAt[key]??0)>=IDLE_POLL_MS;
+  if(adminOpen){
+    if(adminCurrentView==='dashboard'&&due('stats',adminStatsHaveActive))loadAdminStats();
+    if(adminCurrentView==='jobs'&&due('adminJobs',adminJobsCache.some(job=>jobIsActive(job.status))))loadAdminJobs(true);
+    if(adminCurrentView==='detail'&&currentJob?.id&&due('adminDetail',jobIsActive(currentJob.status)))viewAdminJob(currentJob.id,true,true);
+    return;
+  }
+  if(due('jobs',jobsCache.some(job=>jobIsActive(job.status))))loadJobs(true);
+  if(!selectedId)return;
+  const active=jobIsActive(currentJob?.status);
+  if(!due('detail',active))return;
+  const hasSummary=jobsCache.some(job=>job.id===selectedId);
+  if(force||active||!hasSummary||jobHasExpiredPreview(currentJob,now))loadJobDetail(selectedId,true);
+}
+function startJobPolling(){
+  clearInterval(poll);
+  poll=session&&!document.hidden?setInterval(pollVisibleJobs,ACTIVE_POLL_MS):null;
+}
+document.addEventListener('visibilitychange',()=>{
+  startJobPolling();
+  if(!document.hidden){
+    pollVisibleJobs(true);
+    if(!adminOpen&&currentView==='new')void refreshDailyUsage();
+  }
+});
+
 function enter(value){
   clearInterval(poll);
-  sessionEpoch++;jobsLoadId++;adminJobsLoadId++;adminUsersLoadId++;adminDetailLoadId++;
-  adminDetailSig='';jobsPending=null;adminJobsPending=null;adminDetailPending=null;
+  sessionEpoch++;jobsLoadId++;jobDetailLoadId++;adminJobsLoadId++;adminUsersLoadId++;adminDetailLoadId++;
+  adminDetailSig='';jobsPending=null;jobDetailPending=null;adminJobsPending=null;adminDetailPending=null;
+  pollRequestedAt={};adminStatsHaveActive=false;
+  $('#daily-usage')?.classList.add('hidden');
   jobsCache=[];adminJobsCache=[];adminUsers=[];selectedId=null;currentJob=null;detailSig='';
   lastStatsSig='';lastAdminJobsSig='';
   archiveDownloads.clear();
+  videoPreviewURLs.clear();
+  if(!$('#preview-modal').classList.contains('hidden')){
+    previewMusicSuspended=false;
+    closePreview();
+  }
   save(value);
   adminMode=false;currentView='new';adminOpen=false;jobsPage=1;adminJobsPage=1;
   setSidebar(false);
@@ -277,14 +330,8 @@ function enter(value){
   if(value){
     selectJob(null);
     if(value.user?.role==='admin')loadProviders();
-    loadJobs();
-    poll=setInterval(()=>{
-      if(adminOpen){
-        if(adminCurrentView==='dashboard')loadAdminStats();
-        if(adminCurrentView==='jobs')loadAdminJobs(true);
-        if(adminCurrentView==='detail'&&currentJob?.id)viewAdminJob(currentJob.id,true,true);
-      }else loadJobs(true);
-    },5000);
+    if(!document.hidden)loadJobs();
+    startJobPolling();
   }else{
     clearInterval(poll);
     stopTaskMusic();
@@ -394,6 +441,72 @@ async function loadProviders(){try{const data=await api('/api/v1/admin/settings/
 $('#provider-form').addEventListener('submit',async e=>{e.preventDefault();const body={};const model=$('#asr-model')?.value.trim();if(model)body.asrModel=model;if($('#clear-aliyun').checked)body.aliyunApiKey='';else if($('#aliyun-key').value.trim())body.aliyunApiKey=$('#aliyun-key').value.trim();if($('#clear-silicon').checked)body.siliconFlowApiKey='';else if($('#silicon-key').value.trim())body.siliconFlowApiKey=$('#silicon-key').value.trim();if(!Object.keys(body).length)return toast('请输入需要保存的 Key、模型，或勾选清除','warning');try{await api('/api/v1/admin/settings/providers',{method:'PUT',body:JSON.stringify(body)});$('#aliyun-key').value=$('#silicon-key').value='';$('#clear-aliyun').checked=$('#clear-silicon').checked=false;toast('配置已安全保存并立即生效','success');await loadProviders()}catch(err){toast(err.message,'error')}});
 
 /* ---------- 新建任务 ---------- */
+/* ---------- 管理后台：使用设置 ---------- */
+const adminUsageNumberFields=['dailyTaskLimit','dailyAsrBudgetCny','monthlyAsrBudgetCny','asrPricePerMinuteCny'];
+const adminUsagePermissionFields=['allowInfo','allowDownload','allowTranscribe'];
+let adminUsagePending=null;
+
+async function requestAdminUsageSettings(body){
+  const epoch=sessionEpoch;
+  if(!adminOpen||session?.user?.role!=='admin'||adminUsagePending?.epoch===epoch)return;
+  const request={epoch};
+  adminUsagePending=request;
+  const form=$('#admin-usage-form'),fields=$('#admin-usage-fields'),refresh=$('#admin-usage-refresh');
+  const status=$('#admin-usage-status'),saving=body!==undefined;
+  const current=()=>adminUsagePending===request&&epoch===sessionEpoch;
+  fields.disabled=true;
+  refresh.disabled=true;
+  form.setAttribute('aria-busy','true');
+  status.textContent=saving?'正在保存设置…':'正在加载设置…';
+  try{
+    const options=saving?{method:'PUT',body:JSON.stringify(body)}:{cache:'no-store'};
+    const {settings}=await api('/api/v1/admin/settings/usage',options);
+    if(!current())return;
+    for(const name of adminUsageNumberFields)form.elements.namedItem(name).value=String(settings[name]);
+    for(const name of adminUsagePermissionFields)form.elements.namedItem(name).checked=settings[name];
+    fields.disabled=false;
+    status.textContent=saving?'使用设置已保存':'';
+  }catch(err){
+    if(!current())return;
+    fields.disabled=!saving;
+    status.textContent=err.message;
+  }finally{
+    if(current()){
+      adminUsagePending=null;
+      refresh.disabled=false;
+      form.setAttribute('aria-busy','false');
+    }
+  }
+}
+$('#admin-usage-refresh').addEventListener('click',()=>requestAdminUsageSettings());
+$('#admin-usage-form').addEventListener('submit',e=>{
+  e.preventDefault();
+  if($('#admin-usage-fields').disabled)return;
+  const form=e.currentTarget;
+  if(!form.reportValidity())return;
+  const body={};
+  for(const name of adminUsageNumberFields)body[name]=form.elements.namedItem(name).valueAsNumber;
+  for(const name of adminUsagePermissionFields)body[name]=form.elements.namedItem(name).checked;
+  return requestAdminUsageSettings(body);
+});
+
+let dailyUsageRequestId=0;
+async function refreshDailyUsage(){
+  const label=$('#daily-usage');
+  if(!session||!label)return;
+  const requestId=++dailyUsageRequestId,epoch=sessionEpoch;
+  const current=()=>requestId===dailyUsageRequestId&&epoch===sessionEpoch&&!!session;
+  try{
+    const {usage}=await api('/api/v1/jobs/usage');
+    if(!current())return;
+    const {used,limit}=usage;
+    label.textContent=limit>0?`今日剩余 ${Math.max(0,limit-used)} / ${limit} 次 · 北京时间零点重置`:`今日已用 ${used} 次 · 不限次数`;
+    label.classList.remove('hidden');
+  }catch{
+    if(current())label.classList.add('hidden');
+  }
+}
+
 $('#submit-task').textContent='开始提取';
 const syncTranscribeOption=()=>{const infoOnly=$('#info-only').checked;$('#with-transcribe').disabled=infoOnly;$('#with-transcribe-wrap').classList.toggle('disabled',infoOnly)};
 $('#info-only').addEventListener('change',syncTranscribeOption);syncTranscribeOption();
@@ -415,7 +528,12 @@ $('#capture-form').addEventListener('submit',async e=>{
     if(data.job?.id)selectJob(data.job.id,data.job);
     await loadJobs();
     if(epoch===sessionEpoch&&session)toast('任务已创建，正在处理','success');
-  }catch(err){if(epoch===sessionEpoch)toast(err.message,'error')}
+  }catch(err){
+    if(epoch===sessionEpoch){
+      toast(err.message,'error');
+      void refreshDailyUsage();
+    }
+  }
   finally{button.disabled=false;button.setAttribute('aria-busy','false')}
 });
 
@@ -425,23 +543,51 @@ $('#refresh').addEventListener('click',()=>{jobsPage=1;loadJobs()});
 $('#status').addEventListener('change',()=>{jobsPage=1;loadJobs()});
 async function loadJobs(polling=false){
   if(!session)return;
-  const q=new URLSearchParams({q:$('#query').value.trim(),status:$('#status').value,limit:String(jobsPageSize),offset:String((jobsPage-1)*jobsPageSize)});
+  const q=new URLSearchParams({view:'summary',q:$('#query').value.trim(),status:$('#status').value,limit:String(jobsPageSize),offset:String((jobsPage-1)*jobsPageSize)});
   if(polling&&jobsPending?.key===String(q)&&jobsPending.epoch===sessionEpoch)return;
   const requestId=++jobsLoadId,epoch=sessionEpoch,pending={key:String(q),epoch};
   jobsPending=pending;
+  pollRequestedAt.jobs=Date.now();
   try{
     const data=await api(`/api/v1/jobs?${q}`);
     if(requestId!==jobsLoadId||epoch!==sessionEpoch||!session)return;
     jobsTotal=data.total||0;
     const totalPages=Math.max(1,Math.ceil(jobsTotal/jobsPageSize));
     if(jobsPage>totalPages){jobsPage=totalPages;return loadJobs()}
-    renderList(data.jobs||[]);
+    const jobs=data.jobs||[];
+    renderList(jobs);
+    const selected=jobs.find(job=>job.id===selectedId);
+    if(!document.hidden&&!adminOpen&&currentJob&&selected){
+      if(selected.updatedAt!==currentJob.updatedAt||selected.status!==currentJob.status||jobMediaExpiry(selected)!==jobMediaExpiry(currentJob)){
+        void loadJobDetail(selected.id,true);
+      }else if(jobExpired(currentJob))renderDetail();
+    }
     if($('#job-total'))$('#job-total').textContent=`${jobsTotal} 个任务`;
     renderPager($('#job-pager'),jobsPage,totalPages,p=>{jobsPage=p;loadJobs()});
   }catch(err){
     if(requestId!==jobsLoadId||epoch!==sessionEpoch)return;
     if(err.message.includes('登录'))enter(null);else toast(err.message,'error');
   }finally{if(jobsPending===pending)jobsPending=null}
+}
+async function loadJobDetail(id,polling=false){
+  if(!session||adminOpen||selectedId!==id)return;
+  if(polling&&jobDetailPending?.id===id&&jobDetailPending.epoch===sessionEpoch)return;
+  const requestId=++jobDetailLoadId,epoch=sessionEpoch,pending={id,epoch};
+  jobDetailPending=pending;
+  pollRequestedAt.detail=Date.now();
+  const active=()=>requestId===jobDetailLoadId&&epoch===sessionEpoch&&!adminOpen&&selectedId===id;
+  try{
+    const data=await api(`/api/v1/jobs/${encodeURIComponent(id)}`);
+    if(!active()||!session)return;
+    if(jobHasExpiredPreview(currentJob)&&!jobHasExpiredPreview(data.job))detailSig='';
+    currentJob=data.job;
+    renderDetail();
+  }catch(err){
+    if(!active())return;
+    if(err.message.includes('登录')){enter(null);return}
+    if(!currentJob)$('#detail').innerHTML=`<div class="error-box" role="status">${esc(err.message)}</div>`;
+    if(!polling)toast(err.message,'error');
+  }finally{if(jobDetailPending===pending)jobDetailPending=null}
 }
 // 通用分页条：onPage 接收目标页码；单页时不渲染。
 function renderPager(el,page,totalPages,onPage){
@@ -475,11 +621,13 @@ function skeletonRows(count=4){
 }
 async function loadAdminStats(){
   if(!session)return;
+  pollRequestedAt.stats=Date.now();
   try{
     if(!$('#admin-stats-cards').children.length)$('#admin-stats-cards').innerHTML=skeletonRows(4);
     document.querySelectorAll('.chart-card').forEach(card=>card.classList.add('loading'));
     const [data]=await Promise.all([api('/api/v1/admin/stats'),loadEcharts()]);
     const stats=data.stats||{};
+    adminStatsHaveActive=Object.entries(stats.byStatus||{}).some(([status,count])=>count>0&&jobIsActive(status));
     // 数据未变化时不重绘，避免轮询导致图表/卡片闪烁
     const sig=JSON.stringify([stats.users,stats.activeUsers,stats.totalJobs,stats.todayJobs,stats.byStatus,stats.byDay]);
     if(sig===lastStatsSig){document.querySelectorAll('.chart-card').forEach(card=>card.classList.remove('loading'));return}
@@ -549,10 +697,11 @@ window.addEventListener('resize',()=>{if(statusChart)statusChart.resize();if(tre
 $('#admin-jobs-form').addEventListener('submit',e=>{e.preventDefault();adminJobsPage=1;loadAdminJobs()});
 async function loadAdminJobs(polling=false){
   if(!session)return;
-  const q=new URLSearchParams({q:$('#admin-jobs-q').value.trim(),status:$('#admin-jobs-status').value,userId:$('#admin-jobs-user').value,limit:String(adminJobsPageSize),offset:String((adminJobsPage-1)*adminJobsPageSize)});
+  const q=new URLSearchParams({view:'summary',q:$('#admin-jobs-q').value.trim(),status:$('#admin-jobs-status').value,userId:$('#admin-jobs-user').value,limit:String(adminJobsPageSize),offset:String((adminJobsPage-1)*adminJobsPageSize)});
   if(polling&&adminJobsPending?.key===String(q)&&adminJobsPending.epoch===sessionEpoch)return;
   const requestId=++adminJobsLoadId,epoch=sessionEpoch,pending={key:String(q),epoch};
   adminJobsPending=pending;
+  pollRequestedAt.adminJobs=Date.now();
   try{
     const root=$('#admin-jobs-list');
     if(root&&!root.children.length)root.innerHTML=skeletonRows(6);
@@ -563,7 +712,7 @@ async function loadAdminJobs(polling=false){
     const totalPages=Math.max(1,Math.ceil(adminJobsTotal/adminJobsPageSize));
     if(adminJobsPage>totalPages){adminJobsPage=totalPages;return loadAdminJobs()}
     // 数据与筛选条件未变化时不重绘表格，避免轮询闪烁
-    const sig=JSON.stringify([String(q),adminJobsTotal,(adminJobsCache||[]).map(jobSignature).join('|')]);
+    const sig=JSON.stringify([String(q),adminJobsTotal,adminJobsCache.map(jobListSignature)]);
     if(sig===lastAdminJobsSig)return;
     lastAdminJobsSig=sig;
     renderAdminJobs(adminJobsCache);
@@ -627,13 +776,15 @@ async function viewAdminJob(id,refresh=false,polling=false){
   if(polling&&adminDetailPending?.id===id&&adminDetailPending.epoch===sessionEpoch)return;
   const requestId=++adminDetailLoadId,epoch=sessionEpoch,pending={id,epoch};
   adminDetailPending=pending;
+  pollRequestedAt.adminDetail=Date.now();
   try{
     const data=await api(`/api/v1/admin/jobs/${encodeURIComponent(id)}`);
     if(requestId!==adminDetailLoadId||epoch!==sessionEpoch||!session||!adminOpen)return;
     if(refresh&&(adminCurrentView!=='detail'||currentJob?.id!==id))return;
+    const renewedExpiredPreview=refresh&&jobHasExpiredPreview(currentJob)&&!jobHasExpiredPreview(data.job);
     adminMode=true;currentJob=data.job;
     const sig=id+'|'+jobSignature(data.job);
-    if(sig!==adminDetailSig){
+    if(sig!==adminDetailSig||renewedExpiredPreview){
       adminDetailSig=sig;
       $('#admin-detail').innerHTML=jobDetailHTML(data.job);
     }
@@ -687,19 +838,25 @@ async function loadAdminUsers(){
     }
   }catch(err){if(requestId===adminUsersLoadId&&epoch===sessionEpoch)toast(err.message,'error')}
 }
+function taskLimitLabel(value){
+  if(value==null)return '继承全局';
+  return value===0?'不限':`${value} 次/天`;
+}
 function renderAdminUsers(users){
   const root=$('#admin-users-list');
-  const table=`<div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>用户名</th><th>显示名</th><th>角色</th><th>状态</th><th>最近登录</th><th>创建时间</th><th>操作</th></tr></thead><tbody>`+users.map(u=>`<tr data-id="${esc(u.id)}">
+  const table=`<div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>用户名</th><th>显示名</th><th>角色</th><th>状态</th><th>最近登录</th><th>创建时间</th><th>每日额度</th><th>操作</th></tr></thead><tbody>`+users.map(u=>`<tr data-id="${esc(u.id)}">
     <td class="nowrap">${esc(u.username)}</td>
     <td>${esc(u.displayName)}</td>
     <td>${u.role==='admin'?'管理员':'普通用户'}</td>
     <td class="nowrap">${u.isActive?'<span class="dot dot-success"></span>正常':'<span class="dot dot-danger"></span>已禁用'}</td>
     <td class="nowrap">${u.lastLoginAt?fmtDate(u.lastLoginAt):'-'}</td>
     <td class="nowrap">${fmtDate(u.createdAt)}</td>
+    <td class="nowrap">${esc(taskLimitLabel(u.dailyTaskLimitOverride))}</td>
     <td class="admin-ops nowrap"><div class="admin-ops-row">
       <button type="button" data-op="${u.isActive?'disable':'enable'}">${u.isActive?'禁用':'启用'}</button>
       <button type="button" data-op="password">重置密码</button>
       <button type="button" data-op="sessions">会话</button>
+      <button type="button" data-op="daily-task-limit" aria-haspopup="dialog">设置额度</button>
     </div></td>
   </tr>`).join('')+`</tbody></table></div>`;
   const cards=`<div class="admin-card-list">${users.map(u=>`<article class="admin-card" data-id="${esc(u.id)}">
@@ -709,11 +866,13 @@ function renderAdminUsers(users){
       <span>角色：${u.role==='admin'?'管理员':'普通用户'}</span>
       <span>最近登录：${u.lastLoginAt?fmtDate(u.lastLoginAt):'-'}</span>
       <span>创建：${fmtDate(u.createdAt)}</span>
+      <span>每日额度：${esc(taskLimitLabel(u.dailyTaskLimitOverride))}</span>
     </div>
     <div class="admin-card-actions">
       <button type="button" data-op="${u.isActive?'disable':'enable'}">${u.isActive?'禁用':'启用'}</button>
       <button type="button" data-op="password">重置密码</button>
       <button type="button" data-op="sessions">会话</button>
+      <button type="button" data-op="daily-task-limit" aria-haspopup="dialog">设置额度</button>
     </div>
   </article>`).join('')}</div>`;
   root.innerHTML=table+cards;
@@ -727,6 +886,7 @@ $('#admin-view-users').addEventListener('click',e=>{
   if(op==='disable')return setUserActive(row.dataset.id,false);
   if(op==='enable')return setUserActive(row.dataset.id,true);
   if(op==='password')return resetUserPassword(row.dataset.id);
+  if(op==='daily-task-limit')return setUserDailyTaskLimit(row.dataset.id);
   // 显示名优先从用户缓存取：移动端卡片布局没有 td，querySelector 会取到空串导致会话面板标题丢用户名。
   if(op==='sessions'){const u=adminUsers.find(x=>x.id===row.dataset.id);return showUserSessions(row.dataset.id,u?.displayName||u?.username||'')}
 });
@@ -745,6 +905,32 @@ async function resetUserPassword(id){
     await api(`/api/v1/admin/users/${encodeURIComponent(id)}/password`,{method:'POST',body:JSON.stringify({password})});
     toast('密码已重置，该用户会话已下线','success');
   }catch(err){toast(err.message,'error')}
+}
+const pendingUserTaskLimits=new Set();
+async function setUserDailyTaskLimit(id){
+  const user=adminUsers.find(item=>item.id===id),epoch=sessionEpoch,key=`${epoch}:${id}`;
+  if(!user||!adminOpen||session?.user?.role!=='admin'||pendingUserTaskLimits.has(key))return;
+  pendingUserTaskLimits.add(key);
+  try{
+    const raw=await promptDialog({
+      title:`${user.displayName||user.username} 的每日额度`,
+      message:'留空继承全局额度，输入 0 表示不限。',
+      placeholder:'每日新建任务数',
+      numberInput:{value:user.dailyTaskLimitOverride,max:100000},
+      confirmText:'保存'
+    });
+    if(raw==null||epoch!==sessionEpoch||!adminOpen)return;
+    const limit=raw===''?null:Number(raw);
+    if(limit!==null&&(!Number.isInteger(limit)||limit<0||limit>100000))return toast('请输入 0 到 100000 之间的整数','warning');
+    await api(`/api/v1/admin/users/${encodeURIComponent(id)}/daily-task-limit`,{method:'PUT',body:JSON.stringify({dailyTaskLimit:limit})});
+    if(epoch!==sessionEpoch||!adminOpen)return;
+    toast('用户额度已保存','success');
+    await loadAdminUsers();
+  }catch(err){
+    if(epoch===sessionEpoch&&adminOpen)toast(err.message,'error');
+  }finally{
+    pendingUserTaskLimits.delete(key);
+  }
 }
 async function showUserSessions(id,username){
   const host=$('#admin-user-sessions');
@@ -788,15 +974,17 @@ function fileLabel(f){
 }
 // 任务媒体保留期：取所有带 expiresAt 文件的最早到期时间；过期后媒体已清理，列表与详情按“已过期”展示。
 function jobMediaExpiry(job){
+  if(job?.mediaExpiresAt)return job.mediaExpiresAt;
   const files=job?.result?.files||[];
   return files.filter(f=>f.expiresAt).reduce((e,f)=>!e||f.expiresAt<e?f.expiresAt:e,null);
 }
 function jobExpired(job){const expiry=jobMediaExpiry(job);return !!expiry&&new Date(expiry).getTime()<=Date.now()}
+function jobListSignature(job){return JSON.stringify([job,jobExpired(job)])}
 function jobSignature(job){
-  // previewUrl/expiresAt 每次轮询都会变化（预览签名按需生成），不算入签名，否则每 5s 重渲染导致动图/图片闪烁。
+  // 预览与缩略图的签名地址不参与比较，避免轮询重绘；只记录是否已有缩略图。
   // 过期标记是稳定布尔值，算入签名：任务在页面停留期间过期时，轮询能自动刷新列表行与详情。
   const result=job.result||null;
-  const stable=result?{...result,files:(result.files||[]).map(f=>({id:f.id,kind:f.kind,name:f.name,mimeType:f.mimeType,sizeBytes:f.sizeBytes}))}:null;
+  const stable=result?{...result,files:(result.files||[]).map(f=>({id:f.id,kind:f.kind,name:f.name,mimeType:f.mimeType,sizeBytes:f.sizeBytes,hasThumbnail:!!f.thumbnailUrl}))}:null;
   return [job.status,job.progress,job.updatedAt,job.error?.code,jobExpired(job),JSON.stringify(stable)].join('|');
 }
 
@@ -827,10 +1015,10 @@ function renderList(jobs){
   const frag=document.createDocumentFragment();
   jobs.forEach(job=>{
     let row=root.querySelector(`.job-row[data-id="${CSS.escape(job.id)}"]`);
-    if(row&&row.dataset.sig===jobSignature(job))return;
+    if(row&&row.dataset.sig===jobListSignature(job))return;
     if(row)row.remove();
     row=document.createElement('div');
-    row.className='job-row';row.dataset.id=job.id;row.dataset.sig=jobSignature(job);
+    row.className='job-row';row.dataset.id=job.id;row.dataset.sig=jobListSignature(job);
     row.tabIndex=0;row.setAttribute('role','button');
     row.setAttribute('aria-current',String(job.id===selectedId));
     if(job.id===selectedId)row.classList.add('selected');
@@ -844,11 +1032,6 @@ function renderList(jobs){
     const target=root.children[index];
     if(target&&target!==row)root.insertBefore(row,target);
   });
-  if(selectedId){
-    const fresh=jobs.find(j=>j.id===selectedId);
-    if(fresh)currentJob=fresh;
-    renderDetail();
-  }
 }
 
 function jobDetailHTML(job){
@@ -857,7 +1040,7 @@ function jobDetailHTML(job){
   const terminal=['completed','failed','cancelled'].includes(job.status);
   const text=job.result?.normalizedText||job.result?.text||'';
   const files=job.result?.files||[];
-  // 真实视频才提供"预览视频"；动图（kind=animated）在画廊内联展示，不走视频播放器。
+  // 普通视频使用独立预览入口，动图从画廊打开。
   const videoFile=files.find(f=>f.kind==='video'||((f.mimeType||'').startsWith('video/')&&f.kind!=='animated'));
   const tone=statusTone[job.status]||'muted';
   const badges=[`<span class="badge badge-${tone}">${esc(statusLabels[job.status]||job.status)}</span>`,`<span class="badge badge-action">${esc(actionLabels[job.action]||job.action)}</span>`];
@@ -906,7 +1089,7 @@ function jobDetailHTML(job){
   const transcriptHeading=isNote?'图文配文':'视频文案';
   const transcript=text?`<section class="detail-section"><div class="section-head"><h3>${icon('file-text',14)} ${transcriptHeading}</h3><button type="button" class="copy-btn" data-copy title="复制全部文案">${icon('copy',13)} 复制</button></div><div class="result">${esc(text)}</div></section>`:'';
 
-  // 图文/动图：图片画廊。动图缩略图直接用动态本体内联动（点开是全屏查看器，非视频播放器）。
+  // 画廊只加载静态缩略图，原图和动图在打开预览时加载。
   const mediaFiles=files.filter(f=>f.kind==='image'||f.kind==='animated');
   const noteImages=w.images||[];
   // 按媒体类型和文件名前缀（image-NN）匹配，避免历史静态文件被当作动图、下载失败导致下标错位。
@@ -916,25 +1099,15 @@ function jobDetailHTML(job){
   const mediaSummary=showMediaSummary?`<p class="status-msg">已保存 ${savedMediaCount}/${noteImages.length} 项媒体${savedMediaCount<noteImages.length?'；未保存的媒体不会包含在压缩包中。':'。'}</p>`:'';
   const galleryItems=noteImages.map((img,i)=>{
     const file=mediaFileForImage(img,i);
+    const animated=!!img.animatedUrl;
     const cdnSrc=img.animatedUrl||img.url;
-    // 签名预览地址 24h 有效：可用时优先（跨区域稳定），过期则退回 CDN 原址，避免 404 黑框。
-    const viewerSrc=(file&&file.previewUrl&&previewUsable(file.previewUrl))?file.previewUrl:cdnSrc;
+    const viewerSrc=previewUsable(file?.previewUrl)?file.previewUrl:cdnSrc;
+    const thumbnail=file?.thumbnailUrl||'';
     const dl=file?`<a class="gallery-dl" href="${fileHref(file)}" data-file data-name="${esc(file.name||'image')}" data-preview="${esc(file.previewUrl||'')}" title="下载">${icon('download',14)}</a>`:'';
-    const badge=`<span class="gallery-badge">${img.animatedUrl?'动图':'图片'}${showMediaSummary&&!file?' · 未保存':''}</span>`;
-    // 回退链在错误发生时现查（不烘焙渲染时的判断），避免页面停留超过 24h 后签名地址过期、
-    // 或客户端时钟偏差把新鲜地址误判为过期时，图片/动图永久无法恢复。mediaFallback 每项只尝试一次。
-    const preview=file&&file.previewUrl?file.previewUrl:'';
-    // 图片缩略图优先用本地已下载文件的签名地址（同源、稳定、不绕外网 CDN），CDN 原图仅作错误兜底；
-    // 签名过期时直接走 CDN，并把本地地址留给兜底链，避免页面停留久了缩略图永久 404。
-    const useLocal=!!preview&&previewUsable(preview);
-    const thumbSrc=useLocal?preview:img.url;
-    // 安卓微信 X5 内核需要 h5 模式才在页面内渲染视频；poster 用静态图兜底自动播放被拦时的黑屏。
-    const x5Attrs=isWeChat()?' x5-video-player-type="h5" x5-playsinline=""':'';
-    const media=img.animatedUrl
-      ?`<video class="gallery-anim" src="${esc(viewerSrc)}" poster="${esc(img.url)}" autoplay muted loop playsinline webkit-playsinline preload="metadata"${x5Attrs}${viewerSrc===cdnSrc?` data-preview="${esc(preview)}"`:` data-fallback="${esc(cdnSrc)}"`} onerror="mediaFallback(this)"></video>`
-      :`<img src="${esc(thumbSrc)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"${useLocal?` data-fallback="${esc(img.url)}"`:` data-preview="${esc(preview)}"`} onerror="mediaFallback(this)">`;
-    const foot=(badge||dl)?`<div class="gallery-foot">${badge}${dl}</div>`:'';
-    return `<figure class="gallery-item" data-preview="${esc(viewerSrc)}" data-fallback="${esc(cdnSrc)}" data-poster="${esc(img.url)}" data-animated="${img.animatedUrl?'1':'0'}" data-title="${esc((stripHashtags(w.title,w.hashtags)||'预览').slice(0,40))}"><div class="gallery-media">${media}</div>${foot}</figure>`;
+    const badge=`<span class="gallery-badge">${animated?'动图':'图片'}${showMediaSummary&&!file?' · 未保存':''}</span>`;
+    const thumb=thumbnail?`<img src="${esc(thumbnail)}" alt="" loading="lazy" decoding="async" onerror="this.remove()">`:'';
+    const indicator=animated?`<span class="gallery-play">${icon('play',18)}</span>`:`<span class="gallery-placeholder">${icon('image',24)}</span>`;
+    return `<figure class="gallery-item" data-file-id="${esc(file?.id)}" data-preview="${esc(viewerSrc)}" data-fallback="${esc(cdnSrc)}" data-poster="${esc(thumbnail||img.url)}" data-animated="${animated?'1':'0'}" data-title="${esc((stripHashtags(w.title,w.hashtags)||'预览').slice(0,40))}"><button type="button" class="gallery-media" aria-haspopup="dialog" aria-label="${animated?'播放动图':'查看原图'} ${i+1}">${indicator}${thumb}</button><div class="gallery-foot">${badge}${dl}</div></figure>`;
   }).join('');
   const noteGallery=isNote&&noteImages.length?`<div class="note-gallery">${galleryItems}</div>`:'';
   // 管理员详情里打包下载走用户自己的接口会因所有权校验失败，故仅在普通用户视图展示。
@@ -987,7 +1160,7 @@ function handleContentClick(e){
   const btn=e.target.closest('[data-op],a[data-file],[data-copy]');
   if(!btn)return;
   if(btn.dataset.op==='music'){e.preventDefault();e.stopPropagation();toggleTaskMusic(btn.closest('[data-job]')?.dataset.job,btn.dataset.music,btn.dataset.playUrl||btn.dataset.music,btn.dataset.fallback||'');return}
-  if(btn.dataset.op==='preview'){e.preventDefault();openPreview(btn.dataset.fid,btn.dataset.name,btn.dataset.preview);return}
+  if(btn.dataset.op==='preview'){e.preventDefault();openPreview(btn.closest('[data-job]')?.dataset.job,btn.dataset.fid,btn.dataset.name,btn.dataset.preview);return}
   if(btn.dataset.op==='archive'){e.preventDefault();downloadArchive(btn.closest('[data-archive-download]').dataset.archiveDownload,btn.dataset.name);return}
   if(btn.hasAttribute('data-file')){e.preventDefault();download(btn);return}
   if(btn.hasAttribute('data-copy')){e.preventDefault();e.stopPropagation();copyText(btn);return}
@@ -1026,16 +1199,24 @@ function promptDialog(opts={}){
     message.innerHTML='';
     if(opts.message)message.appendChild(document.createTextNode(opts.message));
     const input=document.createElement('input');
-    input.type=opts.password?'password':'text';
+    input.type=opts.password?'password':opts.numberInput?'number':'text';
+    if(opts.numberInput){
+      input.min='0';
+      input.max=String(opts.numberInput.max);
+      input.step='1';
+      input.value=opts.numberInput.value??'';
+      input.inputMode='numeric';
+    }
     input.placeholder=opts.placeholder||'';
+    input.setAttribute('aria-label',opts.placeholder||opts.title||'输入');
     input.maxLength=1024;
-    input.autocomplete='new-password';
+    input.autocomplete=opts.password?'new-password':'off';
     input.className='prompt-input';
     message.appendChild(input);
     ok.textContent=opts.confirmText||'确定';
     ok.className='btn-primary';
     const close=v=>{modal.classList.add('hidden');document.body.classList.remove('modal-open');resolve(v)};
-    ok.onclick=()=>close(input.value);
+    ok.onclick=()=>{if(input.reportValidity())close(input.value)};
     cancel.onclick=()=>close(null);
     modal.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>close(null));
     modal.classList.remove('hidden');document.body.classList.add('modal-open');
@@ -1063,35 +1244,28 @@ async function operate(id,op){
       else await loadAdminJobs();
       return;
     }
-    await loadJobs();
     if(op==='delete'&&selectedId===id)selectJob(null);
+    await Promise.all([loadJobs(),op!=='delete'&&selectedId===id?loadJobDetail(id):null]);
     if(op==='delete'&&jobsPage>1&&jobsTotal<=(jobsPage-1)*jobsPageSize){jobsPage--;loadJobs()}
     if(op==='delete')toast('任务已删除','success');
     if(op==='cancel')toast('已请求取消');
     if(op==='retry')toast('已重新开始');
   }catch(err){toast(err.message,'error')}
 }
-// 签名预览地址带 expires（Unix 秒）；页面停留超过有效期后点击应回退 fetch+鉴权，避免拿到已过期的地址。
-// 客户端时钟可能领先服务端（校时错误/双系统），加 1 小时容差，避免把刚签发的地址误判为已过期、
-// 从而退回可能被地域/防盗链拦截的 CDN 原址。
+// 签名预览地址带 expires（Unix 秒）。
+function previewExpiry(url){
+  const match=/[?&]expires=(\d+)/.exec(url);
+  return match?Number(match[1])*1000:null;
+}
+// 对有原址回退的媒体容许客户端时钟偏差，避免因误判而过早改用 CDN。
 const PREVIEW_SKEW_MS=60*60*1000;
 function previewUsable(url){
   if(!url)return false;
-  const m=/[?&]expires=(\d+)/.exec(url);
-  if(!m)return true;
-  return Number(m[1])*1000+PREVIEW_SKEW_MS>Date.now();
+  const expiry=previewExpiry(url);
+  return expiry===null||expiry+PREVIEW_SKEW_MS>Date.now();
 }
 // 微信内置浏览器（iOS WKWebView / 安卓 X5）对视频自动播放和页面内渲染有额外限制，需要单独适配。
 function isWeChat(){return /MicroMessenger/i.test(navigator.userAgent||'')}
-// 媒体加载失败兜底：按 data-preview（同源签名地址）→ data-fallback（CDN 原址）依次尝试，
-// 每项只试一次（试完清除该属性），全部失败则隐藏元素。判断发生在错误时刻而非渲染时刻。
-function mediaFallback(el){
-  const preview=el.dataset.preview;
-  if(preview){el.dataset.preview='';el.src=preview;return;}
-  const fallback=el.dataset.fallback;
-  if(fallback){el.dataset.fallback='';el.src=fallback;return;}
-  el.style.display='none';
-}
 // 打包下载交给浏览器接收，页面只报告准备和移交状态；下载百分比以浏览器下载列表为准。
 const ARCHIVE_RETRY_DELAY_MS=5000;
 const archiveDownloads=new Map();
@@ -1273,7 +1447,8 @@ async function toggleTaskMusic(jobId,source,playUrl,fallbackUrl){
 }
 
 /* ---------- 视频预览 / 图文查看 ---------- */
-let previewURL=null,galleryPreview={items:[],index:0,touchX:null};
+const videoPreviewURLs=new Map();
+let videoPreviewRequest=0,galleryPreview={items:[],index:0,touchX:null};
 let previewMusicSuspended=false;
 let previewSoundOn=false;
 let previewGestureHandler=null;
@@ -1281,25 +1456,31 @@ function setPreviewNav(show){
   document.querySelectorAll('[data-preview-nav]').forEach(btn=>btn.classList.toggle('hidden',!show));
 }
 function resetPreviewMedia(){
+  videoPreviewRequest++;
   const video=$('#preview-video'),img=$('#preview-image');
   if(previewGestureHandler){
     video.removeEventListener('click',previewGestureHandler);
     video.removeEventListener('touchstart',previewGestureHandler);
     previewGestureHandler=null;
   }
-  video.onerror=null;video.oncanplay=null;img.onerror=null;
+  video.onerror=null;video.oncanplay=null;video.onloadedmetadata=null;img.onerror=null;
   video.pause();video.currentTime=0;video.removeAttribute('src');video.removeAttribute('poster');video.removeAttribute('x5-video-player-type');video.load();video.classList.add('hidden');
   img.classList.add('hidden');img.removeAttribute('src');
 }
 function openGalleryPreview(item){
   const nodes=[...item.closest('.note-gallery').querySelectorAll('.gallery-item')];
-  const items=nodes.map(el=>({
-    src:el.dataset.preview,
-    animated:el.dataset.animated,
-    title:el.dataset.title,
-    fallback:el.dataset.fallback,
-    poster:el.dataset.poster
-  }));
+  // 轮询更新的数据比卡片上的旧签名更新，预览时优先复用。
+  const files=currentJob&&currentJob.id===item.closest('[data-job]')?.dataset.job?currentJob.result?.files||[]:[];
+  const items=nodes.map(el=>{
+    const file=files.find(f=>f.id===el.dataset.fileId);
+    return {
+      src:previewUsable(file?.previewUrl)?file.previewUrl:el.dataset.preview,
+      animated:el.dataset.animated,
+      title:el.dataset.title,
+      fallback:el.dataset.fallback,
+      poster:file?.thumbnailUrl||el.dataset.poster
+    };
+  });
   galleryPreview.items=items;
   galleryPreview.index=Math.max(0,nodes.indexOf(item));
   renderGalleryPreview();
@@ -1395,8 +1576,9 @@ function togglePreviewSound(){
   }
 }
 $('#preview-sound-toggle').addEventListener('click',e=>{e.preventDefault();e.stopPropagation();togglePreviewSound()});
-async function openPreview(fileId,name,previewUrl){
-  const modal=$('#preview-modal'),video=$('#preview-video'),img=$('#preview-image');
+async function openPreview(jobId,fileId,name,previewUrl){
+  if(!session)return;
+  const modal=$('#preview-modal'),video=$('#preview-video');
   if(taskMusic.playing)stopTaskMusic();
   galleryPreview={items:[],index:0,touchX:null};
   modal.classList.add('preview-video-mode');
@@ -1410,22 +1592,66 @@ async function openPreview(fileId,name,previewUrl){
   resetPreviewMedia();
   video.classList.remove('hidden');
   video.controls=true;video.muted=false;video.loop=false;video.playsInline=true;
-  if(previewURL){URL.revokeObjectURL(previewURL);previewURL=null}
-  // 优先用同源签名地址直接流式播放（支持 Range，秒开），不再把整个视频 fetch 进内存再播。
-  if(previewUsable(previewUrl)){
-    video.src=previewUrl;
-    video.play().catch(()=>{});
-    return;
+
+  const epoch=sessionEpoch,request=videoPreviewRequest;
+  const jobPath=`/api/v1/${adminMode?'admin/':''}jobs/${encodeURIComponent(jobId)}`;
+  const key=`${jobPath}:${fileId}`;
+  const active=()=>epoch===sessionEpoch&&request===videoPreviewRequest;
+  let refreshedAfterError=false;
+
+  function fail(message='视频加载失败，请稍后重试'){
+    if(!active())return;
+    if(!session)enter(null);else closePreview();
+    toast(message,'error');
   }
-  try{
-    const r=await fetch(`${adminMode?'/api/v1/admin/files':'/api/v1/files'}/${encodeURIComponent(fileId)}`,{headers:{Authorization:`Bearer ${session.accessToken}`}});
-    if(!r.ok)throw new Error('视频加载失败');
-    const blob=await r.blob();
-    if(previewURL)URL.revokeObjectURL(previewURL);
-    previewURL=URL.createObjectURL(blob);
-    video.src=previewURL;
-    video.play().catch(()=>{});
-  }catch(err){closePreview();toast(err.message,'error')}
+
+  function loadSignedVideo(url,position=0,autoplay=true){
+    videoPreviewURLs.set(key,url);
+    const loadedAt=Date.now(),expires=previewExpiry(url);
+    let loadedMetadata=false;
+    video.onloadedmetadata=()=>{
+      if(!active())return;
+      video.onloadedmetadata=null;
+      loadedMetadata=true;
+      if(position>0){
+        video.currentTime=Number.isFinite(video.duration)?Math.min(position,video.duration):position;
+        if(autoplay)video.play().catch(()=>{});
+      }
+    };
+    video.onerror=()=>{
+      if(!active())return;
+      video.onerror=null;
+      videoPreviewURLs.delete(key);
+      // 新签名也失败时终止重试；已成功播放的签名以后仍可能正常过期。
+      if(refreshedAfterError&&!(loadedMetadata&&expires>loadedAt&&expires<=Date.now())){
+        fail();
+        return;
+      }
+      refreshedAfterError=true;
+      return refreshSignedVideo(video.currentTime,!video.paused||!loadedMetadata);
+    };
+    video.src=url;
+    video.load();
+    if(autoplay&&position===0)video.play().catch(()=>{});
+  }
+
+  async function refreshSignedVideo(position,autoplay){
+    try{
+      if(!jobId)throw new Error('无法获取视频预览地址');
+      const data=await api(jobPath,{cache:'no-store'});
+      if(!active())return;
+      if(!session)throw new Error('登录已过期，请重新登录');
+      const url=data.job?.result?.files?.find(file=>file.id===fileId)?.previewUrl;
+      if(previewExpiry(url)===null)throw new Error('视频预览已不可用');
+      loadSignedVideo(url,position,autoplay);
+    }catch(err){fail(err.message)}
+  }
+
+  const latestUrl=currentJob?.id===jobId?currentJob.result?.files?.find(file=>file.id===fileId)?.previewUrl:'';
+  // 优先复用已播放的签名，让浏览器沿用同一地址的缓存和分段请求。
+  const url=[videoPreviewURLs.get(key),previewUrl,latestUrl].find(value=>previewExpiry(value)>Date.now());
+  if(url)loadSignedVideo(url);
+  else await refreshSignedVideo();
 }
 // 画廊点击查看：图片/动图点击即播放；「原声」按钮切换动图原声。
 function openMediaPreview(src,animated,title,fallback,poster){
@@ -1438,7 +1664,6 @@ function closePreview(){
   resetPreviewMedia();
   galleryPreview={items:[],index:0,touchX:null};
   setPreviewNav(false);
-  if(previewURL){URL.revokeObjectURL(previewURL);previewURL=null}
   previewSoundOn=false;
   $('#preview-sound-toggle').classList.add('hidden');
   if(previewMusicSuspended){previewMusicSuspended=false;resumeTaskMusic()}

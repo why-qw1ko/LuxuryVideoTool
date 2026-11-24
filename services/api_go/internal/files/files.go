@@ -17,6 +17,8 @@ import (
 
 var ErrNotFound = errors.New("file not found")
 
+const thumbnailSuffix = ".thumb.webp"
+
 type File struct {
 	ID string `json:"id"`
 	UserID string `json:"-"`
@@ -29,6 +31,16 @@ type File struct {
 	SHA256 string `json:"sha256"`
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
+}
+
+func HasThumbnail(kind string) bool { return kind == "image" || kind == "animated" }
+
+func (f File) Thumbnail() File {
+	return File{
+		RelativePath: f.RelativePath + thumbnailSuffix,
+		OriginalName: strings.TrimSuffix(f.OriginalName, filepath.Ext(f.OriginalName)) + ".webp",
+		MIMEType:     "image/webp",
+	}
 }
 
 type Repository struct{ db *sql.DB }
@@ -103,7 +115,32 @@ func (s *Storage) Resolve(relative string) (string, error) {
 func (s *Storage) Relative(path string) (string, error) { absolute, err := filepath.Abs(path); if err != nil { return "", err }; relative, err := filepath.Rel(s.root, absolute); if err != nil { return "", err }; if _, err := s.Resolve(relative); err != nil { return "", err }; return relative, nil }
 
 func (s *Storage) Open(file File) (*os.File, error) { path, err := s.Resolve(file.RelativePath); if err != nil { return nil, err }; return os.Open(path) }
-func (s *Storage) Remove(file File) error { path, err := s.Resolve(file.RelativePath); if err != nil { return err }; err = os.Remove(path); if errors.Is(err, os.ErrNotExist) { return nil }; return err }
+func (s *Storage) Remove(file File) error {
+	path, err := s.Resolve(file.RelativePath)
+	if err != nil {
+		return err
+	}
+	if !HasThumbnail(file.Kind) {
+		return removeIfPresent(path)
+	}
+	thumbnailPath := path + thumbnailSuffix
+	if err := removeIfPresent(thumbnailPath); err != nil {
+		return err
+	}
+	if err := removeIfPresent(path); err != nil {
+		return err
+	}
+	// A preview request may finish generating between the removals.
+	return removeIfPresent(thumbnailPath)
+}
+
+func removeIfPresent(path string) error {
+	err := os.Remove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
 
 func NewFile(now time.Time, userID, jobID, kind, relative, name, mime, sha string, size int64, expires *time.Time) (File, error) {
 	id, err := auth.NewID(now); if err != nil { return File{}, err }

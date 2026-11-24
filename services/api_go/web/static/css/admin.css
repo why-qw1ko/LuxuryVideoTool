@@ -84,6 +84,17 @@
 .admin-card-actions{padding-top:8px;border-top:1px solid var(--border)}
 .admin-session{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);overflow-wrap:anywhere}
 .admin-session:last-child{border-bottom:0}
+#admin-view-usage{overflow-y:auto}
+#admin-usage-form{max-width:704px}
+.admin-usage-fields,.admin-usage-group{min-inline-size:0;margin:0;padding:0;border:0}
+.admin-usage-fields{display:grid;gap:24px;justify-items:start}
+.admin-usage-group{display:grid;gap:8px;width:100%}
+.admin-usage-group legend{margin-bottom:8px;padding:0;font-weight:600}
+.admin-usage-group p,#admin-usage-status{margin:0}
+.admin-usage-checks,.admin-usage-amounts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,168px),1fr));gap:12px}
+#admin-console .admin-usage-checks input{height:15px}
+#admin-usage-fields input[name="dailyTaskLimit"]{max-width:224px}
+
 #admin-user-sessions.panel.sub{margin-top:0;max-height:40vh;padding:20px;overflow-y:auto;box-shadow:none;border:1px solid var(--border)}
 .back-btn{display:inline-flex;align-items:center;gap:7px;min-height:40px;padding:8px 14px;border:1px solid var(--border);border-radius:4px;background:var(--card);color:var(--text-secondary);font-size:13px;white-space:nowrap;transition:background .14s ease,color .14s ease,border-color .14s ease}
 .back-btn:hover:not(:disabled){background:var(--hover);color:var(--primary);border-color:var(--border-focus)}

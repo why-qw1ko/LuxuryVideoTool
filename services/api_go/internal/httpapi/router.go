@@ -17,6 +17,7 @@ import (
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/auth"
 	ownedfiles "github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/files"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/jobs"
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/media"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/resolver"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/settings"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/version"
@@ -35,6 +36,7 @@ type Dependencies struct {
 	Jobs            *jobs.Service
 	Files           *ownedfiles.Repository
 	Storage         *ownedfiles.Storage
+	Thumbnails      *media.Thumbnailer
 	ASRSigner       *ownedfiles.Signer
 	Audit           *audit.Recorder
 	Ready           Readiness
@@ -393,6 +395,14 @@ func New(deps Dependencies) http.Handler {
 			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取用户列表", true)
 			return
 		}
+		var overrides map[string]int
+		if deps.Settings != nil {
+			overrides, err = deps.Settings.ListUserDailyTaskLimits(r.Context())
+			if err != nil {
+				writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取用户额度", true)
+				return
+			}
+		}
 		type item struct {
 			ID          string     `json:"id"`
 			Username    string     `json:"username"`
@@ -402,10 +412,15 @@ func New(deps Dependencies) http.Handler {
 			CreatedAt   time.Time  `json:"createdAt"`
 			UpdatedAt   time.Time  `json:"updatedAt"`
 			LastLoginAt *time.Time `json:"lastLoginAt,omitempty"`
+			DailyTaskLimitOverride *int `json:"dailyTaskLimitOverride"`
 		}
 		items := make([]item, 0, len(users))
 		for _, user := range users {
-			items = append(items, item{ID: user.ID, Username: user.UsernameNormalized, DisplayName: user.DisplayName, Role: user.Role, IsActive: user.IsActive, CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt, LastLoginAt: user.LastLoginAt})
+			entry := item{ID: user.ID, Username: user.UsernameNormalized, DisplayName: user.DisplayName, Role: user.Role, IsActive: user.IsActive, CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt, LastLoginAt: user.LastLoginAt}
+			if limit, ok := overrides[user.ID]; ok {
+				entry.DailyTaskLimitOverride = &limit
+			}
+			items = append(items, entry)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"users": items, "requestId": RequestID(r.Context())})
 	})
@@ -536,12 +551,17 @@ func New(deps Dependencies) http.Handler {
 			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "历史筛选参数不正确", false)
 			return
 		}
-		page, err := deps.Jobs.ListAll(r.Context(), jobs.ListInput{UserID: userID, Query: r.URL.Query().Get("q"), Status: status, Action: action, Limit: limit, Offset: offset})
+		input := jobs.ListInput{UserID: userID, Query: r.URL.Query().Get("q"), Status: status, Action: action, Limit: limit, Offset: offset}
+		if r.URL.Query().Get("view") == "summary" {
+			writeJobSummaries(w, r, deps.Jobs, input, true)
+			return
+		}
+		page, err := deps.Jobs.ListAll(r.Context(), input)
 		if err != nil {
 			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务列表", true)
 			return
 		}
-		withMediaPreviews(page.Items, deps.ASRSigner, time.Now())
+		withMediaPreviews(page.Items, deps, time.Now())
 		writeJSON(w, http.StatusOK, map[string]any{"jobs": page.Items, "total": page.Total, "limit": page.Limit, "offset": page.Offset, "requestId": RequestID(r.Context())})
 	})
 	protected.HandleFunc("GET /api/v1/admin/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -562,7 +582,7 @@ func New(deps Dependencies) http.Handler {
 			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务", true)
 			return
 		}
-		withMediaPreviews([]jobs.Job{job}, deps.ASRSigner, time.Now())
+		withMediaPreviews([]jobs.Job{job}, deps, time.Now())
 		writeJSON(w, http.StatusOK, map[string]any{"job": job, "requestId": RequestID(r.Context())})
 	})
 	protected.HandleFunc("POST /api/v1/admin/jobs/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
@@ -740,13 +760,30 @@ func New(deps Dependencies) http.Handler {
 			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "不支持的任务类型", false)
 			return
 		}
+		policy, limit, err := userUsagePolicy(r.Context(), deps.Settings, principal.UserID)
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务使用设置", true)
+			return
+		}
+		creation := jobs.CreateInput{
+			UserID: principal.UserID, ShareText: input.ShareText, IdempotencyKey: key, Force: input.Options.Force,
+			Action: input.Action, KeepVideo: input.Options.KeepVideo, LanguageHints: input.Options.LanguageHints, Hotwords: input.Options.Hotwords,
+			DailyTaskLimit: limit, ActionDisabled: !policy.Allows(input.Action),
+		}
 		var job jobs.Job
 		var reused bool
-		var err error
 		if input.Action == "info" {
-			job, reused, err = deps.Jobs.CreateInfo(r.Context(), jobs.CreateInput{UserID: principal.UserID, ShareText: input.ShareText, IdempotencyKey: key, Force: input.Options.Force})
+			job, reused, err = deps.Jobs.CreateInfo(r.Context(), creation)
 		} else {
-			job, reused, err = deps.Jobs.CreateDownload(r.Context(), jobs.CreateInput{UserID: principal.UserID, ShareText: input.ShareText, IdempotencyKey: key, Action: input.Action, Force: input.Options.Force, KeepVideo: input.Options.KeepVideo, LanguageHints: input.Options.LanguageHints, Hotwords: input.Options.Hotwords})
+			job, reused, err = deps.Jobs.CreateDownload(r.Context(), creation)
+		}
+		if errors.Is(err, jobs.ErrDailyTaskLimit) {
+			writeDailyTaskLimitError(deps, w, r, principal.UserID, limit)
+			return
+		}
+		if errors.Is(err, jobs.ErrTaskActionDisabled) {
+			writeError(w, r, http.StatusForbidden, "TASK_ACTION_DISABLED", "管理员已暂停新建此类任务", false)
+			return
 		}
 		if errors.Is(err, jobs.ErrIdempotencyConflict) {
 			writeError(w, r, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "Idempotency-Key 已用于其他请求", false)
@@ -772,7 +809,7 @@ func New(deps Dependencies) http.Handler {
 			}
 			job = fresh
 		}
-		withMediaPreviews([]jobs.Job{job}, deps.ASRSigner, time.Now())
+			withMediaPreviews([]jobs.Job{job}, deps, time.Now())
 		writeJSON(w, http.StatusAccepted, map[string]any{"job": job, "reused": reused, "requestId": RequestID(r.Context())})
 	})
 	protected.HandleFunc("GET /api/v1/jobs", func(w http.ResponseWriter, r *http.Request) {
@@ -788,12 +825,17 @@ func New(deps Dependencies) http.Handler {
 			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "历史筛选参数不正确", false)
 			return
 		}
-		page, err := deps.Jobs.List(r.Context(), jobs.ListInput{UserID: principal.UserID, Query: r.URL.Query().Get("q"), Status: status, Action: action, Limit: limit, Offset: offset})
+		input := jobs.ListInput{UserID: principal.UserID, Query: r.URL.Query().Get("q"), Status: status, Action: action, Limit: limit, Offset: offset}
+		if r.URL.Query().Get("view") == "summary" {
+			writeJobSummaries(w, r, deps.Jobs, input, false)
+			return
+		}
+		page, err := deps.Jobs.List(r.Context(), input)
 		if err != nil {
 			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取历史记录", true)
 			return
 		}
-		withMediaPreviews(page.Items, deps.ASRSigner, time.Now())
+		withMediaPreviews(page.Items, deps, time.Now())
 		writeJSON(w, http.StatusOK, map[string]any{"jobs": page.Items, "total": page.Total, "limit": page.Limit, "offset": page.Offset, "requestId": RequestID(r.Context())})
 	})
 	protected.HandleFunc("POST /api/v1/jobs/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
@@ -916,6 +958,28 @@ func New(deps Dependencies) http.Handler {
 		}
 		handleInlinePreview(deps.Storage, file, w, r)
 	})
+	mux.HandleFunc("GET /api/v1/media-preview/{id}/thumbnail", func(w http.ResponseWriter, r *http.Request) {
+		if deps.Files == nil || deps.Storage == nil || deps.Thumbnails == nil || deps.ASRSigner == nil {
+			http.NotFound(w, r)
+			return
+		}
+		id, query, now := r.PathValue("id"), r.URL.Query(), time.Now()
+		if !deps.ASRSigner.ValidateThumbnail(id, query.Get("expires"), query.Get("signature"), now) {
+			http.NotFound(w, r)
+			return
+		}
+		file, err := deps.Files.FindByID(r.Context(), id)
+		if err != nil || (file.ExpiresAt != nil && !file.ExpiresAt.After(now)) {
+			http.NotFound(w, r)
+			return
+		}
+		thumbnail, err := deps.Thumbnails.Ensure(r.Context(), deps.Storage, file)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		handleInlinePreview(deps.Storage, thumbnail, w, r)
+	})
 	protected.HandleFunc("GET /api/v1/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if deps.Jobs == nil {
 			writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true)
@@ -931,7 +995,7 @@ func New(deps Dependencies) http.Handler {
 			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务", true)
 			return
 		}
-		withMediaPreviews([]jobs.Job{job}, deps.ASRSigner, time.Now())
+		withMediaPreviews([]jobs.Job{job}, deps, time.Now())
 		writeJSON(w, http.StatusOK, map[string]any{"job": job, "requestId": RequestID(r.Context())})
 	})
 	protected.HandleFunc("POST /api/v1/jobs/{id}/images/archive-download", func(w http.ResponseWriter, r *http.Request) {
@@ -944,6 +1008,7 @@ func New(deps Dependencies) http.Handler {
 		principal, _ := Principal(r.Context())
 		handleImageArchive(deps, principal.UserID, w, r)
 	})
+	registerUsageRoutes(mux, protected, deps)
 	if deps.Auth != nil {
 		mux.Handle("POST /api/v1/auth/logout", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/auth/sessions", requireAuth(deps.Auth, protected))
@@ -982,6 +1047,16 @@ func jobWorkID(job jobs.Job) string {
 		return job.Work.DouyinWorkID
 	}
 	return job.ID
+}
+
+func writeJobSummaries(w http.ResponseWriter, r *http.Request, service *jobs.Service, input jobs.ListInput, withOwner bool) {
+	page, err := service.ListSummaries(r.Context(), input, withOwner)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务列表", true)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": page.Items, "total": page.Total, "limit": page.Limit, "offset": page.Offset, "requestId": RequestID(r.Context())})
 }
 
 func queryInt(r *http.Request, name string, fallback int) (int, error) {
@@ -1035,14 +1110,16 @@ func handleInlinePreview(storage *ownedfiles.Storage, file ownedfiles.File, w ht
 	http.ServeContent(w, r, file.OriginalName, stat.ModTime(), handle)
 }
 
-// withMediaPreviews 为图文/动图媒体文件注入同源预览地址（外部 CDN 不可用时的兜底显示来源）。
+// withMediaPreviews 为本地媒体文件注入同源预览地址。
 // files 只可能是 []jobs.JobFile：GET/List 通过 FindByID/FindFiles 注入类型化文件，复用幂等键的
 // POST 也先重查一次，因此 result_json 解码出的 []any 分支在这里不可达。
-func withMediaPreviews(items []jobs.Job, signer *ownedfiles.Signer, now time.Time) {
+func withMediaPreviews(items []jobs.Job, deps Dependencies, now time.Time) {
+	signer := deps.ASRSigner
 	if signer == nil || len(items) == 0 {
 		return
 	}
-	expires := now.Add(24 * time.Hour)
+	// Keep signed URLs stable across job polling and page reloads within the hour.
+	expires := now.UTC().Truncate(time.Hour).Add(24 * time.Hour)
 	for i := range items {
 		result, ok := items[i].Result.(map[string]any)
 		if !ok {
@@ -1053,9 +1130,13 @@ func withMediaPreviews(items []jobs.Job, signer *ownedfiles.Signer, now time.Tim
 			continue
 		}
 		for j := range files {
-			// video 也注入：视频预览/下载走同源签名地址直接流式传输，避免前端 fetch 整文件缓冲导致"半天才弹出"。
-			if files[j].Kind == "image" || files[j].Kind == "animated" || files[j].Kind == "video" || files[j].Kind == "music" {
-				files[j].PreviewURL = signer.PreviewURL(files[j].ID, expires)
+			file := &files[j]
+			galleryMedia := ownedfiles.HasThumbnail(file.Kind)
+			if galleryMedia || file.Kind == "video" || file.Kind == "music" {
+				file.PreviewURL = signer.PreviewURL(file.ID, expires)
+			}
+			if galleryMedia && deps.Thumbnails != nil && (file.ExpiresAt == nil || file.ExpiresAt.After(now)) {
+				file.ThumbnailURL = signer.ThumbnailURL(file.ID, expires)
 			}
 		}
 		result["files"] = files

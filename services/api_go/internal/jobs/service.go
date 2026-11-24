@@ -22,22 +22,20 @@ func (s *Service) SetForceCancel(cancel func(string) bool) { s.forceCancel = can
 
 func (s *Service) CreateInfo(ctx context.Context, input CreateInput) (Job, bool, error) {
 	input.Action = "info"
-	if existing, err := s.repo.FindByIdempotencyKey(ctx, input.UserID, input.IdempotencyKey); err == nil {
-		if existing.InputText != input.ShareText || existing.Action != "info" || existing.ForceRefresh != input.Force { return Job{}, false, ErrIdempotencyConflict }
-		return existing, true, nil
-	} else if !errors.Is(err, ErrNotFound) { return Job{}, false, err }
+	if existing, err := s.findIdempotentJob(ctx, input); !errors.Is(err, ErrNotFound) {
+		return existing, err == nil, err
+	}
+	if input.ActionDisabled {
+		return Job{}, false, ErrTaskActionDisabled
+	}
 	parsed, err := resolver.ExtractInput(input.ShareText)
 	if err != nil { return Job{}, false, err }
 	now := s.now().UTC()
 	id, err := auth.NewID(now)
 	if err != nil { return Job{}, false, err }
 	job := Job{ID: id, UserID: input.UserID, InputText: input.ShareText, InputURL: parsed.URL.String(), Action: "info", Status: "resolving", Progress: 10, StatusMessage: "正在读取作品信息", IdempotencyKey: input.IdempotencyKey, ForceRefresh: input.Force, CreatedAt: now, UpdatedAt: now}
-	if err := s.repo.CreateInfo(ctx, job); err != nil {
-		if existing, findErr := s.repo.FindByIdempotencyKey(ctx, input.UserID, input.IdempotencyKey); findErr == nil {
-			if existing.InputText != input.ShareText || existing.Action != "info" || existing.ForceRefresh != input.Force { return Job{}, false, ErrIdempotencyConflict }
-			return existing, true, nil
-		}
-		return Job{}, false, err
+	if existing, reused, err := s.createJob(ctx, input, job); err != nil || reused {
+		return existing, reused, err
 	}
 	work, _, err := s.resolver.Resolve(ctx, input.ShareText, input.Force)
 	if err != nil {
@@ -57,18 +55,49 @@ func (s *Service) CreateDownload(ctx context.Context, input CreateInput) (Job, b
 	if input.Action == "" { input.Action = "download" }
 	if input.Action != "download" && input.Action != "transcribe" && input.Action != "full" { return Job{}, false, ErrInvalidOptions }
 	if len(input.LanguageHints) > 8 || len(input.Hotwords) > 100 || !validOptions(input.LanguageHints, 16) || !validOptions(input.Hotwords, 128) { return Job{}, false, ErrInvalidOptions }
-	if existing, err := s.repo.FindByIdempotencyKey(ctx, input.UserID, input.IdempotencyKey); err == nil {
-		if existing.InputText != input.ShareText || existing.Action != input.Action || existing.ForceRefresh != input.Force || existing.KeepVideo != input.KeepVideo || !sameStrings(existing.LanguageHints, input.LanguageHints) || !sameStrings(existing.Hotwords, input.Hotwords) { return Job{}, false, ErrIdempotencyConflict }; return existing, true, nil
-	} else if !errors.Is(err, ErrNotFound) { return Job{}, false, err }
+	if existing, err := s.findIdempotentJob(ctx, input); !errors.Is(err, ErrNotFound) {
+		return existing, err == nil, err
+	}
+	if input.ActionDisabled {
+		return Job{}, false, ErrTaskActionDisabled
+	}
 	parsed, err := resolver.ExtractInput(input.ShareText); if err != nil { return Job{}, false, err }
 	now := s.now().UTC(); id, err := auth.NewID(now); if err != nil { return Job{}, false, err }
 	job := Job{ID: id, UserID: input.UserID, InputText: input.ShareText, InputURL: parsed.URL.String(), Action: input.Action, Status: "queued", Progress: 0, StatusMessage: "等待处理", IdempotencyKey: input.IdempotencyKey, ForceRefresh: input.Force, KeepVideo: input.KeepVideo, LanguageHints: input.LanguageHints, Hotwords: input.Hotwords, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}
-	if err := s.repo.CreateQueued(ctx, job); err != nil {
-		if existing, findErr := s.repo.FindByIdempotencyKey(ctx, input.UserID, input.IdempotencyKey); findErr == nil { return existing, true, nil }; return Job{}, false, err
+	if existing, reused, err := s.createJob(ctx, input, job); err != nil || reused {
+		return existing, reused, err
 	}
 	created, err := s.repo.FindByID(ctx, input.UserID, job.ID)
 	return created, false, err
 }
+
+func (s *Service) findIdempotentJob(ctx context.Context, input CreateInput) (Job, error) {
+	existing, err := s.repo.FindByIdempotencyKey(ctx, input.UserID, input.IdempotencyKey)
+	if err != nil {
+		return Job{}, err
+	}
+	if existing.InputText != input.ShareText || existing.Action != input.Action || existing.ForceRefresh != input.Force {
+		return Job{}, ErrIdempotencyConflict
+	}
+	if input.Action != "info" && (existing.KeepVideo != input.KeepVideo ||
+		!sameStrings(existing.LanguageHints, input.LanguageHints) || !sameStrings(existing.Hotwords, input.Hotwords)) {
+		return Job{}, ErrIdempotencyConflict
+	}
+	return existing, nil
+}
+
+func (s *Service) createJob(ctx context.Context, input CreateInput, job Job) (Job, bool, error) {
+	if err := s.repo.CreateJob(ctx, job, input.DailyTaskLimit); err != nil {
+		// Another request may have inserted this key since our first lookup.
+		existing, findErr := s.findIdempotentJob(ctx, input)
+		if findErr == nil || errors.Is(findErr, ErrIdempotencyConflict) {
+			return existing, findErr == nil, findErr
+		}
+		return Job{}, false, err
+	}
+	return job, false, nil
+}
+
 func sameStrings(left, right []string) bool { if len(left) != len(right) { return false }; for index := range left { if left[index] != right[index] { return false } }; return true }
 func validOptions(values []string, maxRunes int) bool { for _, value := range values { value = strings.TrimSpace(value); if value == "" || len([]rune(value)) > maxRunes { return false } }; return true }
 
@@ -88,6 +117,15 @@ func (s *Service) ListAll(ctx context.Context, input ListInput) (JobPage, error)
 	if input.Limit > 100 { input.Limit = 100 }
 	if input.Offset < 0 { input.Offset = 0 }
 	return s.repo.ListAll(ctx, input)
+}
+func (s *Service) ListSummaries(ctx context.Context, input ListInput, withOwner bool) (JobSummaryPage, error) {
+	input.Query = strings.TrimSpace(input.Query)
+	if input.Limit <= 0 {
+		input.Limit = 20
+	}
+	input.Limit = min(input.Limit, 100)
+	input.Offset = max(input.Offset, 0)
+	return s.repo.ListSummaries(ctx, input, withOwner)
 }
 func (s *Service) Stats(ctx context.Context) (Stats, error) { return s.repo.Stats(ctx, s.now().UTC()) }
 func (s *Service) Delete(ctx context.Context, userID, jobID string) error {

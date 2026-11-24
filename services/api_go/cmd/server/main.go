@@ -75,8 +75,17 @@ func run() error {
 	runtimeSettings.SetFallback(settings.AliyunKey, cfg.DashScopeAPIKey)
 	runtimeSettings.SetFallback(settings.SiliconFlowKey, cfg.SiliconFlowAPIKey)
 	runtimeSettings.SetFallback(settings.ASRModel, cfg.ASRModel)
+	defaultUsage := settings.DefaultUsage()
+	defaultUsage.DailyASRBudgetCNY = cfg.DailyASRBudgetCNY
+	defaultUsage.MonthlyASRBudgetCNY = cfg.MonthlyASRBudgetCNY
+	defaultUsage.ASRPricePerMinuteCNY = cfg.ASRPricePerMinuteCNY
+	runtimeSettings.SetUsageDefaults(defaultUsage)
 	signer := ownedfiles.NewSigner(signingKey, cfg.PublicBaseURL)
-	asrService := asr.NewService(nil, nil, asr.NewRepository(db), asr.Budget{DailyCNY: cfg.DailyASRBudgetCNY, MonthlyCNY: cfg.MonthlyASRBudgetCNY, PricePerMinuteCNY: cfg.ASRPricePerMinuteCNY})
+	asrService := asr.NewService(nil, nil, asr.NewRepository(db), asr.Budget{})
+	asrService.SetBudgetSource(func(ctx context.Context) (asr.Budget, error) {
+		usage, err := runtimeSettings.Usage(ctx)
+		return asr.Budget{DailyCNY: usage.DailyASRBudgetCNY, MonthlyCNY: usage.MonthlyASRBudgetCNY, PricePerMinuteCNY: usage.ASRPricePerMinuteCNY}, err
+	})
 	asrService.SetProviderFactory(func(ctx context.Context) (asr.Provider, asr.Provider) {
 		aliyunKey := runtimeSettings.Resolve(ctx, settings.AliyunKey, cfg.DashScopeAPIKey)
 		siliconKey := runtimeSettings.Resolve(ctx, settings.SiliconFlowKey, cfg.SiliconFlowAPIKey)
@@ -99,9 +108,10 @@ func run() error {
 		return silicon, aliyun
 	})
 	transcriber := &jobs.Transcriber{ASR: asrService, FFmpeg: media.FFmpeg{Path: cfg.FFmpegPath, Timeout: 30 * time.Minute, LogLimit: 16 * 1024}, Probe: media.Probe{Path: cfg.FFprobePath, Timeout: time.Minute}, Signer: signer, FileRepo: fileRepository, Storage: storage, TempRetention: cfg.TempRetention}
+	thumbnails := media.NewThumbnailer(cfg.FFmpegPath)
 	worker := jobs.NewWorker(jobRepository, resolverService, media.NewHTTPDownloader(), fileRepository, storage, transcriber, jobs.WorkerConfig{
 		Owner: "server", Concurrency: cfg.WorkerConcurrency, Lease: 60 * time.Second, Heartbeat: 15 * time.Second,
-		Poll: time.Second, MaxVideoBytes: cfg.MaxVideoBytes, VideoRetention: cfg.VideoRetention,
+		Poll: time.Second, MaxVideoBytes: cfg.MaxVideoBytes, VideoRetention: cfg.VideoRetention, Thumbnails: thumbnails,
 	})
 	jobService.SetForceCancel(worker.Cancel)
 	cleanupService := cleanup.New(fileRepository, storage, time.Hour)
@@ -114,7 +124,7 @@ func run() error {
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: httpapi.New(httpapi.Dependencies{
-			Build: version.Current(), Auth: authService, Jobs: jobService, Files: fileRepository, Storage: storage, ASRSigner: signer, Audit: audit.New(db, signingKey),
+			Build: version.Current(), Auth: authService, Jobs: jobService, Files: fileRepository, Storage: storage, Thumbnails: thumbnails, ASRSigner: signer, Audit: audit.New(db, signingKey),
 			Ready: readiness, LoginRateLimit: cfg.LoginRateLimit, Settings: runtimeSettings, AliyunAvailable: cfg.PublicBaseURL != "", AllowInsecureProviderSettings: cfg.AllowInsecureProviderSettings,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,

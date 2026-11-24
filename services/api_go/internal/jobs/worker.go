@@ -27,6 +27,7 @@ type WorkerConfig struct {
 	Poll           time.Duration
 	MaxVideoBytes  int64
 	VideoRetention time.Duration
+	Thumbnails     *media.Thumbnailer
 }
 
 type Worker struct {
@@ -304,6 +305,11 @@ func (w *Worker) processNote(ctx context.Context, owner string, job Job, work re
 			if err := w.fileRepo.Create(ctx, file); err != nil {
 				_ = w.storage.Remove(ownedfiles.File{RelativePath: relative})
 				continue
+			}
+			if w.config.Thumbnails != nil {
+				if _, err := w.config.Thumbnails.Ensure(ctx, w.storage, file); err != nil && ctx.Err() == nil {
+					slog.WarnContext(ctx, "note thumbnail generation failed", "job_id", job.ID, "file_id", file.ID, "error", err)
+				}
 			}
 			downloaded++
 			savedIndices[index+1] = true

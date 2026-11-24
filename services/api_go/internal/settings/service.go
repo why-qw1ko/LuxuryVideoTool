@@ -23,10 +23,11 @@ const (
 )
 
 type Service struct {
-	db       *sql.DB
-	aead     cipher.AEAD
-	mu       sync.RWMutex
-	fallback map[string]string
+	db            *sql.DB
+	aead          cipher.AEAD
+	mu            sync.RWMutex
+	fallback      map[string]string
+	usageDefaults Usage
 }
 
 type Status struct {
@@ -49,7 +50,7 @@ func New(db *sql.DB, masterKey []byte) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Service{db: db, aead: aead, fallback: make(map[string]string)}, nil
+	return &Service{db: db, aead: aead, fallback: make(map[string]string), usageDefaults: DefaultUsage()}, nil
 }
 
 func (s *Service) SetFallback(name, value string) {
@@ -102,11 +103,15 @@ func (s *Service) Set(ctx context.Context, name, value, userID string) error {
 	} else if len(value) > 4096 {
 		return errors.New("API key is too long")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if value == "" {
 		value = disabledValue
 	}
+	return s.store(ctx, name, value, userID)
+}
+
+func (s *Service) store(ctx context.Context, name, value, userID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	nonce := make([]byte, s.aead.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return err

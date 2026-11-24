@@ -109,6 +109,7 @@
                   <label class="check capture-option" id="with-transcribe-wrap"><input id="with-transcribe" type="checkbox"><span>转写视频文案<small>识别视频中的口播，耗时较长</small></span></label>
                 </div>
                 <div class="capture-footer"><button id="submit-task" class="btn-primary" type="submit">开始提取</button><span>默认下载媒体；图文作品保留原配文。</span></div>
+                <p id="daily-usage" class="field-hint hidden" role="status"></p>
               </form>
             </div>
           </section>
@@ -148,6 +149,7 @@
           <button type="button" data-admin-view="dashboard" class="active"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>概览</button>
           <button type="button" data-admin-view="jobs"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>任务管理</button>
           <button type="button" data-admin-view="users"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>用户管理</button>
+          <button type="button" data-admin-view="usage"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2" fill="var(--sidebar)"/><circle cx="15" cy="17" r="2" fill="var(--sidebar)"/></svg>使用设置</button>
         </nav>
         <div class="admin-sidebar-foot">
           <div class="admin-user"><span class="admin-user-avatar" id="admin-user-avatar" aria-hidden="true"></span><span class="admin-user-info"><strong id="admin-user-name"></strong><small id="admin-user-role"></small></span></div>
@@ -222,6 +224,49 @@
           </form>
           <div id="admin-users-list" class="admin-list"></div>
           <div id="admin-user-sessions" class="panel sub hidden"></div>
+        </section>
+
+        <section id="admin-view-usage" class="admin-view panel hidden" aria-labelledby="admin-usage-heading">
+          <div class="admin-head">
+            <h2 id="admin-usage-heading">使用设置</h2>
+            <button id="admin-usage-refresh" class="ghost" type="button">重新加载</button>
+          </div>
+          <form id="admin-usage-form">
+            <fieldset id="admin-usage-fields" class="admin-usage-fields" disabled>
+              <fieldset class="admin-usage-group">
+                <legend>任务额度</legend>
+                <label>每个用户每日默认新建任务数
+                  <input name="dailyTaskLimit" type="number" min="0" max="100000" step="1" inputmode="numeric" required aria-describedby="admin-usage-limit-hint">
+                </label>
+                <p id="admin-usage-limit-hint" class="meta">0 表示不限。每天北京时间零点重置。每个新任务计 1 次，同一请求重放和任务重试不重复计数，删除任务不会退回额度。</p>
+              </fieldset>
+              <fieldset class="admin-usage-group">
+                <legend>新建任务权限</legend>
+                <div class="admin-usage-checks">
+                  <label class="check"><input name="allowInfo" type="checkbox">允许仅解析</label>
+                  <label class="check"><input name="allowDownload" type="checkbox">允许独立下载任务</label>
+                  <label class="check"><input name="allowTranscribe" type="checkbox">允许转写和完整提取</label>
+                </div>
+              </fieldset>
+              <fieldset class="admin-usage-group">
+                <legend>转写预算</legend>
+                <div class="admin-usage-amounts">
+                  <label>每日预算（元）
+                    <input name="dailyAsrBudgetCny" type="number" min="0" max="1000000" step="any" inputmode="decimal" required>
+                  </label>
+                  <label>每月预算（元）
+                    <input name="monthlyAsrBudgetCny" type="number" min="0" max="1000000" step="any" inputmode="decimal" required>
+                  </label>
+                  <label>估算单价（元/分钟）
+                    <input name="asrPricePerMinuteCny" type="number" min="0" max="10000" step="any" inputmode="decimal" required>
+                  </label>
+                </div>
+                <p class="meta">预算按 UTC 日和月统计。预算填 0 表示该周期不限。单价填 0 时，估算费用为 0。</p>
+              </fieldset>
+              <button class="btn-primary" type="submit">保存使用设置</button>
+            </fieldset>
+          </form>
+          <p id="admin-usage-status" class="meta" role="status"></p>
         </section>
 
         <section id="admin-view-detail" class="admin-view hidden">

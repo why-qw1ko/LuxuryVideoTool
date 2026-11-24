@@ -60,9 +60,15 @@ func (r *SQLiteRepository) FindAnyByID(ctx context.Context, jobID string) (Job, 
 	return job, nil
 }
 
-func (r *SQLiteRepository) List(ctx context.Context, input ListInput) (JobPage, error) {
-	where := []string{"j.user_id = ?"}
-	args := []any{input.UserID}
+const jobListFrom = ` FROM jobs j LEFT JOIN works w ON w.id = j.work_id`
+
+func jobListFilter(input ListInput, withOwner bool) (string, []any) {
+	where := []string{"1=1"}
+	var args []any
+	if !withOwner || input.UserID != "" {
+		where = append(where, "j.user_id = ?")
+		args = append(args, input.UserID)
+	}
 	if input.Status != "" {
 		// "processing" 是前端合并后的筛选组：命中所有瞬态处理阶段。
 		if input.Status == "processing" {
@@ -81,10 +87,22 @@ func (r *SQLiteRepository) List(ctx context.Context, input ListInput) (JobPage, 
 		like := "%" + escapeLike(input.Query) + "%"
 		args = append(args, like, like, like)
 	}
-	clause := strings.Join(where, " AND ")
+	return strings.Join(where, " AND "), args
+}
+
+func (r *SQLiteRepository) countJobs(ctx context.Context, clause string, args []any) (int, error) {
 	var total int
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs j LEFT JOIN works w ON w.id = j.work_id WHERE `+clause, args...).Scan(&total); err != nil {
-		return JobPage{}, fmt.Errorf("count jobs: %w", err)
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*)`+jobListFrom+` WHERE `+clause, args...).Scan(&total); err != nil {
+		return 0, fmt.Errorf("count jobs: %w", err)
+	}
+	return total, nil
+}
+
+func (r *SQLiteRepository) List(ctx context.Context, input ListInput) (JobPage, error) {
+	clause, args := jobListFilter(input, false)
+	total, err := r.countJobs(ctx, clause, args)
+	if err != nil {
+		return JobPage{}, err
 	}
 	query := jobSelect + ` WHERE ` + clause + ` ORDER BY j.created_at DESC, j.id DESC LIMIT ? OFFSET ?`
 	args = append(args, input.Limit, input.Offset)
@@ -123,33 +141,10 @@ func (r *SQLiteRepository) List(ctx context.Context, input ListInput) (JobPage, 
 }
 
 func (r *SQLiteRepository) ListAll(ctx context.Context, input ListInput) (JobPage, error) {
-	where := []string{"1=1"}
-	args := []any{}
-	if input.UserID != "" {
-		where = append(where, "j.user_id = ?")
-		args = append(args, input.UserID)
-	}
-	if input.Status != "" {
-		if input.Status == "processing" {
-			where = append(where, "j.status IN ('resolving','downloading','extracting','transcribing','postprocessing')")
-		} else {
-			where = append(where, "j.status = ?")
-			args = append(args, input.Status)
-		}
-	}
-	if input.Action != "" {
-		where = append(where, "j.action = ?")
-		args = append(args, input.Action)
-	}
-	if input.Query != "" {
-		where = append(where, "(j.input_text LIKE ? ESCAPE '\\' OR w.title LIKE ? ESCAPE '\\' OR w.author_name LIKE ? ESCAPE '\\')")
-		like := "%" + escapeLike(input.Query) + "%"
-		args = append(args, like, like, like)
-	}
-	clause := strings.Join(where, " AND ")
-	var total int
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs j LEFT JOIN works w ON w.id = j.work_id WHERE `+clause, args...).Scan(&total); err != nil {
-		return JobPage{}, fmt.Errorf("count jobs: %w", err)
+	clause, args := jobListFilter(input, true)
+	total, err := r.countJobs(ctx, clause, args)
+	if err != nil {
+		return JobPage{}, err
 	}
 	query := jobSelectOwner + ` WHERE ` + clause + ` ORDER BY j.created_at DESC, j.id DESC LIMIT ? OFFSET ?`
 	args = append(args, input.Limit, input.Offset)
@@ -185,6 +180,65 @@ func (r *SQLiteRepository) ListAll(ctx context.Context, input ListInput) (JobPag
 		}
 	}
 	return JobPage{Items: items, Total: total, Limit: input.Limit, Offset: input.Offset}, nil
+}
+
+func (r *SQLiteRepository) ListSummaries(ctx context.Context, input ListInput, withOwner bool) (JobSummaryPage, error) {
+	clause, args := jobListFilter(input, withOwner)
+	total, err := r.countJobs(ctx, clause, args)
+	if err != nil {
+		return JobSummaryPage{}, err
+	}
+	username, displayName, from := `''`, `''`, jobListFrom
+	if withOwner {
+		username = `COALESCE(u.username_normalized, '')`
+		displayName = `COALESCE(u.display_name, '')`
+		from += ` LEFT JOIN users u ON u.id = j.user_id`
+	}
+	// Aggregate expiry only for jobs on this page. The ordinary list and detail keep their full file results.
+	query := `WITH page AS (
+		SELECT j.id, j.user_id, j.action, j.status, j.progress, j.created_at, j.updated_at,
+			w.title, w.author_name,
+			CASE WHEN json_valid(w.metadata_json) THEN CAST(json_extract(w.metadata_json, '$.durationMs') AS INTEGER) END AS duration_ms,
+			CASE WHEN json_valid(w.metadata_json) THEN json_extract(w.metadata_json, '$.hashtags') END AS hashtags,
+			` + username + ` AS username, ` + displayName + ` AS display_name
+		` + from + ` WHERE ` + clause + ` ORDER BY j.created_at DESC, j.id DESC LIMIT ? OFFSET ?
+	)
+	SELECT page.id, page.action, page.status, page.progress, page.created_at, page.updated_at,
+		page.title, page.author_name, page.duration_ms, page.hashtags, page.username, page.display_name, MIN(f.expires_at)
+	FROM page LEFT JOIN files f ON f.job_id = page.id AND f.user_id = page.user_id
+		AND f.deleted_at IS NULL AND page.status = 'completed'
+	GROUP BY page.id ORDER BY page.created_at DESC, page.id DESC`
+	rows, err := r.db.QueryContext(ctx, query, append(args, input.Limit, input.Offset)...)
+	if err != nil {
+		return JobSummaryPage{}, fmt.Errorf("list job summaries: %w", err)
+	}
+	defer rows.Close()
+	items := make([]JobSummary, 0, input.Limit)
+	for rows.Next() {
+		var item JobSummary
+		var created, updated int64
+		var title, author, hashtags sql.NullString
+		var duration, expiry sql.NullInt64
+		if err := rows.Scan(&item.ID, &item.Action, &item.Status, &item.Progress, &created, &updated,
+			&title, &author, &duration, &hashtags, &item.OwnerUsername, &item.OwnerDisplayName, &expiry); err != nil {
+			return JobSummaryPage{}, fmt.Errorf("scan job summary: %w", err)
+		}
+		item.CreatedAt, item.UpdatedAt = time.UnixMilli(created).UTC(), time.UnixMilli(updated).UTC()
+		if title.Valid {
+			work := WorkSummary{Title: title.String, AuthorName: author.String, DurationMS: duration.Int64}
+			_ = json.Unmarshal([]byte(hashtags.String), &work.Hashtags)
+			item.Work = &work
+		}
+		if expiry.Valid {
+			value := time.UnixMilli(expiry.Int64).UTC()
+			item.MediaExpiresAt = &value
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return JobSummaryPage{}, err
+	}
+	return JobSummaryPage{Items: items, Total: total, Limit: input.Limit, Offset: input.Offset}, nil
 }
 
 func (r *SQLiteRepository) Delete(ctx context.Context, userID, jobID string) error {
@@ -262,14 +316,21 @@ func (r *SQLiteRepository) Stats(ctx context.Context, now time.Time) (Stats, err
 }
 
 func (r *SQLiteRepository) CreateInfo(ctx context.Context, job Job) error {
-	return r.create(ctx, job, true)
+	return r.create(ctx, job, true, 0)
 }
 
 func (r *SQLiteRepository) CreateQueued(ctx context.Context, job Job) error {
-	return r.create(ctx, job, false)
+	return r.create(ctx, job, false, 0)
 }
 
-func (r *SQLiteRepository) create(ctx context.Context, job Job, started bool) error {
+func (r *SQLiteRepository) CreateJob(ctx context.Context, job Job, dailyTaskLimit int) error {
+	return r.create(ctx, job, job.Action == "info", dailyTaskLimit)
+}
+
+func (r *SQLiteRepository) create(ctx context.Context, job Job, started bool, dailyTaskLimit int) error {
+	if dailyTaskLimit < 0 {
+		return ErrInvalidOptions
+	}
 	var startedAt any
 	if started {
 		startedAt = job.CreatedAt.UnixMilli()
@@ -278,7 +339,12 @@ func (r *SQLiteRepository) create(ctx context.Context, job Job, started bool) er
 	if err != nil {
 		return err
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO jobs(id, user_id, input_text, input_url, action, status,
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO jobs(id, user_id, input_text, input_url, action, status,
 		progress, status_message, idempotency_key, force_refresh, created_at, updated_at, started_at, options_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, job.ID, job.UserID, job.InputText, job.InputURL,
 		job.Action, job.Status, job.Progress, job.StatusMessage, job.IdempotencyKey, boolInt(job.ForceRefresh),
@@ -286,7 +352,12 @@ func (r *SQLiteRepository) create(ctx context.Context, job Job, started bool) er
 	if err != nil {
 		return fmt.Errorf("create job: %w", err)
 	}
-	return nil
+	// An idempotency conflict is resolved before counting a new task. A quota
+	// rejection rolls back the insert together with any other write in this transaction.
+	if err := countNewTask(ctx, tx, job.UserID, job.CreatedAt, dailyTaskLimit); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *SQLiteRepository) CompleteInfo(ctx context.Context, jobID string, work resolver.Work, at time.Time) error {

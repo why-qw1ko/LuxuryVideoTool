@@ -16,6 +16,7 @@ const usersCode = section('async function loadAdminUsers(){', 'function renderAd
 const captureCode = section("$('#capture-form').addEventListener", '/* ---------- 任务列表 ---------- */');
 const selectionCode = section('function selectJob(', "$('#new-task-btn').addEventListener");
 const sidebarCode = section('let sidebarLastFocus=null;', "$('#sidebar-toggle').innerHTML");
+const pollCode = section('const ACTIVE_POLL_MS=', '/* ---------- 登录 / 退出 / 连接 ---------- */');
 
 function harness(code = listCode) {
   const nodes = new Map(), requests = [], rendered = [], notices = [], details = [];
@@ -32,15 +33,20 @@ function harness(code = listCode) {
   }
   const context = vm.createContext({
     session: {user: {id: 'owner'}}, sessionEpoch: 1, poll: null,
-    jobsPending: null, adminJobsPending: null, adminDetailPending: null,
-    jobsLoadId: 0, adminJobsLoadId: 0, adminUsersLoadId: 0,
+    jobsPending: null, jobDetailPending: null, adminJobsPending: null, adminDetailPending: null,
+    jobsLoadId: 0, jobDetailLoadId: 0, adminJobsLoadId: 0, adminUsersLoadId: 0,
+    pollRequestedAt: {}, adminStatsHaveActive: false,
     jobsPage: 1, jobsPageSize: 20, jobsTotal: 0, jobsCache: [],
     adminJobsPage: 1, adminJobsPageSize: 20, adminJobsTotal: 0, adminJobsCache: [],
     adminUsers: [], lastAdminJobsSig: '', adminDetailLoadId: 0, adminDetailSig: '', adminMode: false,
-    selectedId: null, currentJob: null, detailSig: '',
-    taskMusic: {jobId: null}, adminOpen: false,
+    selectedId: null, currentJob: null, currentView: 'new', detailSig: '',
+    taskMusic: {jobId: null}, adminOpen: false, videoPreviewURLs: new Map(),
     URLSearchParams, $: node,
-    document: {querySelectorAll() { return []; }},
+    document: {
+      hidden: false, listeners: {},
+      querySelectorAll() { return []; },
+      addEventListener(name, callback) { this.listeners[name] = callback; },
+    },
     matchMedia() { return {matches: false}; },
     api(url, options) {
       return new Promise((resolve, reject) => requests.push({url, options, resolve, reject}));
@@ -50,12 +56,16 @@ function harness(code = listCode) {
     renderAdminUsers(users) { rendered.push(users); },
     renderPager() {}, skeletonRows() { return ''; },
     jobSignature(job) { return JSON.stringify(job); },
+    jobListSignature(job) { return JSON.stringify(job); },
+    jobMediaExpiry(job) { return job?.mediaExpiresAt || null; },
+    jobExpired() { return false; },
+    jobHasExpiredPreview() { return false; },
     esc(value) { return String(value); },
     toast(message, type) { notices.push({message, type}); },
     enter(value) { context.sessionEpoch++; context.session = value; },
     showView(name) { context.currentView = name; },
     renderDetail() { if (context.currentJob) details.push(context.currentJob); },
-    stopTaskMusic() {}, setSidebar() {}, uuidv4() { return 'idempotency-key'; },
+    stopTaskMusic() {}, setSidebar() {}, closePreview() {}, refreshDailyUsage() {}, uuidv4() { return 'idempotency-key'; },
   });
   vm.runInContext(code, context);
   return {context, node, requests, rendered, notices, details};
@@ -63,6 +73,92 @@ function harness(code = listCode) {
 
 function job(id) { return {id, status: 'queued', progress: 0}; }
 const tick = async () => { await Promise.resolve(); await Promise.resolve(); };
+
+test('前台只请求列表摘要，点击后单独取详情并忽略以前的任务响应', async () => {
+  const h = harness(selectionCode + listCode);
+  const list = h.context.loadJobs();
+  assert.equal(new URLSearchParams(h.requests[0].url.split('?')[1]).get('view'), 'summary');
+  h.requests[0].resolve({jobs: [job('first'), job('second')], total: 2});
+  await list;
+  assert.equal(h.details.length, 0);
+  h.context.selectJob('first');
+  h.context.selectJob('second');
+  assert.deepEqual(h.requests.slice(1).map(request => request.url), ['/api/v1/jobs/first', '/api/v1/jobs/second']);
+  const detail = {...job('second'), result: {files: [{id: 'media'}]}};
+  h.requests[2].resolve({job: detail});
+  h.requests[1].resolve({job: job('first')});
+  await tick();
+  assert.deepEqual(h.details, [detail]);
+});
+
+test('活跃任务五秒刷新，结态降频，标签隐藏暂停且返回立即同步', async () => {
+  const h = harness(pollCode + listCode);
+  let now = 60_000, interval = null;
+  h.context.Date = {now: () => now};
+  h.context.clearInterval = () => { interval = null; };
+  h.context.setInterval = (callback, ms) => { assert.equal(ms, 5000); interval = callback; return 1; };
+  const initial = h.context.loadJobs();
+  h.requests[0].resolve({jobs: [job('active')], total: 1});
+  await initial;
+  h.context.startJobPolling();
+  now += 5000;
+  interval();
+  assert.equal(h.requests.length, 2);
+  h.requests[1].resolve({jobs: [{...job('active'), status: 'completed'}], total: 1});
+  await tick();
+  now += 5000;
+  interval();
+  assert.equal(h.requests.length, 2);
+  now += 25_000;
+  interval();
+  assert.equal(h.requests.length, 3);
+  h.requests[2].resolve({jobs: [], total: 0});
+  await tick();
+  h.context.document.hidden = true;
+  h.context.document.listeners.visibilitychange();
+  assert.equal(interval, null);
+  h.context.pollVisibleJobs(true);
+  assert.equal(h.requests.length, 3);
+  h.context.document.hidden = false;
+  h.context.document.listeners.visibilitychange();
+  assert.equal(typeof interval, 'function');
+  assert.equal(h.requests.length, 4);
+  h.requests[3].resolve({jobs: [], total: 0});
+  await tick();
+});
+
+test('当前页结态详情只在摘要变化或签名过期时自动重新读取', async () => {
+  const h = harness(pollCode + listCode + section('function previewExpiry(', '// 微信内置浏览器'));
+  const summary = {...job('selected'), status: 'completed', updatedAt: 'original'};
+  h.context.selectedId = summary.id;
+  h.context.currentJob = {...summary, result: {files: [{previewUrl: 'media?expires=180'}]}};
+  h.context.jobsCache = [summary];
+  let now = 60_000;
+  h.context.Date = {now: () => now};
+  h.context.pollVisibleJobs();
+  assert.equal(h.requests.length, 1);
+  h.requests[0].resolve({jobs: [summary], total: 1});
+  await tick();
+  assert.equal(h.requests.length, 1);
+
+  now += 30_000;
+  h.context.pollVisibleJobs();
+  const changed = {...summary, updatedAt: 'changed'};
+  h.requests[1].resolve({jobs: [changed], total: 1});
+  await tick();
+  assert.equal(h.requests[2].url, '/api/v1/jobs/selected');
+  h.requests[2].resolve({job: {...h.context.currentJob, updatedAt: changed.updatedAt}});
+  await tick();
+
+  now = 180_000;
+  h.context.detailSig = 'old rendered media';
+  h.context.pollVisibleJobs();
+  assert.equal(h.requests[4].url, '/api/v1/jobs/selected');
+  h.requests[3].resolve({jobs: [changed], total: 1});
+  h.requests[4].resolve({job: {...changed, result: {files: [{previewUrl: 'media?expires=360'}]}}});
+  await tick();
+  assert.equal(h.context.detailSig, '');
+});
 
 test('前台筛选请求乱序返回时，旧结果不会覆盖新筛选', async () => {
   const h = harness();
@@ -118,6 +214,7 @@ test('列表总数减少导致当前页越界时，自动请求最后一页', as
 test('后台任务请求乱序返回时，保留最新筛选结果', async () => {
   const h = harness(adminListCode);
   const first = h.context.loadAdminJobs();
+  assert.equal(new URLSearchParams(h.requests[0].url.split('?')[1]).get('view'), 'summary');
   h.node('#admin-jobs-user').value = 'user-2';
   const second = h.context.loadAdminJobs();
   h.requests[1].resolve({jobs: [job('new')], total: 1});
@@ -223,7 +320,7 @@ test('桌面关闭抽屉时保留导航可访问性；手机关闭时禁止聚�
 
 
 test('后台详情在现有轮询中刷新当前任务', () => {
-  const h = harness(section('function enter(value){', '/* ---------- 登录 / 退出 / 连接 ---------- */'));
+  const h = harness(pollCode);
   h.context.archiveDownloads = {clear() {}};
   h.context.clearInterval = () => {};
   h.context.setInterval = callback => { h.context.pollTick = callback; return 1; };
@@ -298,36 +395,130 @@ test('后台详情取消或重试后，立即刷新详情而非只更新隐藏�
   }
 });
 
-test('视频预览签名过期后，后台走管理员文件接口，前台走普通接口', async () => {
+function videoPreviewHarness() {
+  const h = harness(section('function previewExpiry(', '// 微信内置浏览器') +
+    section('const videoPreviewURLs=', 'function openGalleryPreview(') +
+    section('async function openPreview(', "document.querySelectorAll('[data-preview-nav]').forEach(btn=>{"));
+  const video = h.node('#preview-video');
+  h.context.document.body = {classList: {add() {}, remove() {}}};
+  h.node('#preview-image').removeAttribute = function(name) { delete this[name]; };
+  Object.assign(video, {
+    paused: true, playCount: 0, duration: 60,
+    async play() { this.paused = false; this.playCount++; },
+    pause() { this.paused = true; },
+    load() { this.currentTime = 0; this.pause(); },
+    removeAttribute(name) { delete this[name]; },
+  });
+  return {...h, video};
+}
+
+function signedVideo(signature, secondsUntilExpiry = 3600) {
+  const expires = Math.floor(Date.now() / 1000) + secondsUntilExpiry;
+  return `/api/v1/media-preview/file%2Fid?expires=${expires}&signature=${signature}`;
+}
+
+function videoJob(previewUrl) {
+  return {job: {id: 'job/id', result: {files: [{id: 'file/id', previewUrl}]}}};
+}
+
+test('视频预览签名过期后，通过对应权限的任务详情更新签名并继续使用原生播放器', async () => {
   for (const inAdmin of [false, true]) {
-    const h = harness(section('async function openPreview(', '// 画廊点击查看：'));
+    const h = videoPreviewHarness();
     h.context.adminMode = inAdmin;
-    h.context.previewURL = null;
-    h.context.taskMusic = {playing: false};
-    h.context.galleryPreview = {items: []};
-    h.context.document.body = {classList: {add() {}}};
-    h.context.setPreviewNav = () => {};
-    h.context.resetPreviewMedia = () => {};
-    h.context.previewUsable = () => false;
-    h.context.URL = {createObjectURL() { return 'blob:preview'; }, revokeObjectURL() {}};
-    h.context.fetch = async (url, options) => {
-      h.context.downloadRequest = {url, options};
-      return {ok: true, blob: async () => ({})};
-    };
-    h.context.closePreview = () => { throw new Error('有效文件不应关闭预览'); };
-    h.node('#preview-video').classList = {add() {}, remove() {}};
-    h.node('#preview-modal').classList = {add() {}, remove() {}};
-    h.node('#preview-video').play = async () => {};
-    await h.context.openPreview('file/id', 'example.mp4', '/expired');
-    assert.equal(h.context.downloadRequest.url, `${inAdmin ? '/api/v1/admin/files' : '/api/v1/files'}/file%2Fid`);
-    assert.equal(h.node('#preview-video').src, 'blob:preview');
+    const fresh = signedVideo('fresh');
+    const pending = h.context.openPreview('job/id', 'file/id', 'example.mp4', signedVideo('expired', -1));
+    assert.equal(h.requests[0].url, `/api/v1/${inAdmin ? 'admin/' : ''}jobs/job%2Fid`);
+    assert.equal(h.requests[0].options.cache, 'no-store');
+    h.requests[0].resolve(videoJob(fresh));
+    await pending;
+    assert.equal(h.video.src, fresh);
+    assert.equal(h.video.playCount, 1);
     assert.equal(h.notices.length, 0);
   }
 });
 
+test('重开同一视频复用未过期签名，轮询提供的新签名不会替换它', async () => {
+  const h = videoPreviewHarness(), reused = signedVideo('reused');
+  await h.context.openPreview('job/id', 'file/id', 'example.mp4', reused);
+  h.context.closePreview();
+  const latest = signedVideo('latest');
+  h.context.currentJob = videoJob(latest).job;
+  await h.context.openPreview('job/id', 'file/id', 'example.mp4', latest);
+  assert.equal(h.video.src, reused);
+  assert.equal(h.requests.length, 0);
+});
+
+test('播放中更新签名后恢复进度和暂停状态，重试失败时退出播放器', async () => {
+  for (const paused of [false, true]) {
+    const h = videoPreviewHarness();
+    await h.context.openPreview('job/id', 'file/id', 'example.mp4', signedVideo('old'));
+    h.video.onloadedmetadata();
+    h.video.currentTime = 27;
+    h.video.paused = paused;
+    const retry = h.video.onerror();
+    const fresh = signedVideo('fresh');
+    h.requests[0].resolve(videoJob(fresh));
+    await retry;
+    h.video.onloadedmetadata();
+    assert.equal(h.video.src, fresh);
+    assert.equal(h.video.currentTime, 27);
+    assert.equal(h.video.paused, paused);
+    assert.equal(h.video.playCount, paused ? 1 : 2);
+    await h.video.onerror();
+    assert.equal(h.video.src, undefined);
+    assert.equal(h.requests.length, 1);
+    assert.equal(h.notices[0].type, 'error');
+  }
+});
+
+test('刷新时服务端返回同一签名，播放器只重试一次', async () => {
+  const h = videoPreviewHarness(), url = signedVideo('unchanged');
+  await h.context.openPreview('job/id', 'file/id', 'example.mp4', url);
+  const retry = h.video.onerror();
+  h.requests[0].resolve(videoJob(url));
+  await retry;
+  assert.equal(h.video.src, url);
+  await h.video.onerror();
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.notices.length, 1);
+});
+
+test('已续签的视频自然过期后可再次续签，保留播放位置', async () => {
+  const h = videoPreviewHarness();
+  let now = Date.now();
+  h.context.Date = {now: () => now};
+  await h.context.openPreview('job/id', 'file/id', 'example.mp4', signedVideo('first'));
+  const firstRetry = h.video.onerror();
+  const secondUrl = signedVideo('second', 60);
+  h.requests[0].resolve(videoJob(secondUrl));
+  await firstRetry;
+  h.video.onloadedmetadata();
+  h.video.currentTime = 32;
+  now += 60_000;
+  const secondRetry = h.video.onerror();
+  const thirdUrl = signedVideo('third');
+  h.requests[1].resolve(videoJob(thirdUrl));
+  await secondRetry;
+  h.video.onloadedmetadata();
+  assert.equal(h.video.src, thirdUrl);
+  assert.equal(h.video.currentTime, 32);
+  assert.equal(h.video.paused, false);
+});
+
+test('签名刷新期间切换预览，旧请求不会覆盖当前视频', async () => {
+  const h = videoPreviewHarness();
+  const pending = h.context.openPreview('job/id', 'file/id', 'old.mp4', signedVideo('expired', -1));
+  const latest = signedVideo('latest');
+  await h.context.openPreview('second-job', 'second-file', 'new.mp4', latest);
+  h.requests[0].resolve(videoJob(signedVideo('stale-response')));
+  await pending;
+  assert.equal(h.video.src, latest);
+  assert.equal(h.notices.length, 0);
+});
+
 
 test('任务列表慢请求跨过 5 秒轮询后仍能渲染，完成后恢复下一轮请求', async () => {
-  const h = harness(section('function enter(value){', '/* ---------- 登录 / 退出 / 连接 ---------- */') + listCode);
+  const h = harness(pollCode + listCode);
   h.context.archiveDownloads = {clear() {}};
   h.context.clearInterval = () => {};
   h.context.setInterval = (callback, delay) => {
@@ -441,4 +632,150 @@ test('图表颜色跟随当前 CSS 主题 token，状态与趋势保持统一', 
   assert.equal(options.status.series[0].data[0].itemStyle.color, 'dark:--success');
   assert.equal(options.trend.xAxis.axisLine.lineStyle.color, 'dark:--border');
   assert.equal(options.trend.series[0].itemStyle.color, 'dark:--primary');
+});
+
+test('画廊只加载静态缩略图，原图和动图保留给点击预览', () => {
+  const h = harness(section('function esc(value)', 'function renderList(') +
+    section('function jobDetailHTML(', 'function renderDetail('));
+  Object.assign(h.context, {
+    actionLabels: {}, statusLabels: {}, statusTone: {},
+    icon: name => name, previewUsable: Boolean, archiveDownloadHTML: () => '',
+  });
+  const images = [
+    {url: 'https://cdn.example.test/raw.jpg'},
+    {url: 'https://cdn.example.test/poster.jpg', animatedUrl: 'https://cdn.example.test/live.mp4'},
+    {url: 'https://cdn.example.test/unsaved.jpg'},
+  ];
+  const files = [
+    {id: 'photo', kind: 'image', name: 'image-01.jpg', previewUrl: '/preview/photo', thumbnailUrl: '/thumb/photo.webp'},
+    {id: 'live', kind: 'animated', name: 'image-02.mp4', previewUrl: '/preview/live', thumbnailUrl: '/thumb/live.webp'},
+  ];
+  const data = {...job('note'), action: 'download', status: 'completed',
+    work: {type: 'note', title: '图文', images}, result: {files}};
+  const html = h.context.jobDetailHTML(data);
+
+  assert.deepEqual([...html.matchAll(/<img src="([^"]+)"[^>]*loading="lazy"/g)].map(match => match[1]),
+    ['/thumb/photo.webp', '/thumb/live.webp']);
+  assert.doesNotMatch(html, /<video|src="https:\/\/cdn\.example\.test/);
+  assert.match(html, /data-preview="\/preview\/photo"/);
+  assert.match(html, /data-preview="\/preview\/live"/);
+  assert.match(html, /data-preview="https:\/\/cdn\.example\.test\/unsaved\.jpg"/);
+  assert.match(html, /<button[^>]+aria-label="播放动图 2"/);
+  assert.match(html, /<button[^>]+aria-label="查看原图 3"/);
+  assert.match(html, /href="\/api\/v1\/files\/live"/);
+
+  const refreshed = {...data, result: {files: files.map(file => ({...file, thumbnailUrl: file.thumbnailUrl + '?new'}))}};
+  const unavailable = {...data, result: {files: files.map(({thumbnailUrl, ...file}) => file)}};
+  assert.equal(h.context.jobSignature(data), h.context.jobSignature(refreshed));
+  assert.notEqual(h.context.jobSignature(data), h.context.jobSignature(unavailable));
+  assert.doesNotMatch(h.context.jobDetailHTML(unavailable), /<img|<video/);
+});
+
+test('点开画廊时优先使用当前任务轮询得到的新签名', () => {
+  const h = harness(section('function openGalleryPreview(', 'function moveGalleryPreview('));
+  h.context.galleryPreview = {};
+  h.context.previewUsable = Boolean;
+  h.context.renderGalleryPreview = () => {};
+  h.context.currentJob = {id: 'note', result: {files: [
+    {id: 'live', previewUrl: '/new/video', thumbnailUrl: '/new/poster'},
+  ]}};
+  const item = {
+    dataset: {fileId: 'live', preview: '/old/video', poster: '/old/poster', fallback: '/cdn/video'},
+    closest(selector) {
+      return selector === '[data-job]' ? {dataset: {job: 'note'}} : {querySelectorAll: () => [item]};
+    },
+  };
+  h.context.openGalleryPreview(item);
+  assert.equal(h.context.galleryPreview.items[0].src, '/new/video');
+  assert.equal(h.context.galleryPreview.items[0].poster, '/new/poster');
+  h.context.currentJob.id = 'other';
+  h.context.openGalleryPreview(item);
+  assert.equal(h.context.galleryPreview.items[0].src, '/old/video');
+});
+
+
+test('后台使用设置读取并保存用量数值、预算和入口权限，保存期间阻止重复提交', async () => {
+  const h = harness(section('const adminUsageNumberFields=', "$('#submit-task').textContent"));
+  h.context.session.user.role = 'admin';
+  h.context.adminOpen = true;
+  const form = h.node('#admin-usage-form'), fields = h.node('#admin-usage-fields');
+  const settings = {
+    dailyTaskLimit: 10, dailyAsrBudgetCny: 5, monthlyAsrBudgetCny: 20, asrPricePerMinuteCny: 0.25,
+    allowInfo: true, allowDownload: false, allowTranscribe: true,
+  };
+  const inputs = Object.fromEntries(Object.keys(settings).map(name => [name, {
+    value: '', checked: false, get valueAsNumber() { return Number(this.value); },
+  }]));
+  form.elements = {namedItem: name => inputs[name]};
+  form.reportValidity = () => true;
+  const load = h.context.requestAdminUsageSettings();
+  assert.equal(fields.disabled, true);
+  assert.equal(h.requests[0].url, '/api/v1/admin/settings/usage');
+  h.requests[0].resolve({settings});
+  await load;
+  assert.equal(fields.disabled, false);
+  assert.equal(inputs.asrPricePerMinuteCny.value, '0.25');
+  assert.equal(inputs.allowInfo.checked, true);
+  assert.equal(inputs.allowDownload.checked, false);
+
+  inputs.dailyTaskLimit.value = '0';
+  inputs.allowDownload.checked = true;
+  const event = {preventDefault() {}, currentTarget: form};
+  const save = form.listeners.submit(event);
+  form.listeners.submit(event);
+  assert.equal(h.requests.length, 2);
+  assert.equal(h.requests[1].options.method, 'PUT');
+  const next = {...settings, dailyTaskLimit: 0, allowDownload: true};
+  assert.deepEqual(JSON.parse(h.requests[1].options.body), next);
+  h.requests[1].resolve({settings: next});
+  await save;
+  assert.equal(h.node('#admin-usage-status').textContent, '使用设置已保存');
+  assert.equal(fields.disabled, false);
+});
+
+test('后台使用设置加载失败时保持禁用，非管理员不会提交修改', async () => {
+  const h = harness(section('const adminUsageNumberFields=', "$('#submit-task').textContent"));
+  h.context.session.user.role = 'admin';
+  h.context.adminOpen = true;
+  const pending = h.context.requestAdminUsageSettings();
+  h.requests[0].reject(new Error('加载错误'));
+  await pending;
+  assert.equal(h.node('#admin-usage-fields').disabled, true);
+  assert.equal(h.node('#admin-usage-refresh').disabled, false);
+  assert.equal(h.node('#admin-usage-status').textContent, '加载错误');
+  h.context.session.user.role = 'user';
+  await h.context.requestAdminUsageSettings({dailyTaskLimit: 0});
+  assert.equal(h.requests.length, 1);
+});
+
+test('单用户额度区分继承和不限，拒绝非法数值并阻止同一用户并发保存', async () => {
+  const h = harness(section('const pendingUserTaskLimits=', 'async function showUserSessions('));
+  h.context.session.user.role = 'admin';
+  h.context.adminOpen = true;
+  h.context.adminUsers = [{id: 'user/1', displayName: '一号用户', dailyTaskLimitOverride: 8}];
+  let reloads = 0;
+  h.context.loadAdminUsers = async () => { reloads++; };
+  for (const [raw, value] of [['', null], ['0', 0], ['12', 12]]) {
+    h.context.promptDialog = async opts => {
+      assert.equal(opts.numberInput.value, 8);
+      assert.equal(opts.numberInput.max, 100000);
+      return raw;
+    };
+    const save = h.context.setUserDailyTaskLimit('user/1');
+    await tick();
+    await h.context.setUserDailyTaskLimit('user/1');
+    assert.equal(h.requests.length, reloads + 1);
+    const request = h.requests.at(-1);
+    assert.equal(request.url, '/api/v1/admin/users/user%2F1/daily-task-limit');
+    assert.equal(request.options.method, 'PUT');
+    assert.deepEqual(JSON.parse(request.options.body), {dailyTaskLimit: value});
+    request.resolve({});
+    await save;
+  }
+  h.context.promptDialog = async () => '100001';
+  await h.context.setUserDailyTaskLimit('user/1');
+  h.context.promptDialog = async () => null;
+  await h.context.setUserDailyTaskLimit('user/1');
+  assert.equal(h.requests.length, 3);
+  assert.equal(reloads, 3);
 });
