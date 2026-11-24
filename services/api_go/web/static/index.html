@@ -101,7 +101,7 @@
           <div class="master-foot">
             <span id="job-total"></span>
             <span class="foot-api">API <span id="current-api"></span></span>
-            <a href="#" id="settings-link" class="admin-only hidden"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>设置</a>
+            <button id="settings-link" class="admin-only hidden" type="button" aria-controls="admin-view-usage"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>设置</button>
           </div>
         </aside>
 
@@ -113,13 +113,14 @@
                 <label for="share-text">抖音链接或分享文本</label>
                 <textarea id="share-text" rows="7" maxlength="4096" placeholder="粘贴作品链接或完整的分享文本" aria-describedby="share-help" required></textarea>
                 <p id="share-help" class="field-hint">支持视频、图文和动图作品。</p>
-                <div class="capture-options" role="group" aria-label="提取选项">
-                  <label class="check capture-option"><input id="info-only" type="checkbox"><span>仅解析信息<small>不下载媒体文件</small></span></label>
-                  <label class="check capture-option" id="with-transcribe-wrap"><input id="with-transcribe" type="checkbox"><span>转写视频文案<small>识别视频中的口播，耗时较长</small></span></label>
+                <div id="capture-options" class="capture-options hidden" role="group" aria-label="提取选项">
+                  <label class="check capture-option" id="info-only-wrap"><input id="info-only" type="checkbox"><span>仅解析信息<small>不下载媒体文件</small></span></label>
+                  <label class="check capture-option" id="with-transcribe-wrap"><input id="with-transcribe" type="checkbox"><span>转写视频文案<small>下载媒体并识别视频口播，耗时较长</small></span></label>
                 </div>
-                <div class="capture-footer"><button id="submit-task" class="btn-primary" type="submit">开始提取</button><span>默认下载媒体；图文作品保留原配文。</span></div>
+                <div class="capture-footer"><button id="submit-task" class="btn-primary" type="submit" aria-describedby="capture-action-hint" disabled>开始提取</button><span id="capture-action-hint" role="status">正在读取任务权限…</span></div>
                 <p id="capture-feedback" class="status-msg" role="status"></p>
                 <p id="daily-usage" class="field-hint hidden" role="status"></p>
+                <button id="capture-usage-retry" class="ghost hidden" type="button">重新加载任务权限</button>
               </form>
             </div>
           </section>
@@ -127,40 +128,19 @@
           <section id="view-detail" class="hidden">
             <div id="detail"></div>
           </section>
-
-          <section id="view-settings" class="panel hidden">
-            <h2>转写服务设置</h2>
-            <p class="meta">硅基流动为默认转写服务；阿里云备用需公网 HTTPS 地址。密钥保存后不会回显。</p>
-            <form id="provider-form">
-              <label>当前转写模型
-                <input id="asr-model" list="asr-model-options" maxlength="256" placeholder="FunAudioLLM/SenseVoiceSmall">
-                <datalist id="asr-model-options">
-                  <option value="FunAudioLLM/SenseVoiceSmall"></option>
-                </datalist>
-              </label>
-              <label>阿里云 DashScope API Key<input id="aliyun-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="当前状态：未配置"></label>
-              <label class="check"><input id="clear-aliyun" type="checkbox">清除阿里云 Key</label>
-              <label>硅基流动 API Key<input id="silicon-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="当前状态：未配置"></label>
-              <label class="check"><input id="clear-silicon" type="checkbox">清除硅基流动 Key</label>
-              <button type="submit" class="btn-primary">保存设置</button>
-            </form>
-          </section>
         </main>
       </div>
     </div>
 
     <div id="admin-console" class="hidden">
       <aside id="admin-sidebar" class="admin-sidebar" aria-label="管理导航">
-        <div class="admin-sidebar-head">
-          <span class="brand-mark" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg></span>
-          <div class="brand-text"><strong>管理后台</strong></div>
-        </div>
         <nav class="admin-nav">
           <button type="button" data-admin-view="dashboard" class="active"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>概览</button>
           <button type="button" data-admin-view="jobs"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>任务管理</button>
           <button type="button" data-admin-view="users"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>用户管理</button>
           <button type="button" data-admin-view="cdks"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="5"/><path d="m11.5 11.5 7-7L22 8l-2.5 2.5M16 7l2 2"/></svg>CDK 管理</button>
           <button type="button" data-admin-view="usage"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2" fill="var(--sidebar)"/><circle cx="15" cy="17" r="2" fill="var(--sidebar)"/></svg>使用设置</button>
+          <button type="button" data-admin-view="providers"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 10v4m4-7v10m4-14v18m4-14v10m4-7v4"/></svg>转写服务</button>
           <button type="button" data-admin-view="password"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></svg>修改密码</button>
         </nav>
         <div class="admin-sidebar-foot">
@@ -250,8 +230,8 @@
           </form>
           <p id="admin-cdk-hint" class="meta">每个密钥只能登录一次，单批最多生成 100 个。任务额度按累计创建次数计算。</p>
           <div id="admin-cdk-generated" class="admin-cdk-generated hidden">
-            <label>本次生成的密钥<textarea id="admin-cdk-codes" rows="3" readonly spellcheck="false" autocomplete="off" aria-describedby="admin-cdk-save-hint"></textarea></label>
-            <p id="admin-cdk-save-hint" class="meta">完整密钥只在生成后显示。请复制保存后再关闭。</p>
+            <label>完整密钥<textarea id="admin-cdk-codes" rows="3" readonly spellcheck="false" autocomplete="off" aria-describedby="admin-cdk-save-hint"></textarea></label>
+            <p id="admin-cdk-save-hint" class="meta">完整密钥只在生成或轮换后显示。请复制保存后再关闭。</p>
             <div class="admin-cdk-actions">
               <button id="admin-cdk-copy" class="ghost" type="button">复制全部</button>
               <button id="admin-cdk-dismiss" class="ghost" type="button">关闭密钥显示</button>
@@ -264,7 +244,7 @@
 
         <section id="admin-view-usage" class="admin-view panel hidden" aria-labelledby="admin-usage-heading">
           <div class="admin-head">
-            <h2 id="admin-usage-heading">使用设置</h2>
+            <h2 id="admin-usage-heading" tabindex="-1">使用设置</h2>
             <button id="admin-usage-refresh" class="ghost" type="button">重新加载</button>
           </div>
           <form id="admin-usage-form">
@@ -278,31 +258,41 @@
               </fieldset>
               <fieldset class="admin-usage-group">
                 <legend>新建任务权限</legend>
-                <div class="admin-usage-checks">
-                  <label class="check"><input name="allowInfo" type="checkbox">允许仅解析</label>
-                  <label class="check"><input name="allowDownload" type="checkbox">允许独立下载任务</label>
-                  <label class="check"><input name="allowTranscribe" type="checkbox">允许转写和完整提取</label>
+                <div class="admin-usage-switches">
+                  <label class="admin-usage-switch">仅解析信息<input name="allowInfo" type="checkbox" role="switch"></label>
+                  <label class="admin-usage-switch">独立下载媒体<input name="allowDownload" type="checkbox" role="switch"></label>
+                  <label class="admin-usage-switch">下载并转写<input name="allowTranscribe" type="checkbox" role="switch"></label>
                 </div>
+                <p class="meta">保存后全站生效，用户只能新建已开启的任务类型。</p>
               </fieldset>
-              <fieldset class="admin-usage-group">
-                <legend>转写预算</legend>
-                <div class="admin-usage-amounts">
-                  <label>每日预算（元）
-                    <input name="dailyAsrBudgetCny" type="number" min="0" max="1000000" step="any" inputmode="decimal" required>
-                  </label>
-                  <label>每月预算（元）
-                    <input name="monthlyAsrBudgetCny" type="number" min="0" max="1000000" step="any" inputmode="decimal" required>
-                  </label>
-                  <label>估算单价（元/分钟）
-                    <input name="asrPricePerMinuteCny" type="number" min="0" max="10000" step="any" inputmode="decimal" required>
-                  </label>
-                </div>
-                <p class="meta">预算按 UTC 日和月统计。预算填 0 表示该周期不限。单价填 0 时，估算费用为 0。</p>
-              </fieldset>
-              <button class="btn-primary" type="submit">保存使用设置</button>
+              <div class="admin-usage-footer">
+                <button class="btn-primary" type="submit">保存使用设置</button>
+                <p id="admin-usage-status" class="meta" role="status"></p>
+              </div>
             </fieldset>
           </form>
-          <p id="admin-usage-status" class="meta" role="status"></p>
+        </section>
+
+        <section id="admin-view-providers" class="admin-view panel hidden" aria-labelledby="admin-providers-heading">
+          <div class="admin-head">
+            <div>
+              <h2 id="admin-providers-heading">转写服务</h2>
+              <p class="meta">硅基流动为默认转写服务。阿里云备用需公网 HTTPS 地址。密钥保存后不会回显。</p>
+            </div>
+          </div>
+          <form id="provider-form">
+            <label>当前转写模型
+              <input id="asr-model" list="asr-model-options" maxlength="256" placeholder="FunAudioLLM/SenseVoiceSmall">
+              <datalist id="asr-model-options">
+                <option value="FunAudioLLM/SenseVoiceSmall"></option>
+              </datalist>
+            </label>
+            <label>阿里云 DashScope API Key<input id="aliyun-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="当前状态：未配置"></label>
+            <label class="check"><input id="clear-aliyun" type="checkbox">清除阿里云 Key</label>
+            <label>硅基流动 API Key<input id="silicon-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="当前状态：未配置"></label>
+            <label class="check"><input id="clear-silicon" type="checkbox">清除硅基流动 Key</label>
+            <button type="submit" class="btn-primary">保存设置</button>
+          </form>
         </section>
 
         <section id="admin-view-password" class="admin-view panel hidden" aria-labelledby="admin-password-heading">

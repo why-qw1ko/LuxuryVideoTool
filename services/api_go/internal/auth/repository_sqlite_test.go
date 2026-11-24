@@ -24,5 +24,12 @@ func TestSQLiteRepositoryRotatesRefreshSession(t *testing.T) {
 	rotated, _, err := repository.FindSessionByTokenHash(context.Background(), old.TokenHash)
 	if err != nil { t.Fatal(err) }
 	if rotated.RevokedAt == nil || rotated.ReplacedBy == nil || *rotated.ReplacedBy != replacement.ID { t.Fatalf("rotated = %#v", rotated) }
+	if err := repository.RevokeSessionsAfterRefreshReplay(context.Background(), rotated, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	afterReplay, err := repository.FindSessionByID(context.Background(), user.ID, replacement.ID)
+	if err != nil || afterReplay.RevokedAt == nil {
+		t.Fatalf("replacement session not revoked after replay: %v", err)
+	}
 }
 

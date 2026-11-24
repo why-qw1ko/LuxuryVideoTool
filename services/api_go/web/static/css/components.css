@@ -77,7 +77,7 @@ select:disabled{color:var(--text-tertiary);background-color:var(--input);backgro
 /* ================= 任务详情 ================= */
 .job-detail{min-width:0;width:100%;padding:28px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow);scroll-margin-top:100px}
 #detail{min-width:0;width:100%}
-#view-new,#view-detail,#view-settings{min-width:0;width:100%}
+#view-new,#view-detail{min-width:0;width:100%}
 #view-detail{scroll-margin-top:100px}
 .detail-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:16px;flex-wrap:wrap}
 .detail-head h2{margin:0 0 12px;font-size:22px;line-height:1.5;word-break:break-word;overflow-wrap:anywhere;letter-spacing:0}
@@ -182,7 +182,6 @@ select:disabled{color:var(--text-tertiary);background-color:var(--input);backgro
 @keyframes skeleton{0%{background-position:120% 0}100%{background-position:-120% 0}}
 
 
-#view-settings{max-width:800px}
 #provider-form{max-width:600px}
 .detail-head{padding-bottom:20px;border-bottom:1px solid var(--border);margin-bottom:24px}
 .detail-section{padding-top:20px;border-top:1px solid var(--border)}

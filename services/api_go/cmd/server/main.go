@@ -75,16 +75,9 @@ func run() error {
 	runtimeSettings.SetFallback(settings.AliyunKey, cfg.DashScopeAPIKey)
 	runtimeSettings.SetFallback(settings.SiliconFlowKey, cfg.SiliconFlowAPIKey)
 	runtimeSettings.SetFallback(settings.ASRModel, cfg.ASRModel)
-	defaultUsage := settings.DefaultUsage()
-	defaultUsage.DailyASRBudgetCNY = cfg.DailyASRBudgetCNY
-	defaultUsage.MonthlyASRBudgetCNY = cfg.MonthlyASRBudgetCNY
-	defaultUsage.ASRPricePerMinuteCNY = cfg.ASRPricePerMinuteCNY
-	runtimeSettings.SetUsageDefaults(defaultUsage)
 	signer := ownedfiles.NewSigner(signingKey, cfg.PublicBaseURL)
-	asrService := asr.NewService(nil, nil, asr.NewRepository(db), asr.Budget{})
-	asrService.SetBudgetSource(func(ctx context.Context) (asr.Budget, error) {
-		usage, err := runtimeSettings.Usage(ctx)
-		return asr.Budget{DailyCNY: usage.DailyASRBudgetCNY, MonthlyCNY: usage.MonthlyASRBudgetCNY, PricePerMinuteCNY: usage.ASRPricePerMinuteCNY}, err
+	asrService := asr.NewService(nil, nil, asr.NewRepository(db), asr.Budget{
+		DailyCNY: cfg.DailyASRBudgetCNY, MonthlyCNY: cfg.MonthlyASRBudgetCNY, PricePerMinuteCNY: cfg.ASRPricePerMinuteCNY,
 	})
 	asrService.SetProviderFactory(func(ctx context.Context) (asr.Provider, asr.Provider) {
 		aliyunKey := runtimeSettings.Resolve(ctx, settings.AliyunKey, cfg.DashScopeAPIKey)

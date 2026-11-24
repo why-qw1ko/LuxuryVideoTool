@@ -15,17 +15,14 @@ var ErrInvalidUsage = errors.New("invalid usage settings")
 var ErrUserNotFound = errors.New("usage settings user not found")
 
 type Usage struct {
-	DailyTaskLimit       int     `json:"dailyTaskLimit"`
-	AllowInfo            bool    `json:"allowInfo"`
-	AllowDownload        bool    `json:"allowDownload"`
-	AllowTranscribe      bool    `json:"allowTranscribe"`
-	DailyASRBudgetCNY    float64 `json:"dailyAsrBudgetCny"`
-	MonthlyASRBudgetCNY  float64 `json:"monthlyAsrBudgetCny"`
-	ASRPricePerMinuteCNY float64 `json:"asrPricePerMinuteCny"`
+	DailyTaskLimit  int  `json:"dailyTaskLimit"`
+	AllowInfo       bool `json:"allowInfo"`
+	AllowDownload   bool `json:"allowDownload"`
+	AllowTranscribe bool `json:"allowTranscribe"`
 }
 
 func DefaultUsage() Usage {
-	return Usage{AllowInfo: true, AllowDownload: true, AllowTranscribe: true, DailyASRBudgetCNY: 5, MonthlyASRBudgetCNY: 20}
+	return Usage{AllowInfo: true, AllowDownload: true, AllowTranscribe: true}
 }
 
 func (p Usage) Allows(action string) bool {
@@ -41,16 +38,8 @@ func (p Usage) Allows(action string) bool {
 	}
 }
 
-func (s *Service) SetUsageDefaults(value Usage) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.usageDefaults = value
-}
-
 func (s *Service) Usage(ctx context.Context) (Usage, error) {
-	s.mu.RLock()
-	value := s.usageDefaults
-	s.mu.RUnlock()
+	value := DefaultUsage()
 	stored, err := s.Get(ctx, usageSetting)
 	if errors.Is(err, sql.ErrNoRows) {
 		return value, nil
@@ -65,10 +54,7 @@ func (s *Service) Usage(ctx context.Context) (Usage, error) {
 }
 
 func (s *Service) SetUsage(ctx context.Context, value Usage, actorID string) error {
-	validAmount := func(amount, maximum float64) bool { return amount >= 0 && amount <= maximum }
-	if value.DailyTaskLimit < 0 || value.DailyTaskLimit > MaxDailyTaskLimit ||
-		!validAmount(value.DailyASRBudgetCNY, 1_000_000) || !validAmount(value.MonthlyASRBudgetCNY, 1_000_000) ||
-		!validAmount(value.ASRPricePerMinuteCNY, 10_000) {
+	if value.DailyTaskLimit < 0 || value.DailyTaskLimit > MaxDailyTaskLimit {
 		return ErrInvalidUsage
 	}
 	encoded, err := json.Marshal(value)

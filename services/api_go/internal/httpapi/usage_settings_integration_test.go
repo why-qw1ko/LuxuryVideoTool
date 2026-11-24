@@ -53,15 +53,19 @@ func TestUsageSettingsControlAcceptedTasks(t *testing.T) {
 	policy := settings.DefaultUsage()
 	policy.DailyTaskLimit = 1
 	policy.AllowInfo = false
-	policy.DailyASRBudgetCNY = 12.5
-	policy.MonthlyASRBudgetCNY = 100
-	policy.ASRPricePerMinuteCNY = 0.06
 	request(http.MethodGet, settingsPath, nil, "", http.StatusUnauthorized)
 	request(http.MethodGet, settingsPath, nil, userToken, http.StatusForbidden)
 	request(http.MethodPut, settingsPath, policy, userToken, http.StatusForbidden)
 	request(http.MethodPut, overridePath, map[string]any{"dailyTaskLimit": 0}, userToken, http.StatusForbidden)
 	request(http.MethodPut, settingsPath, map[string]any{"dailyTaskLimit": 1}, adminToken, http.StatusBadRequest)
 	request(http.MethodPut, settingsPath, policy, adminToken, http.StatusOK)
+	adminSettings := request(http.MethodGet, settingsPath, nil, adminToken, http.StatusOK)
+	var adminResult struct {
+		Settings map[string]any
+	}
+	if err := json.Unmarshal(adminSettings.Body.Bytes(), &adminResult); err != nil || len(adminResult.Settings) != 4 {
+		t.Fatalf("unexpected usage settings: %+v, error=%v", adminResult, err)
+	}
 	storeAfterRestart, err := settings.New(db, key)
 	if err != nil {
 		t.Fatal(err)
@@ -86,6 +90,33 @@ func TestUsageSettingsControlAcceptedTasks(t *testing.T) {
 		}
 		return response
 	}
+	assertPermissions := func(token string, want settings.Usage) {
+		t.Helper()
+		response := request(http.MethodGet, usagePath, nil, token, http.StatusOK)
+		var result struct {
+			Usage map[string]any
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Usage["allowInfo"] != want.AllowInfo || result.Usage["allowDownload"] != want.AllowDownload || result.Usage["allowTranscribe"] != want.AllowTranscribe {
+			t.Fatalf("usage permissions=%+v, want %+v", result.Usage, want)
+		}
+	}
+	assertPermissions(userToken, policy)
+	assertPermissions(adminToken, policy)
+	cdks, err := authService.CreateCDKs(ctx, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cdkPair, err := authService.LoginCDK(ctx, cdks[0].Code, auth.Device{ID: "guest", Name: "Guest", Platform: "windows", AppVersion: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPermissions(cdkPair.AccessToken, policy)
+	submit("info", "cdk-paused", cdkPair.AccessToken, http.StatusForbidden)
+	submit("download", "cdk-first", cdkPair.AccessToken, http.StatusAccepted)
+
 	denied := submit("info", "paused", userToken, http.StatusForbidden)
 	if !strings.Contains(denied.Body.String(), `"code":"TASK_ACTION_DISABLED"`) {
 		t.Fatal(denied.Body.String())
@@ -116,4 +147,15 @@ func TestUsageSettingsControlAcceptedTasks(t *testing.T) {
 		t.Fatal(usage.Body.String())
 	}
 	submit("download", "third", userToken, http.StatusTooManyRequests)
+
+	policy.AllowDownload = false
+	policy.AllowTranscribe = false
+	request(http.MethodPut, settingsPath, policy, adminToken, http.StatusOK)
+	assertPermissions(userToken, policy)
+	for _, action := range []string{"info", "download", "transcribe", "full"} {
+		response := submit(action, "all-disabled-"+action, userToken, http.StatusForbidden)
+		if !strings.Contains(response.Body.String(), `"code":"TASK_ACTION_DISABLED"`) {
+			t.Fatal(response.Body.String())
+		}
+	}
 }

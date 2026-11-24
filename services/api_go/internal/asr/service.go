@@ -19,17 +19,11 @@ type Service struct {
 	providers         ProviderFactory
 	repo              *Repository
 	budget            Budget
-	budgetSource      func(context.Context) (Budget, error)
 	now               func() time.Time
 	budgetMu          sync.Mutex
 }
 func NewService(primary, fallback Provider, repo *Repository, budget Budget) *Service { return &Service{primary: primary, fallback: fallback, repo: repo, budget: budget, now: time.Now} }
 func (s *Service) SetProviderFactory(factory ProviderFactory) { s.providers = factory }
-func (s *Service) SetBudgetSource(source func(context.Context) (Budget, error)) {
-	s.budgetMu.Lock()
-	defer s.budgetMu.Unlock()
-	s.budgetSource = source
-}
 
 func (s *Service) Transcribe(ctx context.Context, jobID, audioPath, audioURL string, duration time.Duration, languages, hotwords []string) (TranscribeResult, error) {
 	return s.TranscribeSegment(ctx, jobID, 0, audioPath, audioURL, duration, languages, hotwords, nil)
@@ -38,13 +32,6 @@ func (s *Service) TranscribeSegment(ctx context.Context, jobID string, index int
 	s.budgetMu.Lock()
 	defer s.budgetMu.Unlock()
 	budget := s.budget
-	if s.budgetSource != nil {
-		var err error
-		budget, err = s.budgetSource(ctx)
-		if err != nil {
-			return TranscribeResult{}, err
-		}
-	}
 	seconds := duration.Seconds()
 	estimate := seconds / 60 * budget.PricePerMinuteCNY
 	if err := s.checkBudget(ctx, budget, estimate); err != nil {

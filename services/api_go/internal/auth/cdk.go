@@ -46,8 +46,10 @@ type CDKRepository interface {
 	CreateCDKs(context.Context, []CDK) error
 	ListCDKs(ctx context.Context, limit, offset int) ([]CDK, int, error)
 	SetCDKTaskLimit(ctx context.Context, id string, limit int) (CDK, error)
+	ResetCDKTaskCount(ctx context.Context, id string) (CDK, error)
+	RotateCDK(ctx context.Context, id, prefix, hash string, now time.Time) (CDK, error)
 	RevokeCDK(ctx context.Context, id string, now time.Time) (CDK, error)
-	RedeemCDK(ctx context.Context, hash string, user User, session Session) error
+	RedeemCDK(ctx context.Context, hash string, user User, newSession func(User) (Session, error)) error
 	CDKUsage(ctx context.Context, userID string) (CDKUsage, error)
 }
 
@@ -69,11 +71,13 @@ func (s *Service) LoginCDK(ctx context.Context, code string, device Device) (Tok
 		ID: id, UsernameNormalized: "cdk-" + strings.ToLower(id), DisplayName: code[:cdkPrefixSize],
 		Role: RoleUser, IsActive: true, IsCDK: true, CreatedAt: now, UpdatedAt: now, LastLoginAt: &now,
 	}
-	pair, session, err := s.newSession(user, device, now)
-	if err != nil {
-		return TokenPair{}, err
-	}
-	if err := s.repository.RedeemCDK(ctx, HashRefreshToken(code), user, session); err != nil {
+	var pair TokenPair
+	if err := s.repository.RedeemCDK(ctx, HashRefreshToken(code), user, func(user User) (Session, error) {
+		var session Session
+		var err error
+		pair, session, err = s.newSession(user, device, now)
+		return session, err
+	}); err != nil {
 		return TokenPair{}, err
 	}
 	return pair, nil
@@ -90,11 +94,10 @@ func (s *Service) CreateCDKs(ctx context.Context, count, taskLimit int) ([]CDK, 
 		if err != nil {
 			return nil, err
 		}
-		var secret [cdkSecretSize]byte
-		if _, err := rand.Read(secret[:]); err != nil {
+		code, err := newCDKCode()
+		if err != nil {
 			return nil, err
 		}
-		code := cdkCodePrefix + cdkEncoding.EncodeToString(secret[:])
 		items[i] = CDK{ID: id, Prefix: code[:cdkPrefixSize], Code: code, TaskLimit: taskLimit,
 			Status: "unused", CreatedAt: now, codeHash: HashRefreshToken(code)}
 	}
@@ -102,6 +105,14 @@ func (s *Service) CreateCDKs(ctx context.Context, count, taskLimit int) ([]CDK, 
 		return nil, err
 	}
 	return items, nil
+}
+
+func newCDKCode() (string, error) {
+	var secret [cdkSecretSize]byte
+	if _, err := rand.Read(secret[:]); err != nil {
+		return "", err
+	}
+	return cdkCodePrefix + cdkEncoding.EncodeToString(secret[:]), nil
 }
 
 func (s *Service) ListCDKs(ctx context.Context, limit, offset int) ([]CDK, int, error) {
@@ -116,6 +127,23 @@ func (s *Service) SetCDKTaskLimit(ctx context.Context, id string, taskLimit int)
 		return CDK{}, ErrCDKInput
 	}
 	return s.repository.SetCDKTaskLimit(ctx, id, taskLimit)
+}
+
+func (s *Service) ResetCDKTaskCount(ctx context.Context, id string) (CDK, error) {
+	return s.repository.ResetCDKTaskCount(ctx, id)
+}
+
+func (s *Service) RotateCDK(ctx context.Context, id string) (CDK, error) {
+	code, err := newCDKCode()
+	if err != nil {
+		return CDK{}, err
+	}
+	item, err := s.repository.RotateCDK(ctx, id, code[:cdkPrefixSize], HashRefreshToken(code), s.now().UTC())
+	if err != nil {
+		return CDK{}, err
+	}
+	item.Code = code
+	return item, nil
 }
 
 func (s *Service) RevokeCDK(ctx context.Context, id string) (CDK, error) {

@@ -41,8 +41,8 @@
 .empty-state span{font-size:12px}
 .master-foot{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding-top:14px;border-top:1px solid var(--border);font-size:11px;color:var(--text-tertiary)}
 .foot-api{width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;order:3}
-.master-foot a{display:inline-flex;align-items:center;gap:5px;color:var(--text-secondary);margin-left:auto;padding:4px 8px;border-radius:4px}
-.master-foot a:hover,.master-foot a.active{color:var(--primary);background:var(--primary-light);text-decoration:none}
+.master-foot #settings-link{gap:4px;min-height:32px;margin-left:auto;padding:4px 8px;border-color:transparent;background:transparent;color:var(--text-secondary);font-size:12px;font-weight:500}
+.master-foot #settings-link:hover{color:var(--primary);background:var(--primary-light)}
 .content{display:flex;flex-direction:column;gap:24px;padding:28px 32px;min-width:0;width:100%}
 .content>section{flex-shrink:0}
 .dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px;vertical-align:2px}
@@ -69,6 +69,7 @@
 #submit-task{min-width:104px;flex-shrink:0}
 #capture-feedback:empty{margin:0}
 #capture-feedback.failed{color:var(--danger)}
+#capture-usage-retry{align-self:flex-start;margin-top:8px}
 /* 登录 */
 .login-layout{width:min(360px,calc(100% - 48px));margin:64px auto}
 .login-card{padding:0}

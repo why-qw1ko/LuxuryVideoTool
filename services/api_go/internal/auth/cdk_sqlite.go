@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const cdkColumns = "id, prefix, task_limit, task_count, created_at, redeemed_at, revoked_at"
+const cdkColumns = "id, prefix, task_limit, task_count, created_at, code_redeemed_at, revoked_at"
 
 func (r *SQLiteRepository) CreateCDKs(ctx context.Context, items []CDK) error {
 	tx, err := r.db.BeginTx(ctx, nil)
@@ -52,13 +52,44 @@ func (r *SQLiteRepository) ListCDKs(ctx context.Context, limit, offset int) ([]C
 }
 
 func (r *SQLiteRepository) SetCDKTaskLimit(ctx context.Context, id string, limit int) (CDK, error) {
-	item, err := scanCDK(r.db.QueryRowContext(ctx, `UPDATE login_cdks
+	return scanMutableCDK(r.db.QueryRowContext(ctx, `UPDATE login_cdks
 		SET task_limit = CASE WHEN revoked_at IS NULL THEN ? ELSE task_limit END
 		WHERE id = ? RETURNING `+cdkColumns, limit, id))
-	if err == nil && item.RevokedAt != nil {
-		return CDK{}, ErrCDKRevoked
+}
+
+func (r *SQLiteRepository) ResetCDKTaskCount(ctx context.Context, id string) (CDK, error) {
+	return scanMutableCDK(r.db.QueryRowContext(ctx, `UPDATE login_cdks
+		SET task_count = CASE WHEN revoked_at IS NULL THEN 0 ELSE task_count END
+		WHERE id = ? RETURNING `+cdkColumns, id))
+}
+
+func (r *SQLiteRepository) RotateCDK(ctx context.Context, id, prefix, hash string, now time.Time) (CDK, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return CDK{}, err
 	}
-	return item, err
+	defer tx.Rollback()
+	item, err := scanMutableCDK(tx.QueryRowContext(ctx, `UPDATE login_cdks SET
+		code_hash = CASE WHEN revoked_at IS NULL THEN ? ELSE code_hash END,
+		prefix = CASE WHEN revoked_at IS NULL THEN ? ELSE prefix END,
+		code_redeemed_at = CASE WHEN revoked_at IS NULL THEN NULL ELSE code_redeemed_at END
+		WHERE id = ? RETURNING `+cdkColumns, hash, prefix, id))
+	if err != nil {
+		return CDK{}, err
+	}
+	// Retain session records while removing lookup by any refresh token from the previous key.
+	at := millis(now)
+	if _, err := tx.ExecContext(ctx, `UPDATE refresh_tokens SET
+		token_hash = 'cdk-rotated:' || id,
+		last_used_at = CASE WHEN revoked_at IS NULL THEN ? ELSE last_used_at END,
+		revoked_at = COALESCE(revoked_at, ?)
+		WHERE user_id = (SELECT user_id FROM login_cdks WHERE id = ?) AND token_hash NOT LIKE 'cdk-rotated:%'`, at, at, id); err != nil {
+		return CDK{}, fmt.Errorf("invalidate rotated CDK sessions: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return CDK{}, err
+	}
+	return item, nil
 }
 
 func (r *SQLiteRepository) RevokeCDK(ctx context.Context, id string, now time.Time) (CDK, error) {
@@ -86,25 +117,44 @@ func (r *SQLiteRepository) RevokeCDK(ctx context.Context, id string, now time.Ti
 	return item, nil
 }
 
-func (r *SQLiteRepository) RedeemCDK(ctx context.Context, hash string, user User, session Session) error {
+func (r *SQLiteRepository) RedeemCDK(ctx context.Context, hash string, user User, newSession func(User) (Session, error)) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	// Claim the code first. The deferred user foreign key permits the new
-	// account and session to be inserted in this same transaction.
-	result, err := tx.ExecContext(ctx, `UPDATE login_cdks SET redeemed_at = ?, user_id = ?
-		WHERE code_hash = ? AND redeemed_at IS NULL AND revoked_at IS NULL`, millis(user.CreatedAt), user.ID, hash)
+	// Claim this credential once, reusing the same account after a rotation.
+	// The deferred foreign key permits first-time account creation in this transaction.
+	at := millis(user.CreatedAt)
+	var userID string
+	err = tx.QueryRowContext(ctx, `UPDATE login_cdks SET code_redeemed_at = ?,
+		redeemed_at = COALESCE(redeemed_at, ?), user_id = COALESCE(user_id, ?)
+		WHERE code_hash = ? AND code_redeemed_at IS NULL AND revoked_at IS NULL
+		RETURNING user_id`, at, at, user.ID, hash).Scan(&userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrInvalidCDK
+	}
 	if err != nil {
 		return fmt.Errorf("redeem CDK: %w", err)
 	}
-	if err := requireChanged(result); errors.Is(err, ErrNotFound) {
-		return ErrInvalidCDK
-	} else if err != nil {
-		return err
+	if userID == user.ID {
+		if err := insertUser(ctx, tx, user); err != nil {
+			return err
+		}
+	} else {
+		user, err = scanUser(tx.QueryRowContext(ctx, `UPDATE users SET display_name = ?, updated_at = ?, last_login_at = ?
+			WHERE id = ? AND is_cdk = 1 AND is_active = 1
+			RETURNING id, username_normalized, display_name, password_hash, role, is_active, is_cdk, created_at, updated_at, last_login_at`,
+			user.DisplayName, at, at, userID))
+		if errors.Is(err, ErrNotFound) {
+			return ErrInvalidCDK
+		}
+		if err != nil {
+			return err
+		}
 	}
-	if err := insertUser(ctx, tx, user); err != nil {
+	session, err := newSession(user)
+	if err != nil {
 		return err
 	}
 	if err := insertSession(ctx, tx, session); err != nil {
@@ -117,6 +167,14 @@ func (r *SQLiteRepository) CDKUsage(ctx context.Context, userID string) (CDKUsag
 	var usage CDKUsage
 	err := r.db.QueryRowContext(ctx, "SELECT task_count, task_limit FROM login_cdks WHERE user_id = ?", userID).Scan(&usage.Used, &usage.Limit)
 	return usage, err
+}
+
+func scanMutableCDK(row scanner) (CDK, error) {
+	item, err := scanCDK(row)
+	if err == nil && item.RevokedAt != nil {
+		return CDK{}, ErrCDKRevoked
+	}
+	return item, err
 }
 
 func scanCDK(row scanner) (CDK, error) {

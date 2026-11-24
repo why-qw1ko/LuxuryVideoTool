@@ -43,12 +43,43 @@ function bindLoginForms(){
 
 const adminCDKPath='/api/v1/admin/cdks',adminCDKPageSize=25;
 const adminCDKStates={unused:['待使用','muted'],redeemed:['已使用','success'],revoked:['已吊销','danger']};
+const adminCDKConfirmations={
+  reset:{
+    title:'重置已用次数',confirmText:'重置',success:'已用次数已重置',
+    message:item=>`将 ${item.prefix}… 的累计已用次数清零，恢复 ${item.taskLimit} 次可用额度。`,
+  },
+  rotate:{
+    title:'轮换密钥',confirmText:'轮换',success:'密钥已轮换，请复制保存新密钥',
+    message:item=>`轮换 ${item.prefix}… 会立即使原密钥和登录会话失效。新密钥仅在本次操作后显示。`,
+  },
+  revoke:{
+    title:'吊销密钥',confirmText:'吊销',success:'密钥已吊销',
+    message:item=>`吊销 ${item.prefix}… 后，密钥及其登录会话将立即失效。`,
+  },
+};
 let adminCDKPage=1,adminCDKListID=0,adminCDKMutating=false,adminCDKItems=[];
+
+function syncAdminCDKActions(){
+  const hasCodes=!!$('#admin-cdk-codes').value;
+  $('#cdk-generate').disabled=adminCDKMutating||hasCodes;
+  for(const button of $('#admin-cdk-list').querySelectorAll('[data-cdk-action]')){
+    const waitingForCopy=hasCodes&&button.dataset.cdkAction==='rotate';
+    button.disabled=adminCDKMutating||waitingForCopy;
+    button.title=waitingForCopy?'请先保存并关闭当前显示的密钥':'';
+  }
+}
 
 function clearGeneratedCDKs(){
   $('#admin-cdk-codes').value='';
   show('#admin-cdk-generated',false);
-  $('#cdk-generate').disabled=false;
+  syncAdminCDKActions();
+}
+
+function showGeneratedCDKs(codes){
+  const field=$('#admin-cdk-codes');
+  field.value=codes.join('\n');
+  show('#admin-cdk-generated',true);
+  if(adminOpen&&adminCurrentView==='cdks')field.focus();
 }
 
 function resetCDKView(){
@@ -91,7 +122,12 @@ async function loadAdminCDKs(page=adminCDKPage){
 function renderAdminCDKs(list,items){
   list.innerHTML=`<ul class="admin-cdk-items">${items.map(item=>{
     const [label,tone]=adminCDKStates[item.status]||['未知','muted'];
-    const actions=item.status==='revoked'?'':`<div class="admin-card-actions"><button type="button" data-cdk-action="quota">修改次数</button><button type="button" class="danger" data-cdk-action="revoke">吊销</button></div>`;
+    const actions=item.status==='revoked'?'':`<div class="admin-card-actions">
+      <button type="button" data-cdk-action="quota">修改次数</button>
+      <button type="button" data-cdk-action="reset">重置次数</button>
+      <button type="button" data-cdk-action="rotate">轮换密钥</button>
+      <button type="button" class="danger" data-cdk-action="revoke">吊销</button>
+    </div>`;
     return `<li class="admin-cdk-row" data-cdk-id="${esc(item.id)}"><dl>
       <div><dt>密钥前缀</dt><dd><code>${esc(item.prefix)}…</code></dd></div>
       <div><dt>状态</dt><dd><span class="badge badge-${tone}">${label}</span></dd></div>
@@ -99,6 +135,7 @@ function renderAdminCDKs(list,items){
       <div><dt>生成时间</dt><dd><time datetime="${esc(item.createdAt)}">${esc(fmtDate(item.createdAt))}</time></dd></div>
     </dl>${actions}</li>`;
   }).join('')}</ul>`;
+  syncAdminCDKActions();
 }
 
 function bindAdminCDKs(){
@@ -108,7 +145,7 @@ function bindAdminCDKs(){
   $('#admin-cdk-copy').addEventListener('click',async()=>{
     if(!codes.value)return;
     const epoch=sessionEpoch;
-    try{await navigator.clipboard.writeText(codes.value);if(epoch===sessionEpoch)toast('已复制全部密钥','success')}
+    try{await navigator.clipboard.writeText(codes.value);if(epoch===sessionEpoch)toast('已复制密钥','success')}
     catch{
       if(epoch!==sessionEpoch||adminCurrentView!=='cdks')return;
       codes.select();
@@ -117,17 +154,16 @@ function bindAdminCDKs(){
   });
   form.addEventListener('submit',async event=>{
     event.preventDefault();
-    if(generate.disabled||adminCDKMutating||!adminOpen||session?.user?.role!=='admin')return;
+    if(generate.disabled||adminCDKMutating||!adminOpen||adminCurrentView!=='cdks'||session?.user?.role!=='admin')return;
     const epoch=sessionEpoch;
     const count=Number($('#cdk-count').value),taskLimit=Number($('#cdk-task-limit').value);
-    generate.disabled=true;
     adminCDKMutating=true;
+    syncAdminCDKActions();
     form.setAttribute('aria-busy','true');
     try{
       const {items}=await api(adminCDKPath,{method:'POST',body:JSON.stringify({count,taskLimit})});
       if(epoch!==sessionEpoch)return;
-      codes.value=items.map(item=>item.code).join('\n');
-      show('#admin-cdk-generated',true);
+      showGeneratedCDKs(items.map(item=>item.code));
       toast(`已生成 ${items.length} 个密钥`,'success');
       adminCDKPage=1;
       void loadAdminCDKs();
@@ -135,35 +171,47 @@ function bindAdminCDKs(){
     finally{
       if(epoch===sessionEpoch){
         adminCDKMutating=false;
-        generate.disabled=!!codes.value;
+        syncAdminCDKActions();
         form.setAttribute('aria-busy','false');
       }
     }
   });
   $('#admin-cdk-list').addEventListener('click',async event=>{
     const button=event.target.closest('button[data-cdk-action]');
-    if(!button||adminCDKMutating||!adminOpen||session?.user?.role!=='admin')return;
+    if(!button||button.disabled||adminCDKMutating||!adminOpen||adminCurrentView!=='cdks'||session?.user?.role!=='admin')return;
     const row=button.closest('[data-cdk-id]');
     const item=adminCDKItems.find(entry=>entry.id===row?.dataset.cdkId);
     if(!item||item.status==='revoked')return;
-    const epoch=sessionEpoch,revoking=button.dataset.cdkAction==='revoke';
+    const epoch=sessionEpoch,action=button.dataset.cdkAction;
     adminCDKMutating=true;
+    syncAdminCDKActions();
     try{
-      let options={method:'DELETE'};
-      if(revoking){
-        const confirmed=await confirmDialog({title:'吊销密钥',message:`吊销 ${item.prefix}… 后，密钥及其登录会话将立即失效。`,confirmText:'吊销'});
-        if(!confirmed)return;
-      }else{
+      let path=`${adminCDKPath}/${encodeURIComponent(item.id)}`,options,success;
+      if(action==='quota'){
         const value=await promptDialog({title:'修改任务总次数',message:'设置该密钥累计可创建的任务数（1 至 100000 次）。',placeholder:'任务总次数',numberInput:{min:1,max:100000,value:item.taskLimit,required:true},confirmText:'保存'});
         if(value===null)return;
         options={method:'PATCH',body:JSON.stringify({taskLimit:Number(value)})};
+        success='任务总次数已更新';
+      }else{
+        const {title,confirmText,message,success:successMessage}=adminCDKConfirmations[action];
+        if(!await confirmDialog({title,confirmText,message:message(item)}))return;
+        options={method:action==='revoke'?'DELETE':'POST'};
+        if(action!=='revoke')path+=`/${action}`;
+        success=successMessage;
       }
       if(epoch!==sessionEpoch||!adminOpen||adminCurrentView!=='cdks')return;
-      await api(`${adminCDKPath}/${encodeURIComponent(item.id)}`,options);
+      const {item:updated}=await api(path,options);
       if(epoch!==sessionEpoch)return;
-      toast(revoking?'密钥已吊销':'任务总次数已更新','success');
+      if(action==='rotate')showGeneratedCDKs([updated.code]);
+      toast(success,'success');
       void loadAdminCDKs();
     }catch(err){if(epoch===sessionEpoch)toast(err.message,'error')}
-    finally{if(epoch===sessionEpoch)adminCDKMutating=false}
+    finally{
+      if(epoch===sessionEpoch){
+        adminCDKMutating=false;
+        syncAdminCDKActions();
+        if(button.isConnected&&adminOpen&&adminCurrentView==='cdks')button.focus();
+      }
+    }
   });
 }

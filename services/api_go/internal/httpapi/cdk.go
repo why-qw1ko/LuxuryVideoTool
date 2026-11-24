@@ -108,6 +108,24 @@ func registerCDKRoutes(mux *http.ServeMux, deps Dependencies, limiter *loginLimi
 		recordAdminAudit(deps.Audit, r, principal.UserID, "admin.cdk.set_task_limit", "cdk", item.ID, map[string]any{"taskLimit": item.TaskLimit})
 		writeJSON(w, http.StatusOK, map[string]any{"item": item, "requestId": RequestID(r.Context())})
 	})
+	register("POST /api/v1/admin/cdks/{id}/reset", func(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+		item, err := deps.Auth.ResetCDKTaskCount(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeCDKError(w, r, err)
+			return
+		}
+		recordAdminAudit(deps.Audit, r, principal.UserID, "admin.cdk.reset_task_count", "cdk", item.ID, nil)
+		writeJSON(w, http.StatusOK, map[string]any{"item": item, "requestId": RequestID(r.Context())})
+	})
+	register("POST /api/v1/admin/cdks/{id}/rotate", func(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+		item, err := deps.Auth.RotateCDK(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeCDKError(w, r, err)
+			return
+		}
+		recordAdminAudit(deps.Audit, r, principal.UserID, "admin.cdk.rotate", "cdk", item.ID, nil)
+		writeJSON(w, http.StatusOK, map[string]any{"item": item, "requestId": RequestID(r.Context())})
+	})
 	register("DELETE /api/v1/admin/cdks/{id}", func(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
 		item, err := deps.Auth.RevokeCDK(r.Context(), r.PathValue("id"))
 		if err != nil {

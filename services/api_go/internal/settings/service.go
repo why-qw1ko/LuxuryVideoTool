@@ -23,11 +23,10 @@ const (
 )
 
 type Service struct {
-	db            *sql.DB
-	aead          cipher.AEAD
-	mu            sync.RWMutex
-	fallback      map[string]string
-	usageDefaults Usage
+	db       *sql.DB
+	aead     cipher.AEAD
+	mu       sync.RWMutex
+	fallback map[string]string
 }
 
 type Status struct {
@@ -50,7 +49,7 @@ func New(db *sql.DB, masterKey []byte) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Service{db: db, aead: aead, fallback: make(map[string]string), usageDefaults: DefaultUsage()}, nil
+	return &Service{db: db, aead: aead, fallback: make(map[string]string)}, nil
 }
 
 func (s *Service) SetFallback(name, value string) {

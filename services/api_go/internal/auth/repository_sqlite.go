@@ -249,6 +249,18 @@ func (r *SQLiteRepository) RevokeAllUserSessions(ctx context.Context, userID str
 	return nil
 }
 
+func (r *SQLiteRepository) RevokeSessionsAfterRefreshReplay(ctx context.Context, session Session, now time.Time) error {
+	// A concurrent CDK rotation can invalidate the old digest after the refresh looked it up.
+	_, err := r.db.ExecContext(ctx, `UPDATE refresh_tokens SET revoked_at = ?, last_used_at = ?
+		WHERE user_id = ? AND revoked_at IS NULL AND EXISTS (
+			SELECT 1 FROM refresh_tokens WHERE id = ? AND user_id = ? AND token_hash = ? AND revoked_at IS NOT NULL
+		)`, millis(now), millis(now), session.UserID, session.ID, session.UserID, session.TokenHash)
+	if err != nil {
+		return fmt.Errorf("revoke sessions after refresh replay: %w", err)
+	}
+	return nil
+}
+
 func (r *SQLiteRepository) RevokeOtherUserSessions(ctx context.Context, userID, keepSessionID string, now time.Time) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE refresh_tokens SET revoked_at = ?, last_used_at = ?
 		WHERE user_id = ? AND id <> ? AND revoked_at IS NULL`, millis(now), millis(now), userID, keepSessionID)

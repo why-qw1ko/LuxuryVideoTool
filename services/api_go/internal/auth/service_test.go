@@ -82,6 +82,9 @@ func (r *memoryRepository) RevokeSession(_ context.Context, userID, id string, n
 func (r *memoryRepository) RevokeAllUserSessions(context.Context, string, time.Time) error {
 	return nil
 }
+func (r *memoryRepository) RevokeSessionsAfterRefreshReplay(context.Context, Session, time.Time) error {
+	return nil
+}
 func (r *memoryRepository) RevokeOtherUserSessions(_ context.Context, userID, keepSessionID string, now time.Time) error {
 	for id, value := range r.sessions {
 		if value.UserID == userID && id != keepSessionID && value.RevokedAt == nil {

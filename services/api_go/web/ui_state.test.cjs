@@ -13,7 +13,8 @@ function section(start, end) {
 const listCode = section('async function loadJobs(', '// 通用分页条');
 const adminListCode = section('async function loadAdminJobs(', 'function adminJobOps(');
 const usersCode = section('async function loadAdminUsers(){', 'function renderAdminUsers(');
-const captureCode = section("$('#capture-form').addEventListener", '/* ---------- 任务列表 ---------- */');
+const captureCode = section('const adminUsagePermissionFields=', '/* ---------- 任务列表 ---------- */');
+const allCapturePermissions = {allowInfo: true, allowDownload: true, allowTranscribe: true};
 const selectionCode = section('function selectJob(', "$('#new-task-btn').addEventListener");
 const sidebarCode = section('let sidebarLastFocus=null;', "$('#sidebar-toggle').innerHTML");
 const pollCode = section('const ACTIVE_POLL_MS=', '/* ---------- 登录 / 退出 / 连接 ---------- */');
@@ -26,6 +27,7 @@ function harness(code = listCode) {
       value: '', checked: false, disabled: false, children: [], attributes: {}, listeners: {},
       classList: {toggle() {}, add() {}, remove() {}, contains() { return false; }},
       setAttribute(name, value) { this.attributes[name] = value; },
+      getAttribute(name) { return this.attributes[name]; },
       addEventListener(name, callback) { this.listeners[name] = callback; },
       focus() { this.focused = true; },
       reset() { this.resetCount = (this.resetCount || 0) + 1; },
@@ -68,7 +70,8 @@ function harness(code = listCode) {
     enter(value) { context.sessionEpoch++; context.session = value; },
     showView(name) { context.currentView = name; },
     renderDetail() { if (context.currentJob) details.push(context.currentJob); },
-    stopTaskMusic() {}, setSidebar() {}, closePreview() {}, resetCDKView() {}, refreshDailyUsage() {}, uuidv4() { return 'idempotency-key'; },
+    show() {}, stopTaskMusic() {}, setSidebar() {}, closePreview() {}, resetCDKView() {}, resetCapturePermissions() {},
+    refreshDailyUsage() {}, uuidv4() { return 'idempotency-key'; },
   });
   vm.runInContext(code, context);
   return {context, node, requests, rendered, notices, details};
@@ -287,6 +290,7 @@ test('用户列表的旧响应不会覆盖更新后的选项', async () => {
 
 test('在搜索结果或后续页创建任务，立即展示新详情并重置筛选', async () => {
   const h = harness(selectionCode + captureCode + listCode);
+  h.context.applyCapturePermissions(allCapturePermissions);
   h.context.jobsPage = 4;
   h.node('#query').value = '旧搜索';
   h.node('#status').value = 'completed';
@@ -316,6 +320,7 @@ test('在搜索结果或后续页创建任务，立即展示新详情并重置�
 
 test('空白分享内容不创建任务；无 submitter 的提交可正常使用主按钮', async () => {
   const h = harness(selectionCode + captureCode + listCode);
+  h.context.applyCapturePermissions(allCapturePermissions);
   const submit = h.node('#capture-form').listeners.submit;
   h.node('#share-text').value = '   ';
   await submit({preventDefault() {}, submitter: null});
@@ -332,6 +337,7 @@ test('空白分享内容不创建任务；无 submitter 的提交可正常使用
 
 test('仅解析提交时立即显示进度，失败结果到达后不等待列表刷新就提示', async () => {
   const h = harness(selectionCode + captureCode + listCode);
+  h.context.applyCapturePermissions(allCapturePermissions);
   h.node('#info-only').checked = true;
   h.node('#share-text').value = 'https://www.douyin.com/video/123';
   const pending = h.node('#capture-form').listeners.submit({preventDefault() {}});
@@ -345,6 +351,62 @@ test('仅解析提交时立即显示进度，失败结果到达后不等待列�
   assert.equal(h.details[0],failed);
   h.requests[1].resolve({jobs:[failed],total:1});
   await pending;
+});
+
+test('前台按任务权限隐藏停用选项，只提交当前允许的任务类型', async () => {
+  const h = harness(captureCode), visible = new Map();
+  h.context.show = (selector, on) => visible.set(selector, on);
+  h.context.resetCapturePermissions();
+  assert.equal(h.node('#submit-task').disabled, true);
+  const info = h.node('#info-only'), transcribe = h.node('#with-transcribe');
+  h.context.applyCapturePermissions(allCapturePermissions);
+  info.checked = true;
+  info.listeners.change();
+  h.context.applyCapturePermissions({...allCapturePermissions, allowInfo: false});
+  assert.equal(visible.get('#info-only-wrap'), false);
+  assert.equal(info.checked, false);
+  assert.equal(h.context.captureAction(), 'download');
+
+  h.context.applyCapturePermissions({...allCapturePermissions, allowDownload: false});
+  assert.equal(info.checked, true);
+  transcribe.checked = true;
+  transcribe.listeners.change();
+  assert.equal(info.checked, false);
+  assert.equal(h.context.captureAction(), 'full');
+
+  h.context.applyCapturePermissions({allowInfo: true, allowDownload: false, allowTranscribe: false});
+  assert.equal(visible.get('#with-transcribe-wrap'), false);
+  assert.equal(transcribe.checked, false);
+  assert.equal(h.context.captureAction(), 'info');
+
+  h.context.applyCapturePermissions({allowInfo: false, allowDownload: false, allowTranscribe: false});
+  assert.equal(visible.get('#capture-options'), false);
+  assert.equal(h.node('#submit-task').disabled, true);
+  assert.match(h.node('#capture-action-hint').textContent, /关闭所有/);
+  h.node('#share-text').value = 'https://www.douyin.com/video/123';
+  await h.node('#capture-form').listeners.submit({preventDefault() {}});
+  assert.equal(h.requests.length, 0);
+});
+
+test('任务权限读取失败可重试，较早的响应不会重新打开已关闭的选项', async () => {
+  const h = harness(captureCode), visible = new Map();
+  h.context.show = (selector, on) => visible.set(selector, on);
+  h.context.resetCapturePermissions();
+  const failing = h.context.refreshDailyUsage();
+  h.requests[0].reject(new Error('网络错误'));
+  await failing;
+  assert.equal(visible.get('#capture-usage-retry'), true);
+  assert.equal(h.node('#submit-task').disabled, true);
+
+  const old = h.node('#capture-usage-retry').listeners.click();
+  const recent = h.context.refreshDailyUsage();
+  h.requests[2].resolve({usage: {used: 0, limit: 0, ...allCapturePermissions, allowInfo: false}});
+  await recent;
+  h.requests[1].resolve({usage: {used: 0, limit: 0, ...allCapturePermissions}});
+  await old;
+  assert.equal(visible.get('#capture-usage-retry'), false);
+  assert.equal(visible.get('#info-only-wrap'), false);
+  assert.equal(h.context.captureAction(), 'download');
 });
 
 test('后台执行的任务切换到失败时，详情只通知一次', async () => {
@@ -410,6 +472,7 @@ test('管理员进入后台后，顶栏显示返回前台，修改密码由独�
   h.context.session.user.role = 'admin';
   h.context.adminCurrentView = 'dashboard';
   h.context.loadAdminStats = () => {};
+  h.context.requestAdminUsageSettings = () => { h.context.usageRequests = (h.context.usageRequests || 0) + 1; };
   h.context.selectJob = () => {};
   h.context.loadJobs = () => {};
   vm.runInContext(adminNavigationCode, h.context);
@@ -431,6 +494,14 @@ test('管理员进入后台后，顶栏显示返回前台，修改密码由独�
   assert.equal(visible.get('#logout'), true);
   assert.equal(visible.get('#admin-back-front'), false);
   assert.equal(h.node('#admin-console-btn').focused, true);
+
+  h.node('#settings-link').listeners.click();
+  assert.equal(visible.get('#admin-view-usage'), true);
+  assert.equal(visible.get('#admin-view-dashboard'), false);
+  assert.equal(h.context.usageRequests, 1);
+  assert.equal(h.node('#admin-usage-heading').focused, true);
+  h.node('#admin-back-front').listeners.click();
+  assert.equal(h.node('#settings-link').focused, true);
 });
 
 
@@ -839,13 +910,13 @@ test('点开画廊时优先使用当前任务轮询得到的新签名', () => {
 });
 
 
-test('后台使用设置读取并保存用量数值、预算和入口权限，保存期间阻止重复提交', async () => {
-  const h = harness(section('const adminUsageNumberFields=', "$('#submit-task').textContent"));
+test('后台使用设置只保存任务额度和权限开关，保存期间阻止重复提交', async () => {
+  const h = harness(captureCode);
   h.context.session.user.role = 'admin';
   h.context.adminOpen = true;
   const form = h.node('#admin-usage-form'), fields = h.node('#admin-usage-fields');
   const settings = {
-    dailyTaskLimit: 10, dailyAsrBudgetCny: 5, monthlyAsrBudgetCny: 20, asrPricePerMinuteCny: 0.25,
+    dailyTaskLimit: 10,
     allowInfo: true, allowDownload: false, allowTranscribe: true,
   };
   const inputs = Object.fromEntries(Object.keys(settings).map(name => [name, {
@@ -859,7 +930,7 @@ test('后台使用设置读取并保存用量数值、预算和入口权限，�
   h.requests[0].resolve({settings});
   await load;
   assert.equal(fields.disabled, false);
-  assert.equal(inputs.asrPricePerMinuteCny.value, '0.25');
+  assert.equal(inputs.dailyTaskLimit.value, '10');
   assert.equal(inputs.allowInfo.checked, true);
   assert.equal(inputs.allowDownload.checked, false);
 
@@ -879,7 +950,7 @@ test('后台使用设置读取并保存用量数值、预算和入口权限，�
 });
 
 test('后台使用设置加载失败时保持禁用，非管理员不会提交修改', async () => {
-  const h = harness(section('const adminUsageNumberFields=', "$('#submit-task').textContent"));
+  const h = harness(captureCode);
   h.context.session.user.role = 'admin';
   h.context.adminOpen = true;
   const pending = h.context.requestAdminUsageSettings();

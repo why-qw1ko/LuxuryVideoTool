@@ -79,7 +79,7 @@ func (s *Service) Refresh(ctx context.Context, raw string) (TokenPair, error) {
 		return TokenPair{}, err
 	}
 	if oldSession.RevokedAt != nil {
-		_ = s.repository.RevokeAllUserSessions(ctx, user.ID, now)
+		_ = s.repository.RevokeSessionsAfterRefreshReplay(ctx, oldSession, now)
 		return TokenPair{}, ErrRevokedSession
 	}
 	if !oldSession.ExpiresAt.After(now) {

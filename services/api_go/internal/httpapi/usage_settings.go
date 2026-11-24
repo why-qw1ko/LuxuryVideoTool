@@ -40,26 +40,21 @@ func registerUsageRoutes(mux, protected *http.ServeMux, deps Dependencies) {
 			return
 		}
 		var input struct {
-			DailyTaskLimit       *int     `json:"dailyTaskLimit"`
-			AllowInfo            *bool    `json:"allowInfo"`
-			AllowDownload        *bool    `json:"allowDownload"`
-			AllowTranscribe      *bool    `json:"allowTranscribe"`
-			DailyASRBudgetCNY    *float64 `json:"dailyAsrBudgetCny"`
-			MonthlyASRBudgetCNY  *float64 `json:"monthlyAsrBudgetCny"`
-			ASRPricePerMinuteCNY *float64 `json:"asrPricePerMinuteCny"`
+			DailyTaskLimit  *int  `json:"dailyTaskLimit"`
+			AllowInfo       *bool `json:"allowInfo"`
+			AllowDownload   *bool `json:"allowDownload"`
+			AllowTranscribe *bool `json:"allowTranscribe"`
 		}
 		if err := decodeJSON(w, r, &input); err != nil {
 			return
 		}
-		if input.DailyTaskLimit == nil || input.AllowInfo == nil || input.AllowDownload == nil || input.AllowTranscribe == nil ||
-			input.DailyASRBudgetCNY == nil || input.MonthlyASRBudgetCNY == nil || input.ASRPricePerMinuteCNY == nil {
+		if input.DailyTaskLimit == nil || input.AllowInfo == nil || input.AllowDownload == nil || input.AllowTranscribe == nil {
 			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "请提交完整的使用设置", false)
 			return
 		}
 		value := settings.Usage{
 			DailyTaskLimit: *input.DailyTaskLimit, AllowInfo: *input.AllowInfo, AllowDownload: *input.AllowDownload,
-			AllowTranscribe: *input.AllowTranscribe, DailyASRBudgetCNY: *input.DailyASRBudgetCNY,
-			MonthlyASRBudgetCNY: *input.MonthlyASRBudgetCNY, ASRPricePerMinuteCNY: *input.ASRPricePerMinuteCNY,
+			AllowTranscribe: *input.AllowTranscribe,
 		}
 		if err := deps.Settings.SetUsage(r.Context(), value, principal.UserID); err != nil {
 			writeUsageSettingsError(w, r, err)
@@ -98,7 +93,7 @@ func registerUsageRoutes(mux, protected *http.ServeMux, deps Dependencies) {
 			return
 		}
 		principal, _ := Principal(r.Context())
-		_, limit, err := userUsagePolicy(r.Context(), deps.Settings, principal.UserID)
+		policy, limit, err := userUsagePolicy(r.Context(), deps.Settings, principal.UserID)
 		if err != nil {
 			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取每日额度", true)
 			return
@@ -109,6 +104,9 @@ func registerUsageRoutes(mux, protected *http.ServeMux, deps Dependencies) {
 			return
 		}
 		usage := dailyUsageResult(used, limit, resetAt)
+		usage["allowInfo"] = policy.AllowInfo
+		usage["allowDownload"] = policy.AllowDownload
+		usage["allowTranscribe"] = policy.AllowTranscribe
 		if principal.IsCDK {
 			cdkUsage, err := deps.Auth.CDKUsage(r.Context(), principal.UserID)
 			if err != nil {
@@ -162,7 +160,7 @@ func writeDailyTaskLimitError(deps Dependencies, w http.ResponseWriter, r *http.
 func writeUsageSettingsError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, settings.ErrInvalidUsage):
-		writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "次数、预算或估算单价超出允许范围", false)
+		writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "每日任务次数超出允许范围", false)
 	case errors.Is(err, settings.ErrUserNotFound):
 		writeError(w, r, http.StatusNotFound, "USER_NOT_FOUND", "用户不存在", false)
 	default:

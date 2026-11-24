@@ -24,8 +24,8 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 
 ### 使用设置
 
-- `GET /api/v1/admin/settings/usage` 返回 `{settings, requestId}`。设置包含 `dailyTaskLimit`、`allowInfo`、`allowDownload`、`allowTranscribe`、`dailyAsrBudgetCny`、`monthlyAsrBudgetCny`、`asrPricePerMinuteCny`。
-- `PUT /api/v1/admin/settings/usage` 接收上述七个字段并立即保存。任务类型开关分别控制 `info`、`download`、`transcribe/full` 的新建请求。预算从下一个转写分段起生效，按 UTC 日和月统计。预算填 0 表示该周期不限，估算单价填 0 时新调用的估算费用为 0。删除任务会保留预算汇总。
+- `GET /api/v1/admin/settings/usage` 返回 `{settings, requestId}`。设置包含 `dailyTaskLimit`、`allowInfo`、`allowDownload`、`allowTranscribe`。
+- `PUT /api/v1/admin/settings/usage` 接收上述四个字段并立即保存。三个任务开关分别控制 `info`、`download`、`transcribe/full` 的新建请求。
 
 ### 仪表盘统计
 
@@ -43,9 +43,11 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 
 ### CDK 管理
 
-- `GET /api/v1/admin/cdks?limit=25&offset=0` 返回 `{items, total, requestId}`，每条记录包含 `id`、`prefix`、`taskLimit`、`taskCount`、`status` 和时间字段。完整密钥只随生成响应返回。
+- `GET /api/v1/admin/cdks?limit=25&offset=0` 返回 `{items, total, requestId}`，每条记录包含 `id`、`prefix`、`taskLimit`、`taskCount`、`status` 和时间字段。完整密钥只随生成和轮换响应返回。
 - `POST /api/v1/admin/cdks` 接收 `{count, taskLimit}`。一次生成 1 至 100 个密钥，每个密钥可分配 1 至 100000 次累计新建任务额度。
 - `PATCH /api/v1/admin/cdks/{id}` 接收 `{taskLimit}`，修改该密钥的任务总额度，已用次数保留。
+- `POST /api/v1/admin/cdks/{id}/reset` 将累计已用次数清零，保留总额度、每日用量和任务历史，返回 `{item, requestId}`。
+- `POST /api/v1/admin/cdks/{id}/rotate` 返回 `{item, requestId}`，`item.code` 含新密钥。旧密钥及其会话立即失效，新密钥可登录一次，继续使用原账号、剩余额度和任务历史。已吊销的 CDK 禁止重置次数及轮换，返回 `409 CDK_REVOKED`。
 - `DELETE /api/v1/admin/cdks/{id}` 吊销密钥及其登录会话，保留密钥记录和任务历史。
 - CDK 会话的 `GET /api/v1/jobs/usage` 额外返回 `usage.cdk`，含 `used`、`limit`。累计额度用完时新建任务返回 `429 CDK_LIMIT_REACHED`。每日额度继续适用，幂等重放、任务重试和删除均不改变累计用量。
 
@@ -64,7 +66,7 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 - `GET /api/v1/jobs/{id}`：只返回当前用户拥有的任务及结构化作品信息。
 - `GET /api/v1/jobs`：当前用户的历史任务，支持 `q/status/action/limit/offset` 搜索、筛选与分页。
 - 两个任务列表接口均支持 `view=summary`。摘要只包含列表展示字段，文案、文件和签名通过任务详情接口读取。现有客户端省略 `view` 时继续获取完整列表。
-- `GET /api/v1/jobs/usage` 返回当前账号的 `{usage: {used, limit, resetAt}, requestId}`。`0` 代表不限。每账号在北京时间零点重置，每个新建任务计 1 次，重试、幂等重放和删除均不会增加或退回次数。
+- `GET /api/v1/jobs/usage` 返回当前账号的每日用量 `usage.{used, limit, resetAt}` 和新建权限 `usage.{allowInfo, allowDownload, allowTranscribe}`。`limit` 为 `0` 时代表不限。每账号在北京时间零点重置，每个新建任务计 1 次，重试、幂等重放和删除均不会增加或退回次数。
 - 创建任务达到额度时返回 `429 DAILY_TASK_LIMIT` 和 `Retry-After`。任务类型暂停新建时返回 `403 TASK_ACTION_DISABLED`。
 - `DELETE /api/v1/jobs/{id}`：删除已完成、失败或取消的任务及其文件记录；进行中的任务须先取消。
 - `POST /api/v1/jobs/{id}/cancel`：立即取消排队任务；本进程处理中任务协作终止下载/解析并持久化取消状态。

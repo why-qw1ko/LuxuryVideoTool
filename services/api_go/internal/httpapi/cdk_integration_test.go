@@ -9,8 +9,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/audit"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/auth"
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/database"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/jobs"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/settings"
 )
@@ -37,7 +40,8 @@ func TestCDKHTTPFlow(t *testing.T) {
 	if err := store.SetUsage(ctx, policy, admin.ID); err != nil {
 		t.Fatal(err)
 	}
-	handler := New(Dependencies{Auth: service, Jobs: jobs.NewService(jobs.NewSQLiteRepository(db), nil), Settings: store, LoginRateLimit: 20})
+	handler := New(Dependencies{Auth: service, Jobs: jobs.NewService(jobs.NewSQLiteRepository(db), nil), Settings: store,
+		Audit: audit.New(db, []byte("01234567890123456789012345678901")), LoginRateLimit: 20})
 	request := func(method, path string, body any, token string, want int) *httptest.ResponseRecorder {
 		t.Helper()
 		response := performJSON(handler, method, path, body, token)
@@ -77,6 +81,7 @@ func TestCDKHTTPFlow(t *testing.T) {
 		return result.Items
 	}
 	key := generate(1)[0]
+	keyPath := cdkAdminPath + "/" + key.ID
 	batch := generate(2)
 	if batch[0].Code == batch[1].Code || batch[0].Code == key.Code || batch[1].Code == key.Code {
 		t.Fatal("generated duplicate codes")
@@ -117,6 +122,11 @@ func TestCDKHTTPFlow(t *testing.T) {
 	}
 	login(key.Code, http.StatusUnauthorized)
 	request(http.MethodGet, cdkAdminPath, nil, cdkPair.AccessToken, http.StatusForbidden)
+	for _, action := range []string{"/reset", "/rotate"} {
+		request(http.MethodPost, keyPath+action, nil, "", http.StatusUnauthorized)
+		request(http.MethodPost, keyPath+action, nil, cdkPair.AccessToken, http.StatusForbidden)
+		request(http.MethodPost, cdkAdminPath+"/missing"+action, nil, token, http.StatusNotFound)
+	}
 	request(http.MethodPost, "/api/v1/auth/password", map[string]string{"currentPassword": password, "newPassword": password}, cdkPair.AccessToken, http.StatusForbidden)
 	request(http.MethodPost, "/api/v1/admin/users/"+cdkPair.User.ID+"/password", map[string]string{"password": password}, token, http.StatusNotFound)
 	request(http.MethodPatch, "/api/v1/admin/users/"+cdkPair.User.ID+"/active", map[string]bool{"active": false}, token, http.StatusNotFound)
@@ -155,7 +165,7 @@ func TestCDKHTTPFlow(t *testing.T) {
 	if body := submit("second", http.StatusTooManyRequests).Body.String(); !strings.Contains(body, "CDK_LIMIT_REACHED") {
 		t.Fatal(body)
 	}
-	request(http.MethodPatch, cdkAdminPath+"/"+key.ID, map[string]int{"taskLimit": 2}, token, http.StatusOK)
+	request(http.MethodPatch, keyPath, map[string]int{"taskLimit": 2}, token, http.StatusOK)
 	if body := submit("second", http.StatusTooManyRequests).Body.String(); !strings.Contains(body, "DAILY_TASK_LIMIT") {
 		t.Fatal(body)
 	}
@@ -172,21 +182,124 @@ func TestCDKHTTPFlow(t *testing.T) {
 	if err := store.SetUsage(ctx, policy, admin.ID); err != nil {
 		t.Fatal(err)
 	}
-	submit("second", http.StatusAccepted)
+	second := submit("second", http.StatusAccepted)
+	if err := json.Unmarshal(second.Body.Bytes(), &created); err != nil || created.Job.ID == "" {
+		t.Fatalf("decode second job = %v", err)
+	}
 	if body := submit("third", http.StatusTooManyRequests).Body.String(); !strings.Contains(body, "CDK_LIMIT_REACHED") {
 		t.Fatal(body)
 	}
 
+	// A replay in flight when the key is rotated must not revoke the replacement account session.
+	repository := auth.NewSQLiteRepository(db)
+	staleSession, _, err := repository.FindSessionByTokenHash(ctx, auth.HashRefreshToken(cookies[0].Value))
+	if err != nil || staleSession.RevokedAt == nil {
+		t.Fatalf("read previous refresh session: %v", err)
+	}
+	var updated struct{ Item auth.CDK }
+	rotation := request(http.MethodPost, keyPath+"/rotate", nil, token, http.StatusOK)
+	if err := json.Unmarshal(rotation.Body.Bytes(), &updated); err != nil || updated.Item.ID != key.ID || updated.Item.Code == "" ||
+		updated.Item.Code == key.Code || !strings.HasPrefix(updated.Item.Code, updated.Item.Prefix) ||
+		updated.Item.Status != "unused" || updated.Item.RedeemedAt != nil || updated.Item.TaskLimit != 2 || updated.Item.TaskCount != 2 ||
+		rotation.Header().Get("Cache-Control") != "private, no-store" {
+		t.Fatalf("invalid rotation response, decode error = %v", err)
+	}
+	newCode := updated.Item.Code
+	if page := request(http.MethodGet, cdkAdminPath, nil, token, http.StatusOK); strings.Contains(page.Body.String(), newCode) {
+		t.Fatal("rotated CDK disclosed in list response")
+	}
+	login(key.Code, http.StatusUnauthorized)
+	request(http.MethodGet, "/api/v1/jobs/usage", nil, active, http.StatusUnauthorized)
+	newLogin := login(newCode, http.StatusOK)
+	var newPair tokenResponse
+	if err := json.Unmarshal(newLogin.Body.Bytes(), &newPair); err != nil || newPair.User.ID != cdkPair.User.ID || newPair.User.DisplayName != updated.Item.Prefix {
+		t.Fatalf("rotated CDK did not reuse its account, decode error = %v", err)
+	}
+	login(newCode, http.StatusUnauthorized)
+	for _, oldCookies := range [][]*http.Cookie{cookies, refreshed.Result().Cookies()} {
+		replayed := httptest.NewRecorder()
+		handler.ServeHTTP(replayed, webRequest(http.MethodPost, "/api/v1/auth/refresh", nil, oldCookies))
+		if replayed.Code != http.StatusUnauthorized {
+			t.Fatalf("pre-rotation refresh replay status = %d", replayed.Code)
+		}
+	}
+	if err := repository.RevokeSessionsAfterRefreshReplay(ctx, staleSession, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	active = newPair.AccessToken
+	request(http.MethodGet, "/api/v1/jobs/"+created.Job.ID, nil, active, http.StatusOK)
+	if body := submit("third", http.StatusTooManyRequests).Body.String(); !strings.Contains(body, "CDK_LIMIT_REACHED") {
+		t.Fatal(body)
+	}
+
+	updated.Item = auth.CDK{}
+	reset := request(http.MethodPost, keyPath+"/reset", nil, token, http.StatusOK)
+	if err := json.Unmarshal(reset.Body.Bytes(), &updated); err != nil || updated.Item.ID != key.ID || updated.Item.Code != "" ||
+		updated.Item.Status != "redeemed" || updated.Item.TaskLimit != 2 || updated.Item.TaskCount != 0 {
+		t.Fatalf("invalid reset response, decode error = %v", err)
+	}
+	policy.DailyTaskLimit = 1
+	if err := store.SetUsage(ctx, policy, admin.ID); err != nil {
+		t.Fatal(err)
+	}
+	if body := submit("third", http.StatusTooManyRequests).Body.String(); !strings.Contains(body, "DAILY_TASK_LIMIT") {
+		t.Fatal(body)
+	}
+	policy.DailyTaskLimit = 0
+	if err := store.SetUsage(ctx, policy, admin.ID); err != nil {
+		t.Fatal(err)
+	}
+	if body := submit("second", http.StatusAccepted).Body.String(); !strings.Contains(body, `"reused":true`) {
+		t.Fatal(body)
+	}
+	submit("third", http.StatusAccepted)
+	for _, action := range []string{"admin.cdk.rotate", "admin.cdk.reset_task_count"} {
+		var metadata string
+		if err := db.QueryRowContext(ctx, `SELECT metadata_json FROM audit_logs WHERE action = ? AND target_id = ? AND actor_user_id = ?`,
+			action, key.ID, admin.ID).Scan(&metadata); err != nil || strings.Contains(metadata, newCode) || strings.Contains(metadata, key.Code) {
+			t.Fatalf("invalid %s audit record, query error = %v", action, err)
+		}
+	}
+
 	request(http.MethodDelete, cdkAdminPath+"/"+batch[0].ID, nil, token, http.StatusOK)
 	login(batch[0].Code, http.StatusUnauthorized)
-	request(http.MethodDelete, cdkAdminPath+"/"+key.ID, nil, token, http.StatusOK)
+	request(http.MethodDelete, keyPath, nil, token, http.StatusOK)
 	request(http.MethodGet, "/api/v1/jobs/usage", nil, active, http.StatusUnauthorized)
 	request(http.MethodPatch, "/api/v1/admin/users/"+cdkPair.User.ID+"/active", map[string]bool{"active": true}, token, http.StatusNotFound)
-	request(http.MethodPatch, cdkAdminPath+"/"+key.ID, map[string]int{"taskLimit": 3}, token, http.StatusConflict)
+	request(http.MethodPatch, keyPath, map[string]int{"taskLimit": 3}, token, http.StatusConflict)
+	request(http.MethodPost, keyPath+"/reset", nil, token, http.StatusConflict)
+	request(http.MethodPost, keyPath+"/rotate", nil, token, http.StatusConflict)
 	revoked := httptest.NewRecorder()
-	handler.ServeHTTP(revoked, webRequest(http.MethodPost, "/api/v1/auth/refresh", nil, refreshed.Result().Cookies()))
+	handler.ServeHTTP(revoked, webRequest(http.MethodPost, "/api/v1/auth/refresh", nil, newLogin.Result().Cookies()))
 	if revoked.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked CDK refresh status = %d", revoked.Code)
+	}
+}
+
+func TestCDKCredentialMigrationPreservesRedemptions(t *testing.T) {
+	ctx := context.Background()
+	service, db, closeDB := testAuthService(t)
+	defer closeDB()
+	items, err := service.CreateCDKs(ctx, 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := auth.Device{ID: "pc", Name: "PC", Platform: "windows", AppVersion: "1"}
+	if _, err := service.LoginCDK(ctx, items[0].Code, device); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE login_cdks DROP COLUMN code_redeemed_at;
+		DELETE FROM schema_migrations WHERE version = '0010_cdk_credential_redemption.sql'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.LoginCDK(ctx, items[0].Code, device); !errors.Is(err, auth.ErrInvalidCDK) {
+		t.Fatalf("previously used CDK login after migration: %v", err)
+	}
+	if _, err := service.LoginCDK(ctx, items[1].Code, device); err != nil {
+		t.Fatalf("unused CDK login after migration: %v", err)
 	}
 }
 

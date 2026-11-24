@@ -210,10 +210,8 @@ if(__contentEl)__contentEl.addEventListener('scroll',updateBackTop,{passive:true
 /* ---------- 视图 / 选中 ---------- */
 function showView(name){
   currentView=name;
-  ['new','detail','settings'].forEach(v=>show('#view-'+v,v===name));
+  ['new','detail'].forEach(v=>show('#view-'+v,v===name));
   $('#new-task-btn').classList.toggle('active',name==='new');
-  $('#settings-link').classList.toggle('active',name==='settings');
-  if(name==='settings')loadProviders();
   if(name==='new'&&!document.hidden)void refreshDailyUsage();
 }
 function selectJob(id,job=null){
@@ -236,39 +234,40 @@ function selectJob(id,job=null){
   if(id&&matchMedia('(max-width:960px)').matches)$('#view-detail').scrollIntoView({behavior:'smooth',block:'start'});
 }
 $('#new-task-btn').addEventListener('click',()=>selectJob(null));
-$('#settings-link').addEventListener('click',e=>{e.preventDefault();selectJob(null);showView('settings')});
 
 /* ---------- 后台管理系统 ---------- */
-function openAdminConsole(){
+function openAdminConsole(view='dashboard'){
   if(session?.user?.role!=='admin')return;
-  if(adminOpen){
-    toast('已在后台','info');
-    return;
-  }
+  if(adminOpen)return;
+  adminReturnFocus=view==='usage'?(matchMedia('(max-width:960px)').matches?'#sidebar-toggle':'#settings-link'):'#admin-console-btn';
+  stopTaskMusic();
   adminOpen=true;adminMode=false;selectedId=null;currentJob=null;
   setSidebar(false);
   lastStatsSig=''; // 重新打开时按当前主题重绘图表，避免沿用旧配色
   show('#app',false);show('#admin-console',true);
   syncHeaderActions();
-  adminShowView('dashboard');
-  $('#admin-back-front').focus();
+  adminShowView(view);
+  $(view==='usage'?'#admin-usage-heading':'#admin-back-front').focus();
 }
+let adminReturnFocus='#admin-console-btn';
 function closeAdminConsole(){
   resetAdminPasswordForm();
+  $('#provider-form').reset();
   adminOpen=false;adminMode=false;
   setSidebar(false);
   show('#admin-console',false);show('#app',true);
   syncHeaderActions();
-  $('#admin-console-btn').focus();
   selectJob(null);
-  pollVisibleJobs(true);
+  $(adminReturnFocus).focus();
+  if(!document.hidden)loadJobs(true);
 }
 function adminShowView(name){
   adminDetailLoadId++;
   if(name!=='detail'){adminMode=false;adminDetailSig=''}
   if(adminCurrentView==='password'&&name!=='password')resetAdminPasswordForm();
+  if(adminCurrentView==='providers'&&name!=='providers')$('#provider-form').reset();
   adminCurrentView=name;
-  ['dashboard','jobs','users','cdks','usage','password','detail'].forEach(v=>show('#admin-view-'+v,v===name));
+  ['dashboard','jobs','users','cdks','usage','providers','password','detail'].forEach(v=>show('#admin-view-'+v,v===name));
   document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>{
     const current=btn.dataset.adminView===name;
     btn.classList.toggle('active',current);
@@ -279,8 +278,10 @@ function adminShowView(name){
   if(name==='users')loadAdminUsers();
   if(name==='cdks')void loadAdminCDKs();
   if(name==='usage')requestAdminUsageSettings();
+  if(name==='providers')void loadProviders();
 }
-$('#admin-console-btn').addEventListener('click',openAdminConsole);
+$('#admin-console-btn').addEventListener('click',()=>openAdminConsole());
+$('#settings-link').addEventListener('click',()=>openAdminConsole('usage'));
 $('#admin-back-front').addEventListener('click',closeAdminConsole);
 $('#admin-refresh-stats').addEventListener('click',async e=>{
   const btn=e.currentTarget;
@@ -330,6 +331,7 @@ function pollVisibleJobs(force=false){
     return;
   }
   if(due('jobs',jobsCache.some(job=>jobIsActive(job.status))))loadJobs(true);
+  if(currentView==='new'&&due('usage',false))void refreshDailyUsage();
   if(!selectedId)return;
   const active=jobIsActive(currentJob?.status);
   if(!due('detail',active))return;
@@ -342,10 +344,7 @@ function startJobPolling(){
 }
 document.addEventListener('visibilitychange',()=>{
   startJobPolling();
-  if(!document.hidden){
-    pollVisibleJobs(true);
-    if(!adminOpen&&currentView==='new')void refreshDailyUsage();
-  }
+  if(!document.hidden)pollVisibleJobs(true);
 });
 
 let adminPasswordPendingEpoch=null;
@@ -367,6 +366,7 @@ function enter(value){
   pollRequestedAt={};adminStatsHaveActive=false;
   $('#capture-feedback').textContent='';
   $('#daily-usage')?.classList.add('hidden');
+  resetCapturePermissions();
   jobsCache=[];adminJobsCache=[];adminUsers=[];selectedId=null;currentJob=null;detailSig='';
   lastStatsSig='';lastAdminJobsSig='';
   archiveDownloads.clear();
@@ -383,6 +383,7 @@ function enter(value){
   if($('#admin-user-avatar'))$('#admin-user-avatar').textContent=(value?.user?.displayName||'?').trim().charAt(0).toUpperCase();
   show('#login',!value);show('#app',!!value);show('#admin-console',false);
   resetAdminPasswordForm();
+  $('#provider-form').reset();
   resetCDKView();
   syncHeaderActions();
   // 未登录时隐藏左上角菜单按钮：导航抽屉是登录后的功能，登录页点了只会打开空的抽屉。
@@ -391,7 +392,6 @@ function enter(value){
   document.querySelectorAll('.admin-only').forEach(el=>el.classList.toggle('hidden',value?.user?.role!=='admin'));
   if(value){
     selectJob(null);
-    if(value.user?.role==='admin')loadProviders();
     if(!document.hidden)loadJobs();
     startJobPolling();
   }else{
@@ -533,12 +533,41 @@ async function saveOwnPassword(values){
 }
 
 /* ---------- API Key 设置 ---------- */
-async function loadProviders(){try{const data=await api('/api/v1/admin/settings/providers'),p=data.providers;$('#aliyun-key').placeholder=`当前状态：${p.aliyunConfigured?(p.aliyunAvailable?'已配置，可作备用':'已配置，但缺少公网地址'):'未配置'}`;$('#silicon-key').placeholder=`当前状态：${p.siliconFlowConfigured?'已配置，默认使用':'未配置'}`;if($('#asr-model')){$('#asr-model').value=p.asrModel||'FunAudioLLM/SenseVoiceSmall';$('#asr-model').placeholder=`当前模型：${p.asrModel||'FunAudioLLM/SenseVoiceSmall'}`}}catch(err){toast(err.message,'error')}}
-$('#provider-form').addEventListener('submit',async e=>{e.preventDefault();const body={};const model=$('#asr-model')?.value.trim();if(model)body.asrModel=model;if($('#clear-aliyun').checked)body.aliyunApiKey='';else if($('#aliyun-key').value.trim())body.aliyunApiKey=$('#aliyun-key').value.trim();if($('#clear-silicon').checked)body.siliconFlowApiKey='';else if($('#silicon-key').value.trim())body.siliconFlowApiKey=$('#silicon-key').value.trim();if(!Object.keys(body).length)return toast('请输入需要保存的 Key、模型，或勾选清除','warning');try{await api('/api/v1/admin/settings/providers',{method:'PUT',body:JSON.stringify(body)});$('#aliyun-key').value=$('#silicon-key').value='';$('#clear-aliyun').checked=$('#clear-silicon').checked=false;toast('配置已安全保存并立即生效','success');await loadProviders()}catch(err){toast(err.message,'error')}});
+function providerViewActive(epoch){
+  return epoch===sessionEpoch&&adminOpen&&adminCurrentView==='providers';
+}
+async function loadProviders(){
+  const epoch=sessionEpoch;
+  try{
+    const {providers:p}=await api('/api/v1/admin/settings/providers');
+    if(!providerViewActive(epoch))return;
+    $('#aliyun-key').placeholder=`当前状态：${p.aliyunConfigured?(p.aliyunAvailable?'已配置，可作备用':'已配置，但缺少公网地址'):'未配置'}`;
+    $('#silicon-key').placeholder=`当前状态：${p.siliconFlowConfigured?'已配置，默认使用':'未配置'}`;
+    $('#asr-model').value=p.asrModel||'FunAudioLLM/SenseVoiceSmall';
+  }catch(err){if(providerViewActive(epoch))toast(err.message,'error')}
+}
+$('#provider-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const epoch=sessionEpoch;
+  if(!providerViewActive(epoch))return;
+  const body={},model=$('#asr-model').value.trim();
+  if(model)body.asrModel=model;
+  if($('#clear-aliyun').checked)body.aliyunApiKey='';
+  else if($('#aliyun-key').value.trim())body.aliyunApiKey=$('#aliyun-key').value.trim();
+  if($('#clear-silicon').checked)body.siliconFlowApiKey='';
+  else if($('#silicon-key').value.trim())body.siliconFlowApiKey=$('#silicon-key').value.trim();
+  if(!Object.keys(body).length)return toast('请输入需要保存的 Key、模型，或勾选清除','warning');
+  try{
+    await api('/api/v1/admin/settings/providers',{method:'PUT',body:JSON.stringify(body)});
+    if(!providerViewActive(epoch))return;
+    $('#aliyun-key').value=$('#silicon-key').value='';
+    $('#clear-aliyun').checked=$('#clear-silicon').checked=false;
+    toast('配置已保存并生效','success');
+    await loadProviders();
+  }catch(err){if(providerViewActive(epoch))toast(err.message,'error')}
+});
 
-/* ---------- 新建任务 ---------- */
 /* ---------- 管理后台：使用设置 ---------- */
-const adminUsageNumberFields=['dailyTaskLimit','dailyAsrBudgetCny','monthlyAsrBudgetCny','asrPricePerMinuteCny'];
 const adminUsagePermissionFields=['allowInfo','allowDownload','allowTranscribe'];
 let adminUsagePending=null;
 
@@ -553,18 +582,24 @@ async function requestAdminUsageSettings(body){
   fields.disabled=true;
   refresh.disabled=true;
   form.setAttribute('aria-busy','true');
+  status.classList.remove('failed');
   status.textContent=saving?'正在保存设置…':'正在加载设置…';
   try{
     const options=saving?{method:'PUT',body:JSON.stringify(body)}:{cache:'no-store'};
     const {settings}=await api('/api/v1/admin/settings/usage',options);
     if(!current())return;
-    for(const name of adminUsageNumberFields)form.elements.namedItem(name).value=String(settings[name]);
+    form.elements.namedItem('dailyTaskLimit').value=String(settings.dailyTaskLimit);
     for(const name of adminUsagePermissionFields)form.elements.namedItem(name).checked=settings[name];
+    if(saving){
+      dailyUsageRequestId++;
+      applyCapturePermissions(settings);
+    }
     fields.disabled=false;
     status.textContent=saving?'使用设置已保存':'';
   }catch(err){
     if(!current())return;
     fields.disabled=!saving;
+    status.classList.add('failed');
     status.textContent=err.message;
   }finally{
     if(current()){
@@ -580,46 +615,100 @@ $('#admin-usage-form').addEventListener('submit',e=>{
   if($('#admin-usage-fields').disabled)return;
   const form=e.currentTarget;
   if(!form.reportValidity())return;
-  const body={};
-  for(const name of adminUsageNumberFields)body[name]=form.elements.namedItem(name).valueAsNumber;
+  const body={dailyTaskLimit:form.elements.namedItem('dailyTaskLimit').valueAsNumber};
   for(const name of adminUsagePermissionFields)body[name]=form.elements.namedItem(name).checked;
   return requestAdminUsageSettings(body);
 });
 
+/* ---------- 新建任务 ---------- */
 let dailyUsageRequestId=0;
+let capturePermissions=null,captureUsageError=false;
+function captureAction(){
+  if(!capturePermissions)return null;
+  if(capturePermissions.allowInfo&&$('#info-only').checked)return 'info';
+  if(capturePermissions.allowTranscribe&&$('#with-transcribe').checked)return 'full';
+  return capturePermissions.allowDownload?'download':null;
+}
+function renderCaptureAction(){
+  const action=captureAction(),button=$('#submit-task');
+  const hints={info:'仅获取作品信息。',full:'下载媒体并转写视频口播。',download:'下载媒体。图文作品保留原配文。'};
+  const anyAllowed=capturePermissions&&adminUsagePermissionFields.some(name=>capturePermissions[name]);
+  const hint=$('#capture-action-hint');
+  const message=action?hints[action]:!capturePermissions?
+    (captureUsageError?'无法加载任务权限。':'正在读取任务权限…'):
+    (anyAllowed?'请选择任务类型。':'管理员已关闭所有新建任务类型。');
+  if(hint.textContent!==message)hint.textContent=message;
+  button.disabled=!action||button.getAttribute('aria-busy')==='true';
+}
+function applyCapturePermissions(policy){
+  const changed=adminUsagePermissionFields.some(name=>policy?.[name]!==capturePermissions?.[name]);
+  capturePermissions=policy;
+  const {allowInfo,allowDownload,allowTranscribe}=policy||{};
+  const info=$('#info-only'),transcribe=$('#with-transcribe');
+  show('#capture-options',!!(allowInfo||allowTranscribe));
+  show('#info-only-wrap',!!allowInfo);
+  show('#with-transcribe-wrap',!!allowTranscribe);
+  if(!allowInfo)info.checked=false;
+  if(!allowTranscribe)transcribe.checked=false;
+  if(changed&&!allowDownload&&!info.checked&&!transcribe.checked){
+    info.checked=!!allowInfo;
+    transcribe.checked=!allowInfo&&!!allowTranscribe;
+  }
+  info.disabled=!allowInfo||(!allowDownload&&!allowTranscribe);
+  transcribe.disabled=!allowTranscribe||(!allowDownload&&!allowInfo);
+  renderCaptureAction();
+}
+function resetCapturePermissions(){
+  $('#submit-task').setAttribute('aria-busy','false');
+  captureUsageError=false;
+  show('#capture-usage-retry',false);
+  applyCapturePermissions(null);
+}
 async function refreshDailyUsage(){
   const label=$('#daily-usage');
   if(!session||!label)return;
   const requestId=++dailyUsageRequestId,epoch=sessionEpoch;
   const current=()=>requestId===dailyUsageRequestId&&epoch===sessionEpoch&&!!session;
+  pollRequestedAt.usage=Date.now();
   try{
     const {usage}=await api('/api/v1/jobs/usage');
     if(!current())return;
+    if(adminUsagePermissionFields.some(name=>typeof usage?.[name]!=='boolean'))throw new Error('任务权限数据不可用');
+    captureUsageError=false;
+    show('#capture-usage-retry',false);
+    applyCapturePermissions(usage);
     const {used,limit,cdk}=usage;
     const daily=limit>0?`今日剩余 ${Math.max(0,limit-used)} / ${limit} 次 · 北京时间零点重置`:`今日已用 ${used} 次 · 不限次数`;
     const lifetime=cdk?`CDK 剩余 ${Math.max(0,cdk.limit-cdk.used)} / ${cdk.limit} 次`:'';
     label.textContent=lifetime&&limit>0?`${lifetime} · ${daily}`:lifetime||daily;
     label.classList.remove('hidden');
   }catch{
-    if(current())label.classList.add('hidden');
+    if(!current())return;
+    label.classList.add('hidden');
+    captureUsageError=true;
+    show('#capture-usage-retry',true);
+    renderCaptureAction();
   }
 }
 
-$('#submit-task').textContent='开始提取';
-const syncTranscribeOption=()=>{const infoOnly=$('#info-only').checked;$('#with-transcribe').disabled=infoOnly;$('#with-transcribe-wrap').classList.toggle('disabled',infoOnly)};
-$('#info-only').addEventListener('change',syncTranscribeOption);syncTranscribeOption();
+$('#capture-usage-retry').addEventListener('click',refreshDailyUsage);
+for(const [selected,other] of [['#info-only','#with-transcribe'],['#with-transcribe','#info-only']]){
+  $(selected).addEventListener('change',()=>{
+    if($(selected).checked)$(other).checked=false;
+    renderCaptureAction();
+  });
+}
 $('#capture-form').addEventListener('submit',async e=>{
   e.preventDefault();
   const button=e.submitter||$('#submit-task');
-  if(button.disabled)return;
+  const action=captureAction();
+  if(button.disabled||!action)return;
   const shareText=$('#share-text').value.trim();
   if(!shareText){$('#share-text').focus();return toast('请先粘贴抖音分享文本或作品链接','warning')}
   const epoch=sessionEpoch;
-  const infoOnly=$('#info-only').checked;
-  const action=infoOnly?'info':($('#with-transcribe').checked?'full':'download');
   const feedback=$('#capture-feedback');
   feedback.classList.remove('failed');
-  feedback.textContent=infoOnly?'正在读取作品信息…':'正在提交任务…';
+  feedback.textContent=action==='info'?'正在读取作品信息…':'正在提交任务…';
   button.disabled=true;button.setAttribute('aria-busy','true');
   try{
     const data=await api('/api/v1/jobs',{method:'POST',headers:{'Idempotency-Key':uuidv4()},body:JSON.stringify({shareText,action,options:{force:false,keepVideo:action==='full',languageHints:['zh','en'],hotwords:[]}})});
@@ -640,7 +729,12 @@ $('#capture-form').addEventListener('submit',async e=>{
       void refreshDailyUsage();
     }
   }
-  finally{button.disabled=false;button.setAttribute('aria-busy','false')}
+  finally{
+    if(epoch===sessionEpoch){
+      button.setAttribute('aria-busy','false');
+      renderCaptureAction();
+    }
+  }
 });
 
 /* ---------- 任务列表 ---------- */

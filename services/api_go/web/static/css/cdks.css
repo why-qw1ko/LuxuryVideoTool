@@ -3,28 +3,43 @@
 #cdk-login-form{gap:20px}
 #cdk-login-form>button{margin-top:4px;width:100%}
 
-#admin-view-cdks{overflow-y:auto}
+#admin-view-cdks{--cdk-action-width:288px;overflow-y:auto}
 #admin-view-cdks>*{flex-shrink:0}
-.admin-cdk-form{display:grid;grid-template-columns:repeat(2,minmax(0,176px)) auto;align-items:end;justify-content:start;gap:12px}
+.admin-cdk-form{display:grid;grid-template-columns:repeat(2,minmax(0,176px)) auto;align-items:end;justify-content:start;gap:var(--space-3)}
 .admin-cdk-form label{min-width:0}
-.admin-cdk-form button{min-height:40px}
+.admin-cdk-form button{min-height:var(--control-h)}
 #admin-cdk-hint,#admin-cdk-status,#admin-cdk-save-hint{margin:0}
 #admin-cdk-status:empty,#admin-cdk-pager:empty{display:none}
-.admin-cdk-generated{display:grid;gap:12px;max-width:704px;padding:16px;border:1px solid var(--border);border-radius:var(--radius);background:var(--input)}
-#admin-cdk-codes{resize:vertical;font-family:ui-monospace,monospace;overflow-wrap:anywhere}
-.admin-cdk-actions{display:flex;flex-wrap:wrap;gap:8px}
-.admin-cdk-items{display:grid;gap:8px;margin:0;padding:0;list-style:none}
-.admin-cdk-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 16px;border:1px solid var(--border);border-radius:var(--radius)}
-.admin-cdk-row dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) minmax(9.5rem,1fr);flex:1;gap:8px 16px;min-width:0;margin:0}
-.admin-cdk-row dt{font-size:12px;color:var(--text-secondary)}
-.admin-cdk-row dd{margin:0;overflow-wrap:anywhere}
-.admin-cdk-row time{font-variant-numeric:tabular-nums}
-.admin-cdk-row .admin-card-actions{padding:0;border:0}
+.admin-cdk-generated{display:grid;gap:var(--space-3);max-width:704px;padding:var(--space-4);border:1px solid var(--border);border-radius:var(--radius);background:var(--input)}
+#admin-cdk-codes{resize:vertical;background:var(--card);font-family:ui-monospace,monospace;overflow-wrap:anywhere}
+.admin-cdk-actions{display:flex;flex-wrap:wrap;gap:var(--space-2)}
+.admin-cdk-items{display:grid;gap:var(--space-2);margin:0;padding:0;list-style:none}
+.admin-cdk-row{
+  display:grid;grid-template-columns:minmax(0,1fr) var(--cdk-action-width);align-items:center;gap:var(--space-4);
+  padding:var(--space-3) var(--space-4);border:1px solid var(--border);border-radius:var(--radius);background:var(--card)
+}
+.admin-cdk-row dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) minmax(9.5rem,1fr);gap:var(--space-2) var(--space-4);min-width:0;margin:0}
+.admin-cdk-row dt{font-size:12px;line-height:16px;color:var(--text-secondary)}
+.admin-cdk-row dd{margin:var(--space-1) 0 0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.admin-cdk-row .admin-card-actions{
+  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--space-2);
+  width:min(100%,var(--cdk-action-width));justify-self:end;padding:0;border:0
+}
+.admin-cdk-row .admin-card-actions button{
+  min-width:0;min-height:var(--control-sm);padding:4px;border:0;border-radius:var(--radius);
+  background:transparent;color:var(--primary);line-height:16px
+}
+.admin-cdk-row .admin-card-actions button.danger{color:var(--danger)}
+.admin-cdk-row .admin-card-actions button:hover:not(:disabled){background:var(--primary-light)}
+.admin-cdk-row .admin-card-actions button.danger:hover:not(:disabled){background:var(--danger-light)}
+.admin-cdk-row .admin-card-actions button:hover:disabled{background:transparent}
 @media(max-width:1100px){
-  .admin-cdk-row{align-items:stretch;flex-direction:column;gap:8px}
+  .admin-cdk-row{grid-template-columns:minmax(0,1fr);gap:var(--space-2)}
 }
 @media(max-width:620px){
-  .admin-cdk-form{grid-template-columns:1fr 1fr;justify-content:stretch}
+  .admin-cdk-form{grid-template-columns:repeat(2,minmax(0,1fr));justify-content:stretch}
   .admin-cdk-form button{grid-column:1/-1;justify-self:start}
-  .admin-cdk-row dl{grid-template-columns:1fr 1fr}
+  .admin-cdk-row dl{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .admin-cdk-row .admin-card-actions{grid-template-columns:repeat(2,minmax(0,1fr));width:100%}
+  .admin-cdk-row .admin-card-actions button{min-height:var(--control-h)}
 }
