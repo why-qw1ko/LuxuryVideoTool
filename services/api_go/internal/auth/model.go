@@ -32,6 +32,7 @@ type User struct {
 	PasswordHash       string
 	Role               Role
 	IsActive           bool
+	IsCDK              bool
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 	LastLoginAt        *time.Time
@@ -60,9 +61,11 @@ type Principal struct {
 	UserID    string
 	SessionID string
 	Role      Role
+	IsCDK     bool
 }
 
 type Repository interface {
+	CDKRepository
 	CreateUser(ctx context.Context, user User) error
 	UpdatePassword(ctx context.Context, userID, passwordHash string, now time.Time) error
 	SetUserActive(ctx context.Context, userID string, active bool, now time.Time) error

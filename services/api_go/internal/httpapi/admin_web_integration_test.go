@@ -54,14 +54,14 @@ func webRequest(method, path string, body any, cookies []*http.Cookie) *http.Req
 func TestWebCookieAuthFlow(t *testing.T) {
 	service, _, closeDB := testAuthService(t)
 	defer closeDB()
-	if _, err := service.CreateUser(context.Background(), "owner", "Owner", "correct horse battery staple", auth.RoleAdmin); err != nil {
+	if _, err := service.CreateUser(context.Background(), "owner", "Owner", "OwnerPass!", auth.RoleAdmin); err != nil {
 		t.Fatal(err)
 	}
 	handler := New(Dependencies{Build: version.Info{Version: "test"}, Auth: service, LoginRateLimit: 5, Ready: func() error { return nil }})
 
 	login := httptest.NewRecorder()
 	handler.ServeHTTP(login, webRequest(http.MethodPost, "/api/v1/auth/login", map[string]any{
-		"username": "owner", "password": "correct horse battery staple",
+		"username": "owner", "password": "OwnerPass!",
 		"device": map[string]any{"id": "web-device", "name": "Chrome", "platform": "windows", "appVersion": "web-0.1.0"},
 	}, nil))
 	if login.Code != http.StatusOK {
@@ -143,11 +143,11 @@ func TestWebCookieAuthFlow(t *testing.T) {
 func TestAdminUsersAndJobsFlow(t *testing.T) {
 	service, db, closeDB := testAuthService(t)
 	defer closeDB()
-	admin, err := service.CreateUser(context.Background(), "admin", "Admin", "admin password 123", auth.RoleAdmin)
+	admin, err := service.CreateUser(context.Background(), "admin", "Admin", "AdminPass!", auth.RoleAdmin)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := service.CreateUser(context.Background(), "user-other", "Other", "user password 123", auth.RoleUser)
+	other, err := service.CreateUser(context.Background(), "user-other", "Other", "UserPass!", auth.RoleUser)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestAdminUsersAndJobsFlow(t *testing.T) {
 	}
 	handler := New(Dependencies{Build: version.Info{Version: "test"}, Auth: service, Jobs: jobService, LoginRateLimit: 5, Ready: func() error { return nil }})
 
-	adminLogin := performJSON(handler, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "admin", "password": "admin password 123", "device": map[string]any{"id": "pc", "name": "PC", "platform": "windows", "appVersion": "1.0.0"}}, "")
+	adminLogin := performJSON(handler, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "admin", "password": "AdminPass!", "device": map[string]any{"id": "pc", "name": "PC", "platform": "windows", "appVersion": "1.0.0"}}, "")
 	if adminLogin.Code != http.StatusOK {
 		t.Fatalf("admin login status = %d", adminLogin.Code)
 	}
@@ -172,11 +172,11 @@ func TestAdminUsersAndJobsFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	created := performJSON(handler, http.MethodPost, "/api/v1/admin/users", map[string]any{"username": "bob", "displayName": "Bob", "password": "bob password 123", "role": "user"}, pair.AccessToken)
+	created := performJSON(handler, http.MethodPost, "/api/v1/admin/users", map[string]any{"username": "bob", "displayName": "Bob", "password": "Bob123", "role": "user"}, pair.AccessToken)
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create user status = %d, body = %s", created.Code, created.Body.String())
 	}
-	duplicate := performJSON(handler, http.MethodPost, "/api/v1/admin/users", map[string]any{"username": "BOB", "displayName": "Bob 2", "password": "bob password 123", "role": "user"}, pair.AccessToken)
+	duplicate := performJSON(handler, http.MethodPost, "/api/v1/admin/users", map[string]any{"username": "BOB", "displayName": "Bob 2", "password": "Bob123", "role": "user"}, pair.AccessToken)
 	if duplicate.Code != http.StatusConflict {
 		t.Fatalf("duplicate user status = %d, want 409", duplicate.Code)
 	}
@@ -215,7 +215,7 @@ func TestAdminUsersAndJobsFlow(t *testing.T) {
 	}
 
 	// 普通用户访问管理接口必须 403。
-	userLogin := performJSON(handler, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "bob", "password": "bob password 123", "device": map[string]any{"id": "pc2", "name": "PC", "platform": "windows", "appVersion": "1.0.0"}}, "")
+	userLogin := performJSON(handler, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "bob", "password": "Bob123", "device": map[string]any{"id": "pc2", "name": "PC", "platform": "windows", "appVersion": "1.0.0"}}, "")
 	if userLogin.Code != http.StatusOK {
 		t.Fatalf("user login status = %d, body = %s", userLogin.Code, userLogin.Body.String())
 	}
@@ -227,12 +227,33 @@ func TestAdminUsersAndJobsFlow(t *testing.T) {
 	if forbidden.Code != http.StatusForbidden {
 		t.Fatalf("non-admin admin access status = %d, want 403", forbidden.Code)
 	}
+	resetPath := "/api/v1/admin/users/" + userPair.User.ID + "/password"
+	for _, password := range []string{"12345", "1234567890123"} {
+		invalidUser := performJSON(handler, http.MethodPost, "/api/v1/admin/users", map[string]any{"username": "invalid", "displayName": "Invalid", "password": password, "role": "user"}, pair.AccessToken)
+		invalidReset := performJSON(handler, http.MethodPost, resetPath, map[string]any{"password": password}, pair.AccessToken)
+		if invalidUser.Code != http.StatusBadRequest || invalidReset.Code != http.StatusBadRequest {
+			t.Fatalf("password length %d: create = %d, reset = %d", len(password), invalidUser.Code, invalidReset.Code)
+		}
+	}
+	const resetPassword = "123456789012"
+	reset := performJSON(handler, http.MethodPost, resetPath, map[string]any{"password": resetPassword}, pair.AccessToken)
+	if reset.Code != http.StatusOK {
+		t.Fatalf("reset password status = %d, body = %s", reset.Code, reset.Body.String())
+	}
+	revoked := performJSON(handler, http.MethodGet, "/api/v1/auth/sessions", nil, userPair.AccessToken)
+	if revoked.Code != http.StatusUnauthorized {
+		t.Fatalf("session after password reset = %d, want 401", revoked.Code)
+	}
+	resetLogin := performJSON(handler, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "bob", "password": resetPassword, "device": map[string]any{"id": "pc3", "name": "PC", "platform": "windows", "appVersion": "1.0.0"}}, "")
+	if resetLogin.Code != http.StatusOK {
+		t.Fatalf("login with reset password = %d, body = %s", resetLogin.Code, resetLogin.Body.String())
+	}
 }
 
 func TestJobsListPagination(t *testing.T) {
 	service, db, closeDB := testAuthService(t)
 	defer closeDB()
-	user, err := service.CreateUser(context.Background(), "user-page", "PageUser", "user password 123", auth.RoleUser)
+	user, err := service.CreateUser(context.Background(), "user-page", "PageUser", "UserPass!", auth.RoleUser)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +273,7 @@ func TestJobsListPagination(t *testing.T) {
 		}
 	}
 	handler := New(Dependencies{Build: version.Info{Version: "test"}, Auth: service, Jobs: jobService, LoginRateLimit: 5, Ready: func() error { return nil }})
-	login := performJSON(handler, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "user-page", "password": "user password 123", "device": map[string]any{"id": "pc", "name": "PC", "platform": "windows", "appVersion": "1.0.0"}}, "")
+	login := performJSON(handler, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "user-page", "password": "UserPass!", "device": map[string]any{"id": "pc", "name": "PC", "platform": "windows", "appVersion": "1.0.0"}}, "")
 	if login.Code != http.StatusOK {
 		t.Fatalf("login status = %d", login.Code)
 	}

@@ -39,14 +39,14 @@ func (s *Service) CreateInfo(ctx context.Context, input CreateInput) (Job, bool,
 	}
 	work, _, err := s.resolver.Resolve(ctx, input.ShareText, input.Force)
 	if err != nil {
-		code, message := resolverError(err)
-		if failErr := s.repo.Fail(context.WithoutCancel(ctx), job.ID, code, message, s.now().UTC()); failErr != nil { return Job{}, false, errors.Join(err, failErr) }
+		code, message, _ := resolverError(err)
+		if failErr := s.repo.Fail(context.WithoutCancel(ctx), job.ID, "", code, message, s.now().UTC()); failErr != nil { return Job{}, false, errors.Join(err, failErr) }
 		failed, findErr := s.repo.FindByID(context.WithoutCancel(ctx), input.UserID, job.ID)
 		if findErr != nil { return Job{}, false, errors.Join(err, findErr) }
 		return failed, false, nil
 	}
 	completed := s.now().UTC()
-	if err := s.repo.CompleteInfo(ctx, job.ID, work, completed); err != nil { return Job{}, false, err }
+	if err := s.repo.CompleteInfo(context.WithoutCancel(ctx), job.ID, "", work, completed); err != nil { return Job{}, false, err }
 	created, err := s.repo.FindByID(ctx, input.UserID, job.ID)
 	return created, false, err
 }
@@ -144,11 +144,17 @@ func (s *Service) Cancel(ctx context.Context, userID, jobID string) (Job, error)
 }
 func (s *Service) Retry(ctx context.Context, userID, jobID string) (Job, error) { if err := s.repo.Retry(ctx, userID, jobID, s.now().UTC()); err != nil { return Job{}, err }; return s.repo.FindByID(ctx, userID, jobID) }
 
-func resolverError(err error) (string, string) {
+func resolverError(err error) (code, message string, terminal bool) {
 	switch {
-	case errors.Is(err, resolver.ErrInvalidShareLink): return "INVALID_SHARE_LINK", "未找到有效的抖音作品链接"
-	case errors.Is(err, resolver.ErrURLNotAllowed): return "URL_NOT_ALLOWED", "链接目标不允许访问"
-	case errors.Is(err, resolver.ErrWorkUnavailable): return "DOUYIN_WORK_UNAVAILABLE", "作品不存在或不可访问"
-	default: return "DOUYIN_RESOLVE_FAILED", "无法解析该作品，请确认链接仍然有效"
+	case errors.Is(err, resolver.ErrInvalidShareLink):
+		return "INVALID_SHARE_LINK", "未找到有效的抖音作品链接", true
+	case errors.Is(err, resolver.ErrURLNotAllowed):
+		return "URL_NOT_ALLOWED", "链接目标不允许访问", true
+	case errors.Is(err, resolver.ErrWorkUnavailable):
+		return "DOUYIN_WORK_UNAVAILABLE", "作品不存在或不可访问", true
+	case errors.Is(err, resolver.ErrResolveTimeout), errors.Is(err, context.DeadlineExceeded):
+		return "DOUYIN_RESOLVE_TIMEOUT", "读取作品信息超时，请稍后重试", true
+	default:
+		return "DOUYIN_RESOLVE_FAILED", "无法解析该作品，请确认链接仍然有效", errors.Is(err, resolver.ErrResolveFailed)
 	}
 }

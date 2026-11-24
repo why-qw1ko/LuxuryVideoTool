@@ -137,8 +137,8 @@ type Repository interface {
 	FindByIdempotencyKey(ctx context.Context, userID, key string) (Job, error)
 	CreateJob(ctx context.Context, job Job, dailyTaskLimit int) error
 	DailyTaskUsage(ctx context.Context, userID, day string) (int, error)
-	CompleteInfo(ctx context.Context, jobID string, work resolver.Work, at time.Time) error
-	Fail(ctx context.Context, jobID, code, message string, at time.Time) error
+	CompleteInfo(ctx context.Context, jobID, owner string, work resolver.Work, at time.Time) error
+	Fail(ctx context.Context, jobID, owner, code, message string, at time.Time) error
 	FindByID(ctx context.Context, userID, jobID string) (Job, error)
 	FindAnyByID(ctx context.Context, jobID string) (Job, error)
 	List(ctx context.Context, input ListInput) (JobPage, error)
@@ -149,6 +149,7 @@ type Repository interface {
 	ClaimNext(ctx context.Context, owner string, now time.Time, lease time.Duration) (Job, error)
 	Heartbeat(ctx context.Context, jobID, owner string, now time.Time, lease time.Duration) error
 	SetResolved(ctx context.Context, jobID, owner string, work resolver.Work, at time.Time) error
+	RequeueInterruptedResolve(ctx context.Context, jobID, owner string, at time.Time) error
 	SetStage(ctx context.Context, jobID, owner, status string, progress int, message string, at time.Time) error
 	CompleteDownload(ctx context.Context, jobID, owner string, fileID string, at time.Time) error
 	RetryLater(ctx context.Context, jobID, owner, code, message string, retryAt, at time.Time) error

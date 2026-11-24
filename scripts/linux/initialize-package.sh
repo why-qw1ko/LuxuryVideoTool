@@ -16,12 +16,8 @@ if [[ ! -f "$key_path" ]]; then
   chmod 600 "$key_path"
 fi
 
-read -r -s -p "Enter administrator password (at least 12 characters): " password
+read -r -s -p "Enter administrator password (6 to 12 characters): " password
 printf '\n'
-if (( ${#password} < 12 )); then
-  echo "Password must contain at least 12 characters." >&2
-  exit 1
-fi
 
 password_file="$(mktemp)"
 trap 'rm -f "$password_file"' EXIT

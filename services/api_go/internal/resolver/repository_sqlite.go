@@ -32,6 +32,7 @@ func (c *SQLiteCache) Save(ctx context.Context, work Work) (Work, error) {
 	metadata["images"], metadata["hashtags"] = work.Images, work.Hashtags
 	metadata["musicUrl"], metadata["musicTitle"], metadata["musicArtist"] = work.MusicURL, work.MusicTitle, work.MusicArtist
 	metadata["videoUrlCandidates"], metadata["musicUrlCandidates"] = work.VideoURLCandidates, work.MusicURLCandidates
+	metadata["coverUrlCandidates"] = work.CoverURLCandidates
 	encoded, err := json.Marshal(metadata)
 	if err != nil { return Work{}, fmt.Errorf("encode work metadata: %w", err) }
 	if work.ID == "" { work.ID, err = auth.NewID(now); if err != nil { return Work{}, err } }
@@ -81,6 +82,7 @@ func scanWork(row rowScanner) (Work, error) {
 		work.MusicArtist, _ = work.Metadata["musicArtist"].(string)
 		remarshal(work.Metadata["videoUrlCandidates"], &work.VideoURLCandidates)
 		remarshal(work.Metadata["musicUrlCandidates"], &work.MusicURLCandidates)
+		remarshal(work.Metadata["coverUrlCandidates"], &work.CoverURLCandidates)
 	}
 	return work, nil
 }

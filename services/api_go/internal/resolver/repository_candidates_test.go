@@ -25,6 +25,7 @@ func TestSQLiteCachePreservesMediaCandidates(t *testing.T) {
 			DouyinWorkID: "123", Type: "video", CanonicalURL: "https://www.douyin.com/video/123",
 			VideoURL: "https://example.test/video-a.mp4", VideoURLCandidates: []string{"https://example.test/video-a.mp4", "https://example.test/video-b.mp4"},
 			MusicURL: "https://example.test/music-a.mp3", MusicURLCandidates: []string{"https://example.test/music-a.mp3", "https://example.test/music-b.mp3"},
+			CoverURL: "https://example.test/cover-a.jpg", CoverURLCandidates: []string{"https://example.test/cover-a.jpg", "https://example.test/cover-b.jpg"},
 		},
 		{
 			DouyinWorkID: "456", Type: "note", CanonicalURL: "https://www.douyin.com/note/456",
@@ -46,13 +47,14 @@ func TestSQLiteCachePreservesMediaCandidates(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, got := range []Work{saved, fresh} {
-			if got.VideoURL != work.VideoURL || got.MusicURL != work.MusicURL ||
+			if got.VideoURL != work.VideoURL || got.MusicURL != work.MusicURL || got.CoverURL != work.CoverURL ||
 				!reflect.DeepEqual(got.VideoURLCandidates, work.VideoURLCandidates) ||
+				!reflect.DeepEqual(got.CoverURLCandidates, work.CoverURLCandidates) ||
 				!reflect.DeepEqual(got.MusicURLCandidates, work.MusicURLCandidates) || !reflect.DeepEqual(got.Images, work.Images) {
 				t.Fatalf("cached work %s lost media candidates: %#v", work.DouyinWorkID, got)
 			}
 		}
-		if _, err := cache.FindFresh(ctx, work.DouyinWorkID, "6", now.Add(-time.Second)); !errors.Is(err, ErrCacheMiss) {
+		if _, err := cache.FindFresh(ctx, work.DouyinWorkID, "7", now.Add(-time.Second)); !errors.Is(err, ErrCacheMiss) {
 			t.Fatalf("previous resolver version error = %v, want cache miss", err)
 		}
 	}

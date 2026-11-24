@@ -10,6 +10,8 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 ## 认证
 
 - `POST /api/v1/auth/login`：用户名、密码及设备信息登录。
+- `POST /api/v1/auth/cdk/login` 接收 `{code, device}`。每个密钥只能成功登录一次，获得普通用户权限；网页沿用登录 Cookie 续期。密钥无效、已使用或已吊销时返回 `401 AUTH_INVALID_CDK`。
+- `POST /api/v1/auth/password` 接收 `{currentPassword, newPassword}`。新密码须为 6 至 12 个字符，升级前已设置的密码继续有效。修改成功后撤销其他会话，当前会话保持登录。
 - `POST /api/v1/auth/refresh`：消费一次 Refresh Token，返回轮换后的新 Token 对。网页端（`appVersion` 以 `web-` 开头）的 Refresh Token 只写入 httpOnly Cookie（`SameSite=Strict`，HTTPS/回环地址附加 `Secure`），请求体为空、凭 Cookie 续期，并校验 Origin 同源；原生客户端仍通过请求体携带 Refresh Token。
 - `POST /api/v1/auth/logout`：撤销当前 Bearer Token 对应会话。
 - `GET /api/v1/auth/sessions`：列出当前用户未撤销、未过期的设备会话。
@@ -33,11 +35,19 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 
 - `GET /api/v1/admin/users`：列出全部用户（不含密码哈希），`dailyTaskLimitOverride` 为 `null` 时继承全局额度。
 - `PUT /api/v1/admin/users/{id}/daily-task-limit` 接收 `{dailyTaskLimit}`。`null` 继承默认值，`0` 不限，正整数设置该用户独立额度。
-- `POST /api/v1/admin/users`：创建用户，请求体 `{username, displayName, password, role}`；密码至少 12 位，用户名重复返回 409。
-- `POST /api/v1/admin/users/{id}/password`：重置密码（至少 12 位），并立即撤销该用户全部会话。
+- `POST /api/v1/admin/users`：创建用户，请求体 `{username, displayName, password, role}`。密码须为 6 至 12 个字符，用户名重复返回 409。
+- `POST /api/v1/admin/users/{id}/password`：重置密码（6 至 12 个字符），并立即撤销该用户全部会话。
 - `PATCH /api/v1/admin/users/{id}/active`：启用/禁用账号，请求体 `{active: bool}`；禁用会撤销该用户全部会话，不能禁用当前登录账号。
 - `GET /api/v1/admin/users/{id}/sessions`：查看任意用户的活跃设备会话。
 - `DELETE /api/v1/admin/sessions/{id}`：管理员下线任意用户的会话。
+
+### CDK 管理
+
+- `GET /api/v1/admin/cdks?limit=25&offset=0` 返回 `{items, total, requestId}`，每条记录包含 `id`、`prefix`、`taskLimit`、`taskCount`、`status` 和时间字段。完整密钥只随生成响应返回。
+- `POST /api/v1/admin/cdks` 接收 `{count, taskLimit}`。一次生成 1 至 100 个密钥，每个密钥可分配 1 至 100000 次累计新建任务额度。
+- `PATCH /api/v1/admin/cdks/{id}` 接收 `{taskLimit}`，修改该密钥的任务总额度，已用次数保留。
+- `DELETE /api/v1/admin/cdks/{id}` 吊销密钥及其登录会话，保留密钥记录和任务历史。
+- CDK 会话的 `GET /api/v1/jobs/usage` 额外返回 `usage.cdk`，含 `used`、`limit`。累计额度用完时新建任务返回 `429 CDK_LIMIT_REACHED`。每日额度继续适用，幂等重放、任务重试和删除均不改变累计用量。
 
 ### 任务管理（跨用户）
 
@@ -64,6 +74,8 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 - `POST /api/v1/jobs/{id}/images/archive-download`：Bearer 鉴权并校验任务归属、完成状态和源文件，返回 `{downloadUrl, expiresAt}`；同源下载地址有效期 5 分钟，只授权指定用户的指定任务下载 ZIP。
 - `GET /api/v1/archive-download/{id}?user=&expires=&signature=`：凭上述短期签名下载，无需 Authorization 头；重新校验归属、任务状态和媒体有效期。与预览、ASR 的签名用途隔离，响应禁止缓存；完整 ZIP 成包后才返回，提供 Content-Length，支持 HEAD、Range。网页通过原生下载交给浏览器显示进度，不再先把整个 ZIP 接收到 JS 内存。
 - `GET /api/v1/media-preview/{id}?expires=&signature=`：同源签名的媒体预览地址（HMAC 签名，约 24 小时有效），供 `<img>`/`<video>` 直接加载，无需 Authorization 头；仅限 image/animated/video 类型。
+- `GET /api/v1/media-preview/{id}/thumbnail?expires=&signature=`：同源签名缩略图。已下载的视频优先使用服务端抽帧生成的 WebP。
+- `GET /api/v1/job-cover/{id}?expires=&signature=`：同源签名的视频封面地址，由任务详情的 `work.coverPreviewUrl` 提供。服务端从允许的媒体域名获取封面图片，可用于尚未下载视频的解析结果。
 
 创建示例：
 
@@ -75,17 +87,19 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 }
 ```
 
-作品保留首选 `videoUrl`、`musicUrl`、图片的 `url` / `animatedUrl`，并附带按来源顺序去重的 `videoUrlCandidates`、`musicUrlCandidates`、`urlCandidates` / `animatedUrlCandidates`。Worker 在同一种媒体的候选地址间依次切换，最多尝试 8 个；取消或文件超出大小限制时停止，旧记录没有候选列表也能继续下载。新增字段存于原有 `metadata_json`，无需数据库迁移；解析缓存版本为 `7`。
+作品保留首选 `coverUrl`、`videoUrl`、`musicUrl`、图片的 `url` / `animatedUrl`，并附带按来源顺序去重的候选地址。Worker 在同一种媒体的候选地址间依次切换，最多尝试 8 个；取消或文件超出大小限制时停止，旧记录没有候选列表也能继续下载。候选字段存于原有 `metadata_json`，解析缓存版本为 `8`。
 
 图集任务结果包含 `mediaDownload`：`expected`、`downloaded`、`skipped`、`skippedIndices`（从 1 开始）和 `musicDownloaded`。背景音乐不计入配图成功数；部分媒体失败时，任务完成提示与网页会显示实际保存数量，压缩包包含已保存的媒体。
 
 解析结果缓存默认 6 小时，可用 `RESOLVER_CACHE_TTL` 调整。服务端仅访问 HTTPS 抖音白名单域名，重定向逐跳校验且最多 5 跳，DNS 返回任何非公网地址时拒绝请求。
 
+单轮抖音作品解析最多等待 25 秒。作品不可访问或解析路径耗尽时，任务直接失败，仍可手动重试。解析超时的任务在详情中返回 `DOUYIN_RESOLVE_TIMEOUT`。
+
 `download` 请求立即返回 `queued`；后台 Worker 默认单并发，持久化 Lease 为 60 秒、心跳为 15 秒，服务重启后重新领取过期任务。媒体临时写入后原子改名，登记 SHA-256、MIME 和字节数；视频与图文/动图配图默认保留 168 小时（`RETENTION_VIDEO_HOURS`），由后台每小时自动清理，删除任务会同时删除其媒体。
 
 `transcribe/full` 依次执行解析、下载、MP3 提取、9 分钟分段（重叠 1 秒）、ASR 与结果生成。默认使用 `siliconflow_sensevoice/FunAudioLLM/SenseVoiceSmall`，由服务端直接上传本地音频，不需要公网地址。配置阿里云 Key 和 `PUBLIC_BASE_URL` 后，硅基流动出现可重试服务错误、超时或限流时可切换至阿里 Paraformer；认证、输入和预算错误不会切换。
 
-**图文/动图（note）作品**：无需 ASR。进入 worker 的操作（`download`/`transcribe`/`full`）都会下载全部配图（动图下载动态版 MP4），并以作品配文（desc）作为文案生成结果；网页端提供逐图下载与打包 ZIP。纯解析（`info`）为同步路径，不下载媒体。
+**图文/动图（note）作品**：无需 ASR。`download`、`transcribe` 和 `full` 会下载配图（动图下载动态版 MP4），并以作品配文（desc）作为文案生成结果；网页端提供逐图下载与打包 ZIP。纯解析（`info`）首次请求同步返回任务结果，手动重试进入队列，全程只读取作品信息。
 
 Access Token 默认 15 分钟有效；Refresh Token 默认 30 天有效且数据库只保存 SHA-256 哈希。登录按“来源 IP + 规范化用户名”限制为默认每分钟 5 次。
 

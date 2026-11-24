@@ -33,7 +33,7 @@ type File struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-func HasThumbnail(kind string) bool { return kind == "image" || kind == "animated" }
+func HasThumbnail(kind string) bool { return kind == "image" || kind == "animated" || kind == "video" }
 
 func (f File) Thumbnail() File {
 	return File{

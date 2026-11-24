@@ -34,7 +34,7 @@ func NewService(repository Repository, tokens *TokenManager, refreshTTL time.Dur
 	if repository == nil || tokens == nil || refreshTTL <= 0 {
 		return nil, fmt.Errorf("invalid authentication service configuration")
 	}
-	dummyHash, err := HashPassword("not-a-real-account-password")
+	dummyHash, err := hashPassword("not-a-real-account-password")
 	if err != nil {
 		return nil, fmt.Errorf("create authentication timing hash: %w", err)
 	}
@@ -43,7 +43,7 @@ func NewService(repository Repository, tokens *TokenManager, refreshTTL time.Dur
 
 func (s *Service) Login(ctx context.Context, input LoginInput) (TokenPair, error) {
 	user, err := s.repository.FindUserByUsername(ctx, NormalizeUsername(input.Username))
-	if errors.Is(err, ErrNotFound) {
+	if errors.Is(err, ErrNotFound) || user.IsCDK {
 		_, _ = VerifyPassword(input.Password, s.dummyHash)
 		return TokenPair{}, ErrInvalidCredentials
 	}
@@ -131,13 +131,20 @@ func (s *Service) ValidateAccess(ctx context.Context, raw string) (Principal, er
 		return Principal{}, err
 	}
 	user, err := s.repository.FindUserByID(ctx, principal.UserID)
-	if err != nil || !user.IsActive {
+	if err != nil {
+		return Principal{}, ErrInvalidToken
+	}
+	if !user.IsActive {
+		if user.IsCDK {
+			return Principal{}, ErrRevokedSession
+		}
 		return Principal{}, ErrInvalidToken
 	}
 	session, err := s.repository.FindSessionByID(ctx, principal.UserID, principal.SessionID)
 	if err != nil || session.RevokedAt != nil || !session.ExpiresAt.After(s.now().UTC()) {
 		return Principal{}, ErrRevokedSession
 	}
+	principal.IsCDK = user.IsCDK
 	return principal, nil
 }
 
@@ -198,6 +205,9 @@ func (s *Service) ChangePassword(ctx context.Context, principal Principal, curre
 	user, err := s.repository.FindUserByID(ctx, principal.UserID)
 	if err != nil {
 		return err
+	}
+	if user.IsCDK {
+		return ErrForbidden
 	}
 	valid, err := VerifyPassword(currentPassword, user.PasswordHash)
 	if err != nil {

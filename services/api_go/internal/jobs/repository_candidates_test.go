@@ -56,7 +56,7 @@ func TestJobRepositoryReadsMediaCandidates(t *testing.T) {
 		if err := repo.CreateInfo(ctx, job); err != nil {
 			t.Fatal(err)
 		}
-		if err := repo.CompleteInfo(ctx, job.ID, work, now); err != nil {
+		if err := repo.CompleteInfo(ctx, job.ID, "", work, now); err != nil {
 			t.Fatal(err)
 		}
 		wantByJob[job.ID] = input

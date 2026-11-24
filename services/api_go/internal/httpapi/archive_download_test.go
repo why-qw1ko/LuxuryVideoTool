@@ -53,11 +53,11 @@ func newArchiveDownloadFixture(t *testing.T) *archiveDownloadFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner, err := service.CreateUser(ctx, "owner", "Owner", "correct horse battery staple", auth.RoleUser)
+	owner, err := service.CreateUser(ctx, "owner", "Owner", "OwnerPass!", auth.RoleUser)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := service.CreateUser(ctx, "other", "Other", "correct horse battery staple", auth.RoleUser)
+	other, err := service.CreateUser(ctx, "other", "Other", "OwnerPass!", auth.RoleUser)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func newArchiveDownloadFixture(t *testing.T) *archiveDownloadFixture {
 	fixture.handler = New(fixture.deps)
 	for username, target := range map[string]*string{"owner": &fixture.ownerToken, "other": &fixture.otherToken} {
 		login := performJSON(fixture.handler, http.MethodPost, "/api/v1/auth/login", map[string]any{
-			"username": username, "password": "correct horse battery staple",
+			"username": username, "password": "OwnerPass!",
 			"device": map[string]any{"id": "device", "name": "PC", "platform": "windows", "appVersion": "1"},
 		}, "")
 		if login.Code != http.StatusOK {

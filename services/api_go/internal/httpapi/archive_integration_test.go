@@ -35,7 +35,7 @@ func TestNoteImageArchiveHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	user, err := authService.CreateUser(ctx, "owner", "Owner", "correct horse battery staple", auth.RoleUser)
+	user, err := authService.CreateUser(ctx, "owner", "Owner", "OwnerPass!", auth.RoleUser)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestNoteImageArchiveHTTP(t *testing.T) {
 	}
 
 	handler := New(Dependencies{Build: version.Info{Version: "test"}, Auth: authService, Jobs: jobs.NewService(jobRepo, nil), Files: fileRepo, Storage: storage, LoginRateLimit: 5, Ready: func() error { return nil }})
-	login := performJSON(handler, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "owner", "password": "correct horse battery staple", "device": map[string]any{"id": "device", "name": "PC", "platform": "windows", "appVersion": "1"}}, "")
+	login := performJSON(handler, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "owner", "password": "OwnerPass!", "device": map[string]any{"id": "device", "name": "PC", "platform": "windows", "appVersion": "1"}}, "")
 	var pair tokenResponse
 	if err := json.Unmarshal(login.Body.Bytes(), &pair); err != nil {
 		t.Fatal(err)
@@ -126,7 +126,7 @@ func TestMediaPreviewSigned(t *testing.T) {
 	defer db.Close()
 	tokens, _ := auth.NewTokenManager([]byte("01234567890123456789012345678901"), 15*time.Minute)
 	authService, _ := auth.NewService(auth.NewSQLiteRepository(db), tokens, 24*time.Hour)
-	user, err := authService.CreateUser(ctx, "owner", "Owner", "correct horse battery staple", auth.RoleUser)
+	user, err := authService.CreateUser(ctx, "owner", "Owner", "OwnerPass!", auth.RoleUser)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestMediaPreviewSigned(t *testing.T) {
 
 	signer := ownedfiles.NewSigner([]byte("01234567890123456789012345678901"), "")
 	handler := New(Dependencies{Build: version.Info{Version: "test"}, Auth: authService, Jobs: jobs.NewService(jobRepo, nil), Files: fileRepo, Storage: storage, ASRSigner: signer, LoginRateLimit: 5, Ready: func() error { return nil }})
-	login := performJSON(handler, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "owner", "password": "correct horse battery staple", "device": map[string]any{"id": "device", "name": "PC", "platform": "windows", "appVersion": "1"}}, "")
+	login := performJSON(handler, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "owner", "password": "OwnerPass!", "device": map[string]any{"id": "device", "name": "PC", "platform": "windows", "appVersion": "1"}}, "")
 	var pair tokenResponse
 	if err := json.Unmarshal(login.Body.Bytes(), &pair); err != nil {
 		t.Fatal(err)

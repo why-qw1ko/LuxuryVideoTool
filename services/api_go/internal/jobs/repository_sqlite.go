@@ -354,28 +354,34 @@ func (r *SQLiteRepository) create(ctx context.Context, job Job, started bool, da
 	}
 	// An idempotency conflict is resolved before counting a new task. A quota
 	// rejection rolls back the insert together with any other write in this transaction.
+	if err := countCDKTask(ctx, tx, job.UserID); err != nil {
+		return err
+	}
 	if err := countNewTask(ctx, tx, job.UserID, job.CreatedAt, dailyTaskLimit); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (r *SQLiteRepository) CompleteInfo(ctx context.Context, jobID string, work resolver.Work, at time.Time) error {
+func (r *SQLiteRepository) CompleteInfo(ctx context.Context, jobID, owner string, work resolver.Work, at time.Time) error {
 	result, err := r.db.ExecContext(ctx, `UPDATE jobs SET work_id = ?, status = 'completed', progress = 100,
-		status_message = '作品信息解析完成', completed_at = ?, updated_at = ? WHERE id = ? AND status = 'resolving'`,
-		work.ID, at.UnixMilli(), at.UnixMilli(), jobID)
+		status_message = '作品信息解析完成', completed_at = ?, updated_at = ?, error_code = NULL, error_message = NULL,
+		lease_owner = NULL, lease_expires_at = NULL, heartbeat_at = NULL
+		WHERE id = ? AND status = 'resolving' AND COALESCE(lease_owner, '') = ?`,
+		work.ID, at.UnixMilli(), at.UnixMilli(), jobID, owner)
 	if err != nil {
 		return fmt.Errorf("complete info job: %w", err)
 	}
 	return changed(result)
 }
 
-func (r *SQLiteRepository) Fail(ctx context.Context, jobID, code, message string, at time.Time) error {
+func (r *SQLiteRepository) Fail(ctx context.Context, jobID, owner, code, message string, at time.Time) error {
 	result, err := r.db.ExecContext(ctx, `UPDATE jobs SET status = 'failed', progress = 100, status_message = ?,
-		error_code = ?, error_message = ?, completed_at = ?, updated_at = ?, lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL WHERE id = ?`, message, code, message,
-		at.UnixMilli(), at.UnixMilli(), jobID)
+		error_code = ?, error_message = ?, completed_at = ?, updated_at = ?, lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL
+		WHERE id = ? AND COALESCE(lease_owner, '') = ? AND status IN ('resolving','downloading','extracting','transcribing','postprocessing')`,
+		message, code, message, at.UnixMilli(), at.UnixMilli(), jobID, owner)
 	if err != nil {
-		return fmt.Errorf("fail info job: %w", err)
+		return fmt.Errorf("fail job: %w", err)
 	}
 	return changed(result)
 }
@@ -481,12 +487,14 @@ func scanJobFields(row scanner, withOwner bool) (Job, error) {
 
 			VideoURLCandidates []string `json:"videoUrlCandidates"`
 			MusicURLCandidates []string `json:"musicUrlCandidates"`
+			CoverURLCandidates []string `json:"coverUrlCandidates"`
 		}
 		if metadata.Valid && json.Unmarshal([]byte(metadata.String), &extra) == nil {
 			work.VideoURL, work.DurationMS, work.Width, work.Height = extra.VideoURL, extra.DurationMS, extra.Width, extra.Height
 			work.Images, work.Hashtags = extra.Images, extra.Hashtags
 			work.MusicURL, work.MusicTitle, work.MusicArtist = extra.MusicURL, extra.MusicTitle, extra.MusicArtist
 			work.VideoURLCandidates, work.MusicURLCandidates = extra.VideoURLCandidates, extra.MusicURLCandidates
+			work.CoverURLCandidates = extra.CoverURLCandidates
 		}
 		job.Work = &work
 		if job.Status == "completed" && job.Result == nil {
@@ -547,6 +555,19 @@ func (r *SQLiteRepository) SetStage(ctx context.Context, jobID, owner, status st
 		WHERE id = ? AND lease_owner = ?`, status, progress, message, at.UnixMilli(), jobID, owner)
 	if err != nil {
 		return fmt.Errorf("set job stage: %w", err)
+	}
+	if changed(result) != nil {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+func (r *SQLiteRepository) RequeueInterruptedResolve(ctx context.Context, jobID, owner string, at time.Time) error {
+	result, err := r.db.ExecContext(ctx, `UPDATE jobs SET status = 'queued', progress = 0, status_message = '等待继续解析',
+		attempt_count = MAX(0, attempt_count - 1), lease_owner = NULL, lease_expires_at = NULL, heartbeat_at = NULL, updated_at = ?
+		WHERE id = ? AND lease_owner = ? AND status = 'resolving'`, at.UnixMilli(), jobID, owner)
+	if err != nil {
+		return fmt.Errorf("requeue interrupted resolve: %w", err)
 	}
 	if changed(result) != nil {
 		return ErrLeaseLost

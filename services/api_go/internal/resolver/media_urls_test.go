@@ -89,6 +89,25 @@ func TestWorkFromDetailBodyBitRateOnlyVideo(t *testing.T) {
 	}
 }
 
+func TestWorkFromDetailBodyCoverCandidates(t *testing.T) {
+	work := candidateDetailWork(t, map[string]any{
+		"aweme_id": "123",
+		"coverUrl": "https://p9.douyinpic.com/root-cover.jpeg",
+		"video": map[string]any{
+			"playAddr": "https://p3.douyinvod.com/video.mp4",
+			"cover": map[string]any{"urlList": []string{
+				"https://p3.douyinpic.com/cover.jpeg", "http://example.test/invalid.jpeg",
+			}},
+			"originCover":    map[string]any{"src": "https://p6.douyinpic.com/original.jpeg"},
+			"cover_url_list": []any{map[string]any{"src": "https://p3.douyinpic.com/cover.jpeg"}},
+		},
+	})
+	want := []string{"https://p3.douyinpic.com/cover.jpeg", "https://p6.douyinpic.com/original.jpeg", "https://p9.douyinpic.com/root-cover.jpeg"}
+	if work.CoverURL != want[0] || !reflect.DeepEqual(work.CoverURLCandidates, want) {
+		t.Fatalf("cover: %q, candidates: %v", work.CoverURL, work.CoverURLCandidates)
+	}
+}
+
 func TestWorkFromDetailBodyNoteCandidateTypes(t *testing.T) {
 	work := candidateDetailWork(t, map[string]any{
 		"aweme_id": "123",

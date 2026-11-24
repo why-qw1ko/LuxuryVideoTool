@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -20,9 +21,18 @@ const (
 )
 
 func HashPassword(password string) (string, error) {
-	if len(password) < 12 || len(password) > 1024 {
-		return "", fmt.Errorf("password must contain 12 to 1024 bytes")
+	if !ValidNewPassword(password) {
+		return "", fmt.Errorf("password must contain 6 to 12 characters")
 	}
+	return hashPassword(password)
+}
+
+func ValidNewPassword(password string) bool {
+	length := utf8.RuneCountInString(password)
+	return length >= 6 && length <= 12 && utf8.ValidString(password)
+}
+
+func hashPassword(password string) (string, error) {
 	salt := make([]byte, saltLength)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("generate password salt: %w", err)

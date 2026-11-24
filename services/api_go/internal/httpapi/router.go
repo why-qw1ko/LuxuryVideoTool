@@ -37,6 +37,7 @@ type Dependencies struct {
 	Files           *ownedfiles.Repository
 	Storage         *ownedfiles.Storage
 	Thumbnails      *media.Thumbnailer
+	Covers          coverFetcher
 	ASRSigner       *ownedfiles.Signer
 	Audit           *audit.Recorder
 	Ready           Readiness
@@ -57,6 +58,7 @@ type userResponse struct {
 	ID          string    `json:"id"`
 	DisplayName string    `json:"displayName"`
 	Role        auth.Role `json:"role"`
+	IsCDK       bool      `json:"isCdk,omitempty"`
 }
 
 type tokenResponse struct {
@@ -136,6 +138,7 @@ func New(deps Dependencies) http.Handler {
 	}
 	mux := http.NewServeMux()
 	limiter := newLoginLimiter(deps.LoginRateLimit)
+	registerCDKRoutes(mux, deps, limiter)
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, healthResponse{Status: "ok", Version: deps.Build})
 	})
@@ -248,12 +251,15 @@ func New(deps Dependencies) http.Handler {
 			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "当前密码不正确", false)
 			return
 		}
-		if len(input.NewPassword) < 12 || len(input.NewPassword) > 1024 {
-			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "新密码需要 12 到 1024 位", false)
+		if !auth.ValidNewPassword(input.NewPassword) {
+			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "新密码须为 6 至 12 位", false)
 			return
 		}
 		if err := deps.Auth.ChangePassword(r.Context(), principal, input.CurrentPassword, input.NewPassword); errors.Is(err, auth.ErrInvalidCredentials) {
 			writeError(w, r, http.StatusUnauthorized, "AUTH_INVALID_CREDENTIALS", "当前密码不正确", false)
+			return
+		} else if errors.Is(err, auth.ErrForbidden) {
+			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "CDK 会话不支持修改密码", false)
 			return
 		} else if errors.Is(err, auth.ErrNotFound) {
 			writeError(w, r, http.StatusUnauthorized, "AUTH_TOKEN_EXPIRED", "登录状态已失效，请重新登录", true)
@@ -442,8 +448,8 @@ func New(deps Dependencies) http.Handler {
 			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "角色必须是 admin 或 user", false)
 			return
 		}
-		if len(input.Password) < 12 {
-			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "密码至少需要 12 位", false)
+		if !auth.ValidNewPassword(input.Password) {
+			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "密码须为 6 至 12 位", false)
 			return
 		}
 		user, err := deps.Auth.CreateUser(r.Context(), input.Username, input.DisplayName, input.Password, input.Role)
@@ -469,8 +475,8 @@ func New(deps Dependencies) http.Handler {
 		if err := decodeJSON(w, r, &input); err != nil {
 			return
 		}
-		if len(input.Password) < 12 {
-			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "密码至少需要 12 位", false)
+		if !auth.ValidNewPassword(input.Password) {
+			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "密码须为 6 至 12 位", false)
 			return
 		}
 		targetID := r.PathValue("id")
@@ -777,6 +783,14 @@ func New(deps Dependencies) http.Handler {
 		} else {
 			job, reused, err = deps.Jobs.CreateDownload(r.Context(), creation)
 		}
+		if errors.Is(err, jobs.ErrCDKTaskLimit) {
+			writeError(w, r, http.StatusTooManyRequests, "CDK_LIMIT_REACHED", "CDK 任务次数已用完", false)
+			return
+		}
+		if errors.Is(err, auth.ErrRevokedSession) {
+			writeError(w, r, http.StatusUnauthorized, "AUTH_SESSION_REVOKED", "登录状态已失效，请重新登录", false)
+			return
+		}
 		if errors.Is(err, jobs.ErrDailyTaskLimit) {
 			writeDailyTaskLimitError(deps, w, r, principal.UserID, limit)
 			return
@@ -980,6 +994,9 @@ func New(deps Dependencies) http.Handler {
 		}
 		handleInlinePreview(deps.Storage, thumbnail, w, r)
 	})
+	mux.HandleFunc("GET /api/v1/job-cover/{id}", func(w http.ResponseWriter, r *http.Request) {
+		handleCoverPreview(deps, w, r)
+	})
 	protected.HandleFunc("GET /api/v1/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if deps.Jobs == nil {
 			writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true)
@@ -1110,7 +1127,7 @@ func handleInlinePreview(storage *ownedfiles.Storage, file ownedfiles.File, w ht
 	http.ServeContent(w, r, file.OriginalName, stat.ModTime(), handle)
 }
 
-// withMediaPreviews 为本地媒体文件注入同源预览地址。
+// withMediaPreviews 为作品封面和本地媒体文件注入同源预览地址。
 // files 只可能是 []jobs.JobFile：GET/List 通过 FindByID/FindFiles 注入类型化文件，复用幂等键的
 // POST 也先重查一次，因此 result_json 解码出的 []any 分支在这里不可达。
 func withMediaPreviews(items []jobs.Job, deps Dependencies, now time.Time) {
@@ -1121,6 +1138,9 @@ func withMediaPreviews(items []jobs.Job, deps Dependencies, now time.Time) {
 	// Keep signed URLs stable across job polling and page reloads within the hour.
 	expires := now.UTC().Truncate(time.Hour).Add(24 * time.Hour)
 	for i := range items {
+		if items[i].Status == "completed" {
+			addCoverPreview(deps, items[i].Work, items[i].ID, expires)
+		}
 		result, ok := items[i].Result.(map[string]any)
 		if !ok {
 			continue
@@ -1131,11 +1151,11 @@ func withMediaPreviews(items []jobs.Job, deps Dependencies, now time.Time) {
 		}
 		for j := range files {
 			file := &files[j]
-			galleryMedia := ownedfiles.HasThumbnail(file.Kind)
-			if galleryMedia || file.Kind == "video" || file.Kind == "music" {
+			hasThumbnail := ownedfiles.HasThumbnail(file.Kind)
+			if hasThumbnail || file.Kind == "music" {
 				file.PreviewURL = signer.PreviewURL(file.ID, expires)
 			}
-			if galleryMedia && deps.Thumbnails != nil && (file.ExpiresAt == nil || file.ExpiresAt.After(now)) {
+			if hasThumbnail && deps.Thumbnails != nil && (file.ExpiresAt == nil || file.ExpiresAt.After(now)) {
 				file.ThumbnailURL = signer.ThumbnailURL(file.ID, expires)
 			}
 		}
@@ -1168,14 +1188,9 @@ func writeResolverError(w http.ResponseWriter, r *http.Request, err error) {
 func handleLogin(deps Dependencies, limiter *loginLimiter, w http.ResponseWriter, r *http.Request) {
 	clientIP := remoteIP(r.RemoteAddr)
 	var input struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Device   struct {
-			ID         string `json:"id"`
-			Name       string `json:"name"`
-			Platform   string `json:"platform"`
-			AppVersion string `json:"appVersion"`
-		} `json:"device"`
+		Username string      `json:"username"`
+		Password string      `json:"password"`
+		Device   auth.Device `json:"device"`
 	}
 	if err := decodeJSON(w, r, &input); err != nil {
 		return
@@ -1185,11 +1200,11 @@ func handleLogin(deps Dependencies, limiter *loginLimiter, w http.ResponseWriter
 		writeError(w, r, http.StatusTooManyRequests, "RATE_LIMITED", "登录尝试过于频繁，请稍后重试", true)
 		return
 	}
-	if username == "" || len(username) > 64 || input.Password == "" || len(input.Password) > 1024 || input.Device.ID == "" || len(input.Device.ID) > 128 || input.Device.Name == "" || len(input.Device.Name) > 128 || input.Device.AppVersion == "" || len(input.Device.AppVersion) > 64 || (input.Device.Platform != "android" && input.Device.Platform != "windows") {
+	if username == "" || len(username) > 64 || input.Password == "" || len(input.Password) > 1024 || !validLoginDevice(input.Device) {
 		writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "登录信息不完整", false)
 		return
 	}
-	pair, err := deps.Auth.Login(r.Context(), auth.LoginInput{Username: username, Password: input.Password, Device: auth.Device{ID: input.Device.ID, Name: input.Device.Name, Platform: input.Device.Platform, AppVersion: input.Device.AppVersion}})
+	pair, err := deps.Auth.Login(r.Context(), auth.LoginInput{Username: username, Password: input.Password, Device: input.Device})
 	if errors.Is(err, auth.ErrInvalidCredentials) || errors.Is(err, auth.ErrInactiveUser) {
 		writeError(w, r, http.StatusUnauthorized, "AUTH_INVALID_CREDENTIALS", "用户名或密码错误", false)
 		return
@@ -1206,6 +1221,11 @@ func handleLogin(deps Dependencies, limiter *loginLimiter, w http.ResponseWriter
 	writeJSON(w, http.StatusOK, tokenPayload(pair, RequestID(r.Context()), web))
 }
 
+func validLoginDevice(device auth.Device) bool {
+	return device.ID != "" && len(device.ID) <= 128 && device.Name != "" && len(device.Name) <= 128 &&
+		device.AppVersion != "" && len(device.AppVersion) <= 64 && (device.Platform == "android" || device.Platform == "windows")
+}
+
 func recordAudit(recorder *audit.Recorder, r *http.Request, userID, action, sessionID string, metadata map[string]any) {
 	if recorder == nil {
 		return
@@ -1216,7 +1236,7 @@ func recordAudit(recorder *audit.Recorder, r *http.Request, userID, action, sess
 }
 
 func tokenPayload(pair auth.TokenPair, requestID string, web bool) tokenResponse {
-	response := tokenResponse{AccessToken: pair.AccessToken, AccessTokenExpiresAt: pair.AccessTokenExpires, User: userResponse{ID: pair.User.ID, DisplayName: pair.User.DisplayName, Role: pair.User.Role}, RequestID: requestID}
+	response := tokenResponse{AccessToken: pair.AccessToken, AccessTokenExpiresAt: pair.AccessTokenExpires, User: userResponse{ID: pair.User.ID, DisplayName: pair.User.DisplayName, Role: pair.User.Role, IsCDK: pair.User.IsCDK}, RequestID: requestID}
 	if !web {
 		response.RefreshToken = pair.RefreshToken
 		response.RefreshTokenExpiresAt = pair.RefreshTokenExpires

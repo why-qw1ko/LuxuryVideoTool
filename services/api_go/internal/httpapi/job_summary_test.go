@@ -88,7 +88,7 @@ func TestJobSummaryListsPreservePermissionsAndFullDetails(t *testing.T) {
 			t.Fatalf("%s: got %d, want %d", test.path, response.Code, test.status)
 		}
 	}
-	const password = "correct horse battery staple"
+	const password = "OwnerPass!"
 	if _, err := fixture.deps.Auth.CreateUser(ctx, "admin", "Admin", password, auth.RoleAdmin); err != nil {
 		t.Fatal(err)
 	}

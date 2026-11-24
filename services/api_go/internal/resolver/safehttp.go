@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -95,7 +96,13 @@ func (c *SafeClient) request(ctx context.Context, method string, target *url.URL
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("%w: request failed: %v", ErrResolveFailed, err)
+		if ctx.Err() != nil {
+			return nil, nil, nil, ctx.Err()
+		}
+		if errors.Is(err, ErrURLNotAllowed) {
+			return nil, nil, nil, ErrURLNotAllowed
+		}
+		return nil, nil, nil, fmt.Errorf("%w: request failed: %w", ErrResolveFailed, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
@@ -106,7 +113,10 @@ func (c *SafeClient) request(ctx context.Context, method string, target *url.URL
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, c.maxBody+1))
 	if err != nil {
-		return nil, resp.Request.URL, nil, fmt.Errorf("%w: read response: %v", ErrResolveFailed, err)
+		if ctx.Err() != nil {
+			return nil, resp.Request.URL, nil, ctx.Err()
+		}
+		return nil, resp.Request.URL, nil, fmt.Errorf("%w: read response: %w", ErrResolveFailed, err)
 	}
 	if int64(len(data)) > c.maxBody {
 		return nil, resp.Request.URL, nil, fmt.Errorf("%w: response too large", ErrResolveFailed)

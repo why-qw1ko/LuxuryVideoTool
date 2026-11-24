@@ -10,6 +10,7 @@ import (
 var (
 	httpsURLPattern = regexp.MustCompile(`https://[^\s<>"'，。；！？、]+`)
 	workPathPattern = regexp.MustCompile(`^/(?:video|note|share/(?:video|note|slides))/(\d+)(?:/|$)`)
+	workPathPrefix  = regexp.MustCompile(`^/(?:video|note|share/(?:video|note|slides))(?:/|$)`)
 )
 
 var allowedHosts = map[string]bool{
@@ -18,8 +19,8 @@ var allowedHosts = map[string]bool{
 }
 
 type Input struct {
-	URL     *url.URL
-	WorkID  string
+	URL      *url.URL
+	WorkID   string
 	WorkType string
 }
 
@@ -39,6 +40,8 @@ func ExtractInput(text string) (Input, error) {
 			} else {
 				input.WorkType = "video"
 			}
+		} else if workPathPrefix.MatchString(u.EscapedPath()) || (strings.Trim(u.Path, "/") == "" && u.RawQuery == "") {
+			continue
 		}
 		return input, nil
 	}

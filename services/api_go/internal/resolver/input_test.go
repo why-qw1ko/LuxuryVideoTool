@@ -29,6 +29,21 @@ func TestExtractInputRejectsHTTPAndLookalikeHost(t *testing.T) {
 	}
 }
 
+func TestExtractInputSkipsMalformedWorkLinks(t *testing.T) {
+	for _, value := range []string{
+		"https://www.douyin.com/", "https://v.douyin.com/", "https://www.douyin.com/video/abc",
+		"https://www.douyin.com/note", "https://www.iesdouyin.com/share/slides/abc",
+	} {
+		if _, err := ExtractInput(value); err != ErrInvalidShareLink {
+			t.Errorf("ExtractInput(%q) error = %v", value, err)
+		}
+	}
+	input, err := ExtractInput("https://www.douyin.com/video/invalid https://v.douyin.com/valid-short-link/")
+	if err != nil || input.URL.Host != "v.douyin.com" {
+		t.Fatalf("ExtractInput() = %+v, %v", input, err)
+	}
+}
+
 func TestPublicIP(t *testing.T) {
 	for _, value := range []string{"127.0.0.1", "10.0.0.1", "169.254.169.254", "::1", "fc00::1"} {
 		if PublicIP(net.ParseIP(value)) { t.Fatalf("%s must be blocked", value) }

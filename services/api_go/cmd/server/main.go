@@ -124,7 +124,7 @@ func run() error {
 	server := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: httpapi.New(httpapi.Dependencies{
-			Build: version.Current(), Auth: authService, Jobs: jobService, Files: fileRepository, Storage: storage, Thumbnails: thumbnails, ASRSigner: signer, Audit: audit.New(db, signingKey),
+			Build: version.Current(), Auth: authService, Jobs: jobService, Files: fileRepository, Storage: storage, Thumbnails: thumbnails, Covers: media.NewCoverFetcher(), ASRSigner: signer, Audit: audit.New(db, signingKey),
 			Ready: readiness, LoginRateLimit: cfg.LoginRateLimit, Settings: runtimeSettings, AliyunAvailable: cfg.PublicBaseURL != "", AllowInsecureProviderSettings: cfg.AllowInsecureProviderSettings,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,

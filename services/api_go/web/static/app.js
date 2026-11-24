@@ -79,24 +79,42 @@ function uuidv4(){
 
 // 共享的续期 Promise：多个并发 401 只触发一次 refresh，避免 refresh token 轮换时互相把会话刷失效。
 let refreshing=null;
+async function readWebSession(){
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),8000);
+  try{
+    const response=await fetch('/api/v1/auth/refresh',{method:'POST',signal:controller.signal});
+    return response.ok?await response.json():null;
+  }finally{clearTimeout(timeout)}
+}
 async function refreshSession(){
-  if(!refreshing){
-    refreshing=fetch('/api/v1/auth/refresh',{method:'POST'}).then(async response=>{
-      if(response.ok){save(await response.json());return true}
-      save(null);return false;
-    }).finally(()=>{refreshing=null});
+  const epoch=sessionEpoch;
+  if(refreshing?.epoch!==epoch){
+    const request={epoch};
+    const userId=session?.user?.id;
+    request.promise=readWebSession().then(value=>{
+      if(epoch!==sessionEpoch)return false;
+      if(!value||value.user?.id!==userId){
+        enter(value);
+        return false;
+      }
+      save(value);
+      return true;
+    }).finally(()=>{if(refreshing===request)refreshing=null});
+    refreshing=request;
   }
-  return refreshing;
+  return refreshing.promise;
 }
 async function api(path,options={},retry=true){
-  options.headers={...(options.headers||{}),'Content-Type':'application/json'};
-  if(session?.accessToken)options.headers.Authorization=`Bearer ${session.accessToken}`;
-  let response=await fetch(path,options);
-  if(response.status===401&&retry){
-    if(await refreshSession())return api(path,options,false);
+  const epoch=sessionEpoch;
+  const headers={...(options.headers||{}),'Content-Type':'application/json'};
+  if(session?.accessToken)headers.Authorization=`Bearer ${session.accessToken}`;
+  const response=await fetch(path,{...options,headers});
+  const body=await response.json().catch(()=>({}));
+  if(response.status===401&&retry&&body.error?.code!=='AUTH_INVALID_CREDENTIALS'){
+    if(epoch===sessionEpoch&&await refreshSession()&&epoch===sessionEpoch)return api(path,options,false);
     throw new Error('登录已过期，请重新登录');
   }
-  const body=await response.json().catch(()=>({}));
   if(!response.ok)throw new Error(body.error?.message||`请求失败 (${response.status})`);
   return body;
 }
@@ -222,6 +240,7 @@ $('#settings-link').addEventListener('click',e=>{e.preventDefault();selectJob(nu
 
 /* ---------- 后台管理系统 ---------- */
 function openAdminConsole(){
+  if(session?.user?.role!=='admin')return;
   if(adminOpen){
     toast('已在后台','info');
     return;
@@ -230,24 +249,35 @@ function openAdminConsole(){
   setSidebar(false);
   lastStatsSig=''; // 重新打开时按当前主题重绘图表，避免沿用旧配色
   show('#app',false);show('#admin-console',true);
+  syncHeaderActions();
   adminShowView('dashboard');
+  $('#admin-back-front').focus();
 }
 function closeAdminConsole(){
+  resetAdminPasswordForm();
   adminOpen=false;adminMode=false;
   setSidebar(false);
   show('#admin-console',false);show('#app',true);
+  syncHeaderActions();
+  $('#admin-console-btn').focus();
   selectJob(null);
   pollVisibleJobs(true);
 }
 function adminShowView(name){
   adminDetailLoadId++;
   if(name!=='detail'){adminMode=false;adminDetailSig=''}
+  if(adminCurrentView==='password'&&name!=='password')resetAdminPasswordForm();
   adminCurrentView=name;
-  ['dashboard','jobs','users','usage','detail'].forEach(v=>show('#admin-view-'+v,v===name));
-  document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>btn.classList.toggle('active',btn.dataset.adminView===name));
+  ['dashboard','jobs','users','cdks','usage','password','detail'].forEach(v=>show('#admin-view-'+v,v===name));
+  document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>{
+    const current=btn.dataset.adminView===name;
+    btn.classList.toggle('active',current);
+    btn.setAttribute('aria-current',current?'page':'false');
+  });
   if(name==='dashboard')loadAdminStats();
   if(name==='jobs'){loadAdminUsers();loadAdminJobs()}
   if(name==='users')loadAdminUsers();
+  if(name==='cdks')void loadAdminCDKs();
   if(name==='usage')requestAdminUsageSettings();
 }
 $('#admin-console-btn').addEventListener('click',openAdminConsole);
@@ -263,15 +293,31 @@ document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>btn.addEv
   adminShowView(btn.dataset.adminView);
   if(matchMedia('(max-width:960px)').matches)setSidebar(false);
 }));
+$('#admin-password-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  if(!adminOpen||adminCurrentView!=='password'||session?.user?.role!=='admin'||adminPasswordPendingEpoch===sessionEpoch)return;
+  const form=e.currentTarget;
+  const epoch=sessionEpoch;
+  const values=Object.fromEntries(new FormData(form));
+  adminPasswordPendingEpoch=epoch;
+  $('#admin-password-submit').disabled=true;
+  try{
+    if(await saveOwnPassword(values)&&epoch===sessionEpoch)form.reset();
+  }finally{
+    if(adminPasswordPendingEpoch===epoch)adminPasswordPendingEpoch=null;
+    if(epoch===sessionEpoch)$('#admin-password-submit').disabled=false;
+  }
+});
 
 const ACTIVE_POLL_MS=5000,IDLE_POLL_MS=30000;
 function jobIsActive(status){return !['completed','failed','cancelled'].includes(status)}
 function jobHasExpiredPreview(job,now=Date.now()){
-  return !jobExpired(job)&&(job?.result?.files||[]).some(file=>
-    [file.previewUrl,file.thumbnailUrl].some(url=>{
-      const expires=previewExpiry(url);
-      return expires!==null&&expires<=now;
-    }));
+  if(jobExpired(job))return false;
+  const urls=[job?.work?.coverPreviewUrl,...(job?.result?.files||[]).flatMap(file=>[file.previewUrl,file.thumbnailUrl])];
+  return urls.some(url=>{
+    const expires=previewExpiry(url);
+    return expires!==null&&expires<=now;
+  });
 }
 function pollVisibleJobs(force=false){
   if(!session||document.hidden)return;
@@ -302,11 +348,24 @@ document.addEventListener('visibilitychange',()=>{
   }
 });
 
+let adminPasswordPendingEpoch=null;
+function resetAdminPasswordForm(){
+  $('#admin-password-form').reset();
+  $('#admin-password-submit').disabled=adminPasswordPendingEpoch===sessionEpoch;
+}
+function syncHeaderActions(){
+  const isAdmin=session?.user?.role==='admin';
+  show('#admin-console-btn',isAdmin&&!adminOpen);
+  show('#admin-back-front',isAdmin&&adminOpen);
+  show('#change-password',!!session&&!isAdmin&&!session.user?.isCdk);
+  show('#logout',!!session&&!adminOpen);
+}
 function enter(value){
   clearInterval(poll);
   sessionEpoch++;jobsLoadId++;jobDetailLoadId++;adminJobsLoadId++;adminUsersLoadId++;adminDetailLoadId++;
   adminDetailSig='';jobsPending=null;jobDetailPending=null;adminJobsPending=null;adminDetailPending=null;
   pollRequestedAt={};adminStatsHaveActive=false;
+  $('#capture-feedback').textContent='';
   $('#daily-usage')?.classList.add('hidden');
   jobsCache=[];adminJobsCache=[];adminUsers=[];selectedId=null;currentJob=null;detailSig='';
   lastStatsSig='';lastAdminJobsSig='';
@@ -322,7 +381,10 @@ function enter(value){
   if($('#admin-user-name'))$('#admin-user-name').textContent=value?.user?.displayName||'';
   if($('#admin-user-role'))$('#admin-user-role').textContent=value?.user?.role==='admin'?'管理员':'普通用户';
   if($('#admin-user-avatar'))$('#admin-user-avatar').textContent=(value?.user?.displayName||'?').trim().charAt(0).toUpperCase();
-  show('#login',!value);show('#app',!!value);show('#change-password',!!value);show('#logout',!!value);show('#admin-console',false);
+  show('#login',!value);show('#app',!!value);show('#admin-console',false);
+  resetAdminPasswordForm();
+  resetCDKView();
+  syncHeaderActions();
   // 未登录时隐藏左上角菜单按钮：导航抽屉是登录后的功能，登录页点了只会打开空的抽屉。
   // 用 visibility 而非 display，保留其在顶栏网格中的 40px 占位，避免品牌文字被顶位裁剪。
   $('#sidebar-toggle').classList.toggle('nav-hidden',!value);
@@ -343,8 +405,10 @@ function enter(value){
 $('#api-url').value=location.origin;
 if($('#current-api'))$('#current-api').textContent=location.origin;
 $('#api-form').addEventListener('submit',e=>{e.preventDefault();try{const target=normaliseAPI($('#api-url').value);if(target===location.origin)return toast('当前已连接此 API 服务');location.assign(`${target}/`)}catch(err){toast(err.message,'error')}});
-$('#login-form').addEventListener('submit',async e=>{e.preventDefault();try{const data=await api('/api/v1/auth/login',{method:'POST',body:JSON.stringify({username:$('#username').value.trim(),password:$('#password').value,device:{id:localStorage.dc_device||(localStorage.dc_device=uuidv4()),name:navigator.platform||'Web 浏览器',platform:'windows',appVersion:'web-0.1.0'}})},false);$('#password').value='';enter(data)}catch(err){toast(err.message,'error')}});
-function bindPasswordToggle(inputId,buttonId){
+function loginDevice(){
+  return {id:localStorage.dc_device||(localStorage.dc_device=uuidv4()),name:navigator.platform||'Web 浏览器',platform:'windows',appVersion:'web-0.1.0'};
+}
+function bindPasswordToggle(inputId,buttonId,credential='密码'){
   const input=$(inputId),btn=$(buttonId);
   if(!input||!btn)return;
   btn.innerHTML=icon('eye',16);
@@ -353,15 +417,35 @@ function bindPasswordToggle(inputId,buttonId){
     const show=input.type==='password';
     input.type=show?'text':'password';
     btn.classList.toggle('on',show);
-    btn.setAttribute('aria-label',show?'隐藏密码':'显示密码');
-    btn.title=show?'隐藏密码':'显示密码';
+    btn.title=`${show?'隐藏':'显示'}${credential}`;
+    btn.setAttribute('aria-label',btn.title);
     btn.innerHTML=icon(show?'eye-off':'eye',16);
     input.focus();
   });
 }
 bindPasswordToggle('#password','#toggle-password');
+bindPasswordToggle('#login-cdk','#toggle-cdk','密钥');
+bindLoginForms();
+bindAdminCDKs();
 $('#change-password').addEventListener('click',changeOwnPassword);
-$('#logout').addEventListener('click',async()=>{if(!(await confirmDialog({title:'退出登录',message:'确认退出当前账号？',confirmText:'退出',danger:false})))return;try{await api('/api/v1/auth/logout',{method:'POST'})}catch{}enter(null)});
+$('#logout').addEventListener('click',logout);
+$('#admin-logout').addEventListener('click',()=>{setSidebar(false);void logout()});
+let logoutPendingEpoch=null;
+async function logout(){
+  const epoch=sessionEpoch;
+  if(!session||logoutPendingEpoch===epoch)return;
+  logoutPendingEpoch=epoch;
+  try{
+    const message=session.user?.isCdk?'退出后需使用新的 CDK 密钥登录。确认退出？':'确认退出当前账号？';
+    if(!(await confirmDialog({title:'退出登录',message,confirmText:'退出',danger:false}))||epoch!==sessionEpoch)return;
+    if(refreshing?.epoch===epoch)await refreshing.promise.catch(()=>false);
+    if(epoch!==sessionEpoch||!session)return;
+    try{await api('/api/v1/auth/logout',{method:'POST'})}catch{}
+    if(epoch===sessionEpoch)enter(null);
+  }finally{
+    if(logoutPendingEpoch===epoch)logoutPendingEpoch=null;
+  }
+}
 
 function passwordChangeDialog(){
   return new Promise(resolve=>{
@@ -375,7 +459,7 @@ function passwordChangeDialog(){
     wrap.className='password-change-grid';
     const fields=[
       {key:'currentPassword',label:'当前密码',autocomplete:'current-password'},
-      {key:'newPassword',label:'新密码',autocomplete:'new-password'},
+      {key:'newPassword',label:'新密码（6 至 12 位）',autocomplete:'new-password'},
       {key:'confirmPassword',label:'确认新密码',autocomplete:'new-password'}
     ];
     const inputs={};
@@ -386,7 +470,8 @@ function passwordChangeDialog(){
       box.className='password-wrap';
       const input=document.createElement('input');
       input.type='password';
-      input.maxLength=1024;
+      if(field.key==='currentPassword')input.maxLength=1024;
+      else input.pattern='.{6,12}';
       input.required=true;
       input.autocomplete=field.autocomplete;
       const toggle=document.createElement('button');
@@ -417,7 +502,9 @@ function passwordChangeDialog(){
     ok.textContent='保存';
     ok.className='btn-primary';
     const close=value=>{modal.classList.add('hidden');document.body.classList.remove('modal-open');resolve(value)};
-    ok.onclick=()=>close({currentPassword:inputs.currentPassword.value,newPassword:inputs.newPassword.value,confirmPassword:inputs.confirmPassword.value});
+    ok.onclick=()=>{
+      if(Object.values(inputs).every(input=>input.reportValidity()))close({currentPassword:inputs.currentPassword.value,newPassword:inputs.newPassword.value,confirmPassword:inputs.confirmPassword.value});
+    };
     cancel.onclick=()=>close(null);
     modal.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>close(null));
     modal.classList.remove('hidden');document.body.classList.add('modal-open');
@@ -426,14 +513,23 @@ function passwordChangeDialog(){
 }
 async function changeOwnPassword(){
   const values=await passwordChangeDialog();
-  if(!values)return;
-  if(!values.currentPassword)return toast('请输入当前密码','warning');
-  if(values.newPassword.length<12)return toast('新密码至少需要 12 位','warning');
-  if(values.newPassword!==values.confirmPassword)return toast('两次输入的新密码不一致','warning');
+  if(values)await saveOwnPassword(values);
+}
+function validNewPassword(value){
+  const length=Array.from(value).length;
+  return length>=6&&length<=12;
+}
+async function saveOwnPassword(values){
+  if(!values.currentPassword){toast('请输入当前密码','warning');return false}
+  if(!validNewPassword(values.newPassword)){toast('新密码须为 6 至 12 位','warning');return false}
+  if(values.newPassword!==values.confirmPassword){toast('两次输入的新密码不一致','warning');return false}
+  const epoch=sessionEpoch;
   try{
     await api('/api/v1/auth/password',{method:'POST',body:JSON.stringify({currentPassword:values.currentPassword,newPassword:values.newPassword})});
+    if(epoch!==sessionEpoch)return false;
     toast('密码已修改，其他设备会话已下线','success');
-  }catch(err){toast(err.message,'error')}
+    return true;
+  }catch(err){if(epoch===sessionEpoch)toast(err.message,'error');return false}
 }
 
 /* ---------- API Key 设置 ---------- */
@@ -499,8 +595,10 @@ async function refreshDailyUsage(){
   try{
     const {usage}=await api('/api/v1/jobs/usage');
     if(!current())return;
-    const {used,limit}=usage;
-    label.textContent=limit>0?`今日剩余 ${Math.max(0,limit-used)} / ${limit} 次 · 北京时间零点重置`:`今日已用 ${used} 次 · 不限次数`;
+    const {used,limit,cdk}=usage;
+    const daily=limit>0?`今日剩余 ${Math.max(0,limit-used)} / ${limit} 次 · 北京时间零点重置`:`今日已用 ${used} 次 · 不限次数`;
+    const lifetime=cdk?`CDK 剩余 ${Math.max(0,cdk.limit-cdk.used)} / ${cdk.limit} 次`:'';
+    label.textContent=lifetime&&limit>0?`${lifetime} · ${daily}`:lifetime||daily;
     label.classList.remove('hidden');
   }catch{
     if(current())label.classList.add('hidden');
@@ -517,20 +615,28 @@ $('#capture-form').addEventListener('submit',async e=>{
   const shareText=$('#share-text').value.trim();
   if(!shareText){$('#share-text').focus();return toast('请先粘贴抖音分享文本或作品链接','warning')}
   const epoch=sessionEpoch;
+  const infoOnly=$('#info-only').checked;
+  const action=infoOnly?'info':($('#with-transcribe').checked?'full':'download');
+  const feedback=$('#capture-feedback');
+  feedback.classList.remove('failed');
+  feedback.textContent=infoOnly?'正在读取作品信息…':'正在提交任务…';
   button.disabled=true;button.setAttribute('aria-busy','true');
   try{
-    const infoOnly=$('#info-only').checked;
-    const action=infoOnly?'info':($('#with-transcribe').checked?'full':'download');
     const data=await api('/api/v1/jobs',{method:'POST',headers:{'Idempotency-Key':uuidv4()},body:JSON.stringify({shareText,action,options:{force:false,keepVideo:action==='full',languageHints:['zh','en'],hotwords:[]}})});
     if(epoch!==sessionEpoch||!session)return;
+    feedback.textContent='';
     $('#share-text').value='';
     jobsPage=1;$('#query').value='';$('#status').value='';
-    if(data.job?.id)selectJob(data.job.id,data.job);
+    const job=data.job;
+    if(job?.id)selectJob(job.id,job);
+    if(job?.status==='failed')toast(job.error?.message||job.statusMessage||'解析失败','error');
+    else if(job?.status==='completed')toast('作品信息解析完成','success');
+    else if(job?.id)toast('任务已创建，正在处理','success');
     await loadJobs();
-    if(epoch===sessionEpoch&&session)toast('任务已创建，正在处理','success');
   }catch(err){
     if(epoch===sessionEpoch){
-      toast(err.message,'error');
+      feedback.textContent=err.message;
+      feedback.classList.add('failed');
       void refreshDailyUsage();
     }
   }
@@ -580,8 +686,10 @@ async function loadJobDetail(id,polling=false){
     const data=await api(`/api/v1/jobs/${encodeURIComponent(id)}`);
     if(!active()||!session)return;
     if(jobHasExpiredPreview(currentJob)&&!jobHasExpiredPreview(data.job))detailSig='';
+    const justFailed=currentJob?.status&&jobIsActive(currentJob.status)&&data.job.status==='failed';
     currentJob=data.job;
     renderDetail();
+    if(justFailed)toast(currentJob.error?.message||currentJob.statusMessage||'任务处理失败','error');
   }catch(err){
     if(!active())return;
     if(err.message.includes('登录')){enter(null);return}
@@ -814,7 +922,7 @@ async function operateAdminJob(id,op){
 $('#user-create-form').addEventListener('submit',async e=>{
   e.preventDefault();
   const password=$('#user-password').value;
-  if(password.length<12)return toast('密码至少需要 12 位','warning');
+  if(!validNewPassword(password))return toast('密码须为 6 至 12 位','warning');
   try{
     await api('/api/v1/admin/users',{method:'POST',body:JSON.stringify({username:$('#user-username').value.trim(),displayName:$('#user-display').value.trim(),password,role:$('#user-role').value})});
     e.target.reset();toast('用户已创建','success');await loadAdminUsers();
@@ -898,9 +1006,9 @@ async function setUserActive(id,active){
   }catch(err){toast(err.message,'error')}
 }
 async function resetUserPassword(id){
-  const password=await promptDialog({title:'重置密码',message:'该用户的所有会话将立即下线。请输入新密码（至少 12 位）：',placeholder:'新密码',password:true,confirmText:'重置'});
+  const password=await promptDialog({title:'重置密码',message:'新密码须为 6 至 12 位。该用户的所有会话将立即下线。',placeholder:'新密码',password:true,confirmText:'重置'});
   if(password==null)return;
-  if(password.length<12)return toast('密码至少需要 12 位','warning');
+  if(!validNewPassword(password))return toast('密码须为 6 至 12 位','warning');
   try{
     await api(`/api/v1/admin/users/${encodeURIComponent(id)}/password`,{method:'POST',body:JSON.stringify({password})});
     toast('密码已重置，该用户会话已下线','success');
@@ -1066,12 +1174,14 @@ function jobDetailHTML(job){
   if(w.durationMs)metas.push(`<span>时长 ${fmtDuration(w.durationMs)}</span>`);
   if(w.publishedAt)metas.push(`<span>发布 ${fmtDate(w.publishedAt)}</span>`);
   const tags=(w.hashtags||[]).map(t=>`<span class="tag">#${esc(t)}</span>`).join('');
-  const cover=w.coverUrl?`<img class="detail-cover" src="${esc(w.coverUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:'';
+  const signedCovers=[videoFile?.thumbnailUrl,w.coverPreviewUrl].filter(previewUsable);
+  const coverSources=[...new Set(w.coverUrl?[...signedCovers,w.coverUrl]:signedCovers)];
+  const cover=coverSources.length?`<img class="detail-cover" src="${esc(coverSources[0])}" data-cover-fallback="${esc(coverSources[1])}" data-cover-source="${esc(coverSources[2])}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="retryVideoCover(this)">`:'';
 
   const error=job.error?`<div class="error-box">${icon('alert-circle',14)}<div><strong>${esc(job.error.code)}</strong><p>${esc(job.error.message)}</p></div></div>`:'';
   const progressPct=Math.max(0,Math.min(100,Math.round(Number(job.progress)||0)));
   const progressBlock=!terminal?`<div class="progress-row"><div class="progress"><i style="width:${progressPct}%"></i></div><span>${progressPct}%</span></div>`:'';
-  const statusText=job.statusMessage||(['completed'].includes(job.status)?'处理完成':'');
+  const statusText=job.error&&job.error.message===job.statusMessage?'':job.statusMessage||(job.status==='completed'?'处理完成':'');
 
   const isNote=w.type==='note';
   const linkFiles=isNote?files.filter(f=>f.kind!=='image'&&f.kind!=='animated'):files;
@@ -1134,6 +1244,18 @@ function jobDetailHTML(job){
     ${statusText?`<p class="status-msg">${esc(statusText)}</p>`:''}
     ${transcript}
   </article>`;
+}
+
+function retryVideoCover(image){
+  const next=image.dataset.coverFallback;
+  if(next){
+    image.dataset.coverFallback=image.dataset.coverSource||'';
+    delete image.dataset.coverSource;
+    image.src=next;
+    return;
+  }
+  image.parentElement?.classList.add('no-cover');
+  image.remove();
 }
 
 function renderDetail(){
@@ -1201,7 +1323,7 @@ function promptDialog(opts={}){
     const input=document.createElement('input');
     input.type=opts.password?'password':opts.numberInput?'number':'text';
     if(opts.numberInput){
-      input.min='0';
+      input.min=String(opts.numberInput.min??0);
       input.max=String(opts.numberInput.max);
       input.step='1';
       input.value=opts.numberInput.value??'';
@@ -1209,7 +1331,9 @@ function promptDialog(opts={}){
     }
     input.placeholder=opts.placeholder||'';
     input.setAttribute('aria-label',opts.placeholder||opts.title||'输入');
-    input.maxLength=1024;
+    if(opts.password)input.pattern='.{6,12}';
+    else input.maxLength=1024;
+    input.required=!!opts.password||!!opts.numberInput?.required;
     input.autocomplete=opts.password?'new-password':'off';
     input.className='prompt-input';
     message.appendChild(input);
@@ -1230,7 +1354,7 @@ async function operate(id,op){
   const inAdmin=adminMode,epoch=sessionEpoch;
   const base=inAdmin?`/api/v1/admin/jobs/${encodeURIComponent(id)}`:`/api/v1/jobs/${encodeURIComponent(id)}`;
   try{
-    await api(base+(op==='delete'?'':`/${op}`),{method:op==='delete'?'DELETE':'POST'});
+    const data=await api(base+(op==='delete'?'':`/${op}`),{method:op==='delete'?'DELETE':'POST'});
     if(epoch!==sessionEpoch||!session)return;
     if(inAdmin){
       if(!adminOpen)return;
@@ -1245,11 +1369,15 @@ async function operate(id,op){
       return;
     }
     if(op==='delete'&&selectedId===id)selectJob(null);
+    if(op==='retry'){
+      if(selectedId===id&&data?.job?.id===id)selectJob(id,data.job);
+      if(data?.job?.status==='failed')toast(data.job.error?.message||data.job.statusMessage||'任务处理失败','error');
+      else toast('已重新开始');
+    }
     await Promise.all([loadJobs(),op!=='delete'&&selectedId===id?loadJobDetail(id):null]);
     if(op==='delete'&&jobsPage>1&&jobsTotal<=(jobsPage-1)*jobsPageSize){jobsPage--;loadJobs()}
     if(op==='delete')toast('任务已删除','success');
     if(op==='cancel')toast('已请求取消');
-    if(op==='retry')toast('已重新开始');
   }catch(err){toast(err.message,'error')}
 }
 // 签名预览地址带 expires（Unix 秒）。
@@ -1696,4 +1824,12 @@ document.addEventListener('keydown',e=>{
 });
 
 // 启动时用 httpOnly Cookie 静默恢复会话；失效则回到登录页。
-(async()=>{try{enter(await api('/api/v1/auth/refresh',{method:'POST'},false))}catch{enter(null)}})();
+(async()=>{
+  const epoch=sessionEpoch;
+  let initial=null;
+  try{initial=await readWebSession()}catch{}
+  finally{
+    for(const button of document.querySelectorAll('#login-form button[type="submit"], #cdk-login-form button[type="submit"]'))button.disabled=false;
+  }
+  if(epoch===sessionEpoch)enter(initial);
+})();

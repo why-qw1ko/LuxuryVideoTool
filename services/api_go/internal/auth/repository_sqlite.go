@@ -12,11 +12,23 @@ type SQLiteRepository struct{ db *sql.DB }
 
 func NewSQLiteRepository(db *sql.DB) *SQLiteRepository { return &SQLiteRepository{db: db} }
 
+type execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
 func (r *SQLiteRepository) CreateUser(ctx context.Context, user User) error {
-	_, err := r.db.ExecContext(ctx, `INSERT INTO users(
-		id, username_normalized, display_name, password_hash, role, is_active, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, user.ID, user.UsernameNormalized, user.DisplayName,
-		user.PasswordHash, user.Role, boolInt(user.IsActive), millis(user.CreatedAt), millis(user.UpdatedAt))
+	return insertUser(ctx, r.db, user)
+}
+
+func insertUser(ctx context.Context, db execer, user User) error {
+	var lastLogin sql.NullInt64
+	if user.LastLoginAt != nil {
+		lastLogin = sql.NullInt64{Int64: millis(*user.LastLoginAt), Valid: true}
+	}
+	_, err := db.ExecContext(ctx, `INSERT INTO users(
+		id, username_normalized, display_name, password_hash, role, is_active, is_cdk, created_at, updated_at, last_login_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, user.ID, user.UsernameNormalized, user.DisplayName,
+		user.PasswordHash, user.Role, boolInt(user.IsActive), boolInt(user.IsCDK), millis(user.CreatedAt), millis(user.UpdatedAt), lastLogin)
 	if err != nil {
 		return fmt.Errorf("create user: %w", err)
 	}
@@ -24,7 +36,7 @@ func (r *SQLiteRepository) CreateUser(ctx context.Context, user User) error {
 }
 
 func (r *SQLiteRepository) UpdatePassword(ctx context.Context, userID, passwordHash string, now time.Time) error {
-	result, err := r.db.ExecContext(ctx, "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?", passwordHash, millis(now), userID)
+	result, err := r.db.ExecContext(ctx, "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ? AND is_cdk = 0", passwordHash, millis(now), userID)
 	if err != nil {
 		return fmt.Errorf("update password: %w", err)
 	}
@@ -32,7 +44,7 @@ func (r *SQLiteRepository) UpdatePassword(ctx context.Context, userID, passwordH
 }
 
 func (r *SQLiteRepository) SetUserActive(ctx context.Context, userID string, active bool, now time.Time) error {
-	result, err := r.db.ExecContext(ctx, "UPDATE users SET is_active = ?, updated_at = ? WHERE id = ?", boolInt(active), millis(now), userID)
+	result, err := r.db.ExecContext(ctx, "UPDATE users SET is_active = ?, updated_at = ? WHERE id = ? AND is_cdk = 0", boolInt(active), millis(now), userID)
 	if err != nil {
 		return fmt.Errorf("set user active: %w", err)
 	}
@@ -41,7 +53,8 @@ func (r *SQLiteRepository) SetUserActive(ctx context.Context, userID string, act
 
 func (r *SQLiteRepository) ListUsers(ctx context.Context) ([]User, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id, username_normalized, display_name, password_hash,
-		role, is_active, created_at, updated_at, last_login_at FROM users ORDER BY created_at ASC, username_normalized ASC`)
+		role, is_active, is_cdk, created_at, updated_at, last_login_at FROM users
+		WHERE is_cdk = 0 ORDER BY created_at ASC, username_normalized ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
@@ -62,12 +75,12 @@ func (r *SQLiteRepository) ListUsers(ctx context.Context) ([]User, error) {
 
 func (r *SQLiteRepository) FindUserByUsername(ctx context.Context, username string) (User, error) {
 	return scanUser(r.db.QueryRowContext(ctx, `SELECT id, username_normalized, display_name, password_hash,
-		role, is_active, created_at, updated_at, last_login_at FROM users WHERE username_normalized = ?`, username))
+		role, is_active, is_cdk, created_at, updated_at, last_login_at FROM users WHERE username_normalized = ?`, username))
 }
 
 func (r *SQLiteRepository) FindUserByID(ctx context.Context, userID string) (User, error) {
 	return scanUser(r.db.QueryRowContext(ctx, `SELECT id, username_normalized, display_name, password_hash,
-		role, is_active, created_at, updated_at, last_login_at FROM users WHERE id = ?`, userID))
+		role, is_active, is_cdk, created_at, updated_at, last_login_at FROM users WHERE id = ?`, userID))
 }
 
 func (r *SQLiteRepository) FindSessionByID(ctx context.Context, userID, sessionID string) (Session, error) {
@@ -111,7 +124,11 @@ func (r *SQLiteRepository) RecordLogin(ctx context.Context, userID string, now t
 }
 
 func (r *SQLiteRepository) CreateSession(ctx context.Context, session Session) error {
-	_, err := r.db.ExecContext(ctx, `INSERT INTO refresh_tokens(
+	return insertSession(ctx, r.db, session)
+}
+
+func insertSession(ctx context.Context, db execer, session Session) error {
+	_, err := db.ExecContext(ctx, `INSERT INTO refresh_tokens(
 		id, user_id, token_hash, device_id, device_name, platform, app_version,
 		expires_at, created_at, last_used_at
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, session.ID, session.UserID, session.TokenHash,
@@ -127,7 +144,7 @@ func (r *SQLiteRepository) FindSessionByTokenHash(ctx context.Context, tokenHash
 	row := r.db.QueryRowContext(ctx, `SELECT
 		t.id, t.user_id, t.token_hash, t.device_id, t.device_name, t.platform, t.app_version,
 		t.expires_at, t.revoked_at, t.replaced_by, t.created_at, t.last_used_at,
-		u.id, u.username_normalized, u.display_name, u.password_hash, u.role, u.is_active,
+		u.id, u.username_normalized, u.display_name, u.password_hash, u.role, u.is_active, u.is_cdk,
 		u.created_at, u.updated_at, u.last_login_at
 	FROM refresh_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?`, tokenHash)
 	var session Session
@@ -135,13 +152,13 @@ func (r *SQLiteRepository) FindSessionByTokenHash(ctx context.Context, tokenHash
 	var sessionExpires, sessionCreated, sessionUsed int64
 	var revokedAt sql.NullInt64
 	var replacedBy sql.NullString
-	var active int
+	var active, isCDK int
 	var userCreated, userUpdated int64
 	var lastLogin sql.NullInt64
 	err := row.Scan(&session.ID, &session.UserID, &session.TokenHash, &session.Device.ID,
 		&session.Device.Name, &session.Device.Platform, &session.Device.AppVersion, &sessionExpires,
 		&revokedAt, &replacedBy, &sessionCreated, &sessionUsed, &user.ID, &user.UsernameNormalized,
-		&user.DisplayName, &user.PasswordHash, &user.Role, &active, &userCreated, &userUpdated, &lastLogin)
+		&user.DisplayName, &user.PasswordHash, &user.Role, &active, &isCDK, &userCreated, &userUpdated, &lastLogin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, User{}, ErrInvalidToken
 	}
@@ -157,6 +174,7 @@ func (r *SQLiteRepository) FindSessionByTokenHash(ctx context.Context, tokenHash
 		session.ReplacedBy = &replacedBy.String
 	}
 	user.IsActive, user.CreatedAt, user.UpdatedAt = active == 1, fromMillis(userCreated), fromMillis(userUpdated)
+	user.IsCDK = isCDK == 1
 	if lastLogin.Valid {
 		value := fromMillis(lastLogin.Int64)
 		user.LastLoginAt = &value
@@ -170,12 +188,7 @@ func (r *SQLiteRepository) RotateSession(ctx context.Context, oldID string, repl
 		return fmt.Errorf("begin session rotation: %w", err)
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO refresh_tokens(
-		id, user_id, token_hash, device_id, device_name, platform, app_version, expires_at, created_at, last_used_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, replacement.ID, replacement.UserID, replacement.TokenHash,
-		replacement.Device.ID, replacement.Device.Name, replacement.Device.Platform, replacement.Device.AppVersion,
-		millis(replacement.ExpiresAt), millis(replacement.CreatedAt), millis(replacement.LastUsedAt))
-	if err != nil {
+	if err := insertSession(ctx, tx, replacement); err != nil {
 		return fmt.Errorf("create rotated session: %w", err)
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE refresh_tokens SET revoked_at = ?, replaced_by = ?, last_used_at = ?
@@ -249,11 +262,11 @@ type scanner interface{ Scan(dest ...any) error }
 
 func scanUser(row scanner) (User, error) {
 	var user User
-	var active int
+	var active, isCDK int
 	var created, updated int64
 	var lastLogin sql.NullInt64
 	err := row.Scan(&user.ID, &user.UsernameNormalized, &user.DisplayName, &user.PasswordHash,
-		&user.Role, &active, &created, &updated, &lastLogin)
+		&user.Role, &active, &isCDK, &created, &updated, &lastLogin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrNotFound
 	}
@@ -261,6 +274,7 @@ func scanUser(row scanner) (User, error) {
 		return User{}, fmt.Errorf("scan user: %w", err)
 	}
 	user.IsActive, user.CreatedAt, user.UpdatedAt = active == 1, fromMillis(created), fromMillis(updated)
+	user.IsCDK = isCDK == 1
 	if lastLogin.Valid {
 		value := fromMillis(lastLogin.Int64)
 		user.LastLoginAt = &value

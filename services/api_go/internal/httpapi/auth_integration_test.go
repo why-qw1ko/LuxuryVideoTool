@@ -29,12 +29,12 @@ func TestAuthenticationHTTPFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.CreateUser(context.Background(), "owner", "Owner", "correct horse battery staple", auth.RoleAdmin); err != nil {
+	if _, err := service.CreateUser(context.Background(), "owner", "Owner", "OwnerPass!", auth.RoleAdmin); err != nil {
 		t.Fatal(err)
 	}
 	handler := New(Dependencies{Build: version.Info{Version: "test"}, Auth: service, LoginRateLimit: 5, Ready: func() error { return nil }})
 
-	login := performJSON(handler, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "OWNER", "password": "correct horse battery staple", "device": map[string]any{"id": "device", "name": "PC", "platform": "windows", "appVersion": "1.0.0"}}, "")
+	login := performJSON(handler, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "OWNER", "password": "OwnerPass!", "device": map[string]any{"id": "device", "name": "PC", "platform": "windows", "appVersion": "1.0.0"}}, "")
 	if login.Code != http.StatusOK {
 		t.Fatalf("login status = %d, body = %s", login.Code, login.Body.String())
 	}
@@ -51,19 +51,25 @@ func TestAuthenticationHTTPFlow(t *testing.T) {
 		t.Fatalf("sessions status = %d, body = %s", sessions.Code, sessions.Body.String())
 	}
 
-	wrongPassword := performJSON(handler, http.MethodPost, "/api/v1/auth/password", map[string]any{"currentPassword": "wrong password value", "newPassword": "new correct password"}, pair.AccessToken)
+	wrongPassword := performJSON(handler, http.MethodPost, "/api/v1/auth/password", map[string]any{"currentPassword": "wrongPass", "newPassword": "newPas"}, pair.AccessToken)
 	if wrongPassword.Code != http.StatusUnauthorized {
 		t.Fatalf("wrong password status = %d, body = %s", wrongPassword.Code, wrongPassword.Body.String())
 	}
-	changedPassword := performJSON(handler, http.MethodPost, "/api/v1/auth/password", map[string]any{"currentPassword": "correct horse battery staple", "newPassword": "new correct password"}, pair.AccessToken)
+	for _, password := range []string{"12345", "1234567890123"} {
+		response := performJSON(handler, http.MethodPost, "/api/v1/auth/password", map[string]any{"currentPassword": "OwnerPass!", "newPassword": password}, pair.AccessToken)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("change password length %d: %d, body = %s", len(password), response.Code, response.Body.String())
+		}
+	}
+	changedPassword := performJSON(handler, http.MethodPost, "/api/v1/auth/password", map[string]any{"currentPassword": "OwnerPass!", "newPassword": "newPas"}, pair.AccessToken)
 	if changedPassword.Code != http.StatusOK {
 		t.Fatalf("change password status = %d, body = %s", changedPassword.Code, changedPassword.Body.String())
 	}
-	oldPasswordLogin := performJSON(handler, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "owner", "password": "correct horse battery staple", "device": map[string]any{"id": "device-2", "name": "PC", "platform": "windows", "appVersion": "1.0.0"}}, "")
+	oldPasswordLogin := performJSON(handler, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "owner", "password": "OwnerPass!", "device": map[string]any{"id": "device-2", "name": "PC", "platform": "windows", "appVersion": "1.0.0"}}, "")
 	if oldPasswordLogin.Code != http.StatusUnauthorized {
 		t.Fatalf("old password login status = %d", oldPasswordLogin.Code)
 	}
-	newPasswordLogin := performJSON(handler, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "owner", "password": "new correct password", "device": map[string]any{"id": "device-3", "name": "PC", "platform": "windows", "appVersion": "1.0.0"}}, "")
+	newPasswordLogin := performJSON(handler, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "owner", "password": "newPas", "device": map[string]any{"id": "device-3", "name": "PC", "platform": "windows", "appVersion": "1.0.0"}}, "")
 	if newPasswordLogin.Code != http.StatusOK {
 		t.Fatalf("new password login status = %d, body = %s", newPasswordLogin.Code, newPasswordLogin.Body.String())
 	}

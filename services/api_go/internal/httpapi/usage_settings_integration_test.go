@@ -18,7 +18,7 @@ func TestUsageSettingsControlAcceptedTasks(t *testing.T) {
 	ctx := context.Background()
 	authService, db, closeDB := testAuthService(t)
 	defer closeDB()
-	const password = "test password 12345"
+	const password = "UsagePass!"
 	login := func(username string, role auth.Role) (auth.User, string) {
 		t.Helper()
 		user, err := authService.CreateUser(ctx, username, username, password, role)

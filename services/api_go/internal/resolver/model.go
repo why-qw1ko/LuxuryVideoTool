@@ -11,6 +11,7 @@ var (
 	ErrURLNotAllowed    = errors.New("URL not allowed")
 	ErrWorkUnavailable  = errors.New("Douyin work unavailable")
 	ErrResolveFailed    = errors.New("Douyin resolve failed")
+	ErrResolveTimeout   = errors.New("Douyin resolve timed out")
 	ErrVideoRequired    = errors.New("Douyin work does not contain a video")
 )
 
@@ -36,6 +37,7 @@ type Work struct {
 	Title           string         `json:"title"`
 	Description     string         `json:"description"`
 	CoverURL        string         `json:"coverUrl,omitempty"`
+	CoverPreviewURL string         `json:"coverPreviewUrl,omitempty"`
 	VideoURL        string         `json:"videoUrl,omitempty"`
 	DurationMS      int64          `json:"durationMs,omitempty"`
 	Width           int            `json:"width,omitempty"`
@@ -53,6 +55,7 @@ type Work struct {
 
 	VideoURLCandidates []string `json:"videoUrlCandidates,omitempty"`
 	MusicURLCandidates []string `json:"musicUrlCandidates,omitempty"`
+	CoverURLCandidates []string `json:"-"`
 }
 
 type Adapter interface {

@@ -65,7 +65,7 @@ func registerUsageRoutes(mux, protected *http.ServeMux, deps Dependencies) {
 			writeUsageSettingsError(w, r, err)
 			return
 		}
-		recordUsageAudit(deps.Audit, r, principal.UserID, "admin.usage_settings.update", "runtime_settings", "usage_policy", nil)
+		recordAdminAudit(deps.Audit, r, principal.UserID, "admin.usage_settings.update", "runtime_settings", "usage_policy", nil)
 		writeJSON(w, http.StatusOK, map[string]any{"settings": value, "requestId": RequestID(r.Context())})
 	})
 	register("PUT /api/v1/admin/users/{id}/daily-task-limit", func(w http.ResponseWriter, r *http.Request) {
@@ -89,7 +89,7 @@ func registerUsageRoutes(mux, protected *http.ServeMux, deps Dependencies) {
 			writeUsageSettingsError(w, r, err)
 			return
 		}
-		recordUsageAudit(deps.Audit, r, principal.UserID, "admin.user.daily_task_limit.update", "user", userID, map[string]any{"dailyTaskLimit": limit})
+		recordAdminAudit(deps.Audit, r, principal.UserID, "admin.user.daily_task_limit.update", "user", userID, map[string]any{"dailyTaskLimit": limit})
 		writeJSON(w, http.StatusOK, map[string]any{"dailyTaskLimitOverride": limit, "requestId": RequestID(r.Context())})
 	})
 	register("GET /api/v1/jobs/usage", func(w http.ResponseWriter, r *http.Request) {
@@ -108,8 +108,17 @@ func registerUsageRoutes(mux, protected *http.ServeMux, deps Dependencies) {
 			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取每日额度", true)
 			return
 		}
+		usage := dailyUsageResult(used, limit, resetAt)
+		if principal.IsCDK {
+			cdkUsage, err := deps.Auth.CDKUsage(r.Context(), principal.UserID)
+			if err != nil {
+				writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取 CDK 额度", true)
+				return
+			}
+			usage["cdk"] = cdkUsage
+		}
 		w.Header().Set("Cache-Control", "private, no-store")
-		writeJSON(w, http.StatusOK, map[string]any{"usage": dailyUsageResult(used, limit, resetAt), "requestId": RequestID(r.Context())})
+		writeJSON(w, http.StatusOK, map[string]any{"usage": usage, "requestId": RequestID(r.Context())})
 	})
 }
 
@@ -161,7 +170,7 @@ func writeUsageSettingsError(w http.ResponseWriter, r *http.Request, err error) 
 	}
 }
 
-func recordUsageAudit(recorder *audit.Recorder, r *http.Request, actorID, action, targetType, targetID string, metadata map[string]any) {
+func recordAdminAudit(recorder *audit.Recorder, r *http.Request, actorID, action, targetType, targetID string, metadata map[string]any) {
 	if recorder == nil {
 		return
 	}
@@ -169,6 +178,6 @@ func recordUsageAudit(recorder *audit.Recorder, r *http.Request, actorID, action
 		ActorUserID: actorID, Action: action, TargetType: targetType, TargetID: targetID,
 		RequestID: RequestID(r.Context()), IP: remoteIP(r.RemoteAddr), Metadata: metadata,
 	}); err != nil {
-		slog.ErrorContext(r.Context(), "usage settings audit failed", "request_id", RequestID(r.Context()), "action", action)
+		slog.ErrorContext(r.Context(), "admin audit failed", "request_id", RequestID(r.Context()), "action", action)
 	}
 }

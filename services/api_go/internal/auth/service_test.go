@@ -8,6 +8,7 @@ import (
 )
 
 type memoryRepository struct {
+	CDKRepository
 	user     User
 	sessions map[string]Session
 }
@@ -93,7 +94,7 @@ func (r *memoryRepository) RevokeOtherUserSessions(_ context.Context, userID, ke
 }
 
 func TestLoginRefreshAndRevocation(t *testing.T) {
-	hash, err := HashPassword("correct horse battery staple")
+	hash, err := hashPassword("correct horse battery staple")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +134,7 @@ func TestLoginRefreshAndRevocation(t *testing.T) {
 }
 
 func TestChangePasswordRequiresCurrentPasswordAndRevokesOtherSessions(t *testing.T) {
-	hash, err := HashPassword("correct horse battery staple")
+	hash, err := hashPassword("correct horse battery staple")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +157,7 @@ func TestChangePasswordRequiresCurrentPasswordAndRevokesOtherSessions(t *testing
 	service.now = func() time.Time { return now }
 
 	principal := Principal{UserID: "user", SessionID: "current", Role: RoleUser}
-	if err := service.ChangePassword(context.Background(), principal, "wrong password value", "new correct password"); !errors.Is(err, ErrInvalidCredentials) {
+	if err := service.ChangePassword(context.Background(), principal, "wrong password value", "newPass!"); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("wrong password error = %v", err)
 	}
 	valid, err := VerifyPassword("correct horse battery staple", repo.user.PasswordHash)
@@ -164,10 +165,10 @@ func TestChangePasswordRequiresCurrentPasswordAndRevokesOtherSessions(t *testing
 		t.Fatalf("password changed after failed attempt: valid=%v err=%v", valid, err)
 	}
 
-	if err := service.ChangePassword(context.Background(), principal, "correct horse battery staple", "new correct password"); err != nil {
+	if err := service.ChangePassword(context.Background(), principal, "correct horse battery staple", "newPass!"); err != nil {
 		t.Fatal(err)
 	}
-	valid, err = VerifyPassword("new correct password", repo.user.PasswordHash)
+	valid, err = VerifyPassword("newPass!", repo.user.PasswordHash)
 	if err != nil || !valid {
 		t.Fatalf("new password not stored: valid=%v err=%v", valid, err)
 	}

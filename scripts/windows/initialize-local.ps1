@@ -28,16 +28,18 @@ if ([string]::IsNullOrWhiteSpace($env:DATABASE_PATH)) { $env:DATABASE_PATH = '.\
 if ([string]::IsNullOrWhiteSpace($env:JWT_SIGNING_KEY_FILE)) { $env:JWT_SIGNING_KEY_FILE = '.\secrets\jwt.key' }
 $keyPath = if ([IO.Path]::IsPathRooted($env:JWT_SIGNING_KEY_FILE)) { $env:JWT_SIGNING_KEY_FILE } else { Join-Path $apiRoot $env:JWT_SIGNING_KEY_FILE }
 if (-not (Test-Path -LiteralPath $keyPath)) { New-Item -ItemType Directory -Path (Split-Path -Parent $keyPath) -Force | Out-Null; $key=New-Object byte[] 32; $random=[Security.Cryptography.RandomNumberGenerator]::Create(); try{$random.GetBytes($key)}finally{$random.Dispose()}; [IO.File]::WriteAllBytes($keyPath,$key) }
-$password = Read-Host 'Enter administrator password (at least 12 characters)' -AsSecureString
+$password = Read-Host 'Enter account password (6 to 12 characters)' -AsSecureString
 $credential = New-Object Management.Automation.PSCredential('local', $password)
 $plainPassword = $credential.GetNetworkCredential().Password
-if ($plainPassword.Length -lt 12) { throw 'Password must contain at least 12 characters.' }
 
 $temporaryPassword = Join-Path ([IO.Path]::GetTempPath()) ("douyin-capture-password-{0}.txt" -f [Guid]::NewGuid().ToString('N'))
 try {
     [IO.File]::WriteAllText($temporaryPassword, $plainPassword, [Text.UTF8Encoding]::new($false))
     Push-Location $apiRoot
-    try { go run ./cmd/admin create-user --username $Username --display-name $DisplayName --role $Role --password-file $temporaryPassword }
+    try {
+        go run ./cmd/admin create-user --username $Username --display-name $DisplayName --role $Role --password-file $temporaryPassword
+        if ($LASTEXITCODE -ne 0) { throw 'Account creation failed.' }
+    }
     finally { Pop-Location }
 } finally {
     $plainPassword = $null

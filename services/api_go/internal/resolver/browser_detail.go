@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const browserDetailTimeout = 45 * time.Second
+const browserDetailTimeout = 17 * time.Second
 
 const browserDetailCaptureScript = `(() => {
 	window.__douyinDetailResponse = null;
@@ -112,11 +112,12 @@ type browserDetailSnapshot struct {
 // FetchDetail 同时读取浏览器的详情响应和公开页面内嵌数据。
 // 服务端直接渲染的页面可能完全不请求详情接口，不能仅等待 XHR / fetch。
 func (m *TtwidManager) FetchDetail(ctx context.Context, pageURL, workID string) ([]byte, error) {
-	m.browserMu.Lock()
-	defer m.browserMu.Unlock()
-
-	browserCtx, cancel := context.WithTimeout(ctx, browserDetailTimeout+15*time.Second)
+	browserCtx, cancel := context.WithTimeout(ctx, browserDetailTimeout)
 	defer cancel()
+	if err := takeGate(browserCtx, m.browserGate); err != nil {
+		return nil, err
+	}
+	defer func() { <-m.browserGate }()
 	browser, err := m.launchHeadlessBrowser(browserCtx)
 	if err != nil {
 		return nil, err
@@ -151,14 +152,8 @@ func (m *TtwidManager) FetchDetail(ctx context.Context, pageURL, workID string) 
 		return nil, fmt.Errorf("%w: browser navigation failed: %s", ErrResolveFailed, navigated.ErrorText)
 	}
 
-	deadline := time.Now().Add(browserDetailTimeout)
 	var snapshot browserDetailSnapshot
-	for time.Now().Before(deadline) {
-		select {
-		case <-browserCtx.Done():
-			return nil, browserCtx.Err()
-		default:
-		}
+	for browserCtx.Err() == nil {
 		res, err := conn.Call("Runtime.evaluate", map[string]any{
 			"expression":    browserDetailSnapshotScript,
 			"returnByValue": true,
@@ -187,11 +182,12 @@ func (m *TtwidManager) FetchDetail(ctx context.Context, pageURL, workID string) 
 				}
 			}
 		}
-		select {
-		case <-browserCtx.Done():
-			return nil, browserCtx.Err()
-		case <-time.After(500 * time.Millisecond):
+		if !waitForContext(browserCtx, 500*time.Millisecond) {
+			break
 		}
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 	if snapshot.LastResponse != nil {
 		return nil, fmt.Errorf("%w: browser detail API status %d (%d bytes), no matching embedded media", ErrResolveFailed, snapshot.LastResponse.Status, snapshot.LastResponse.Length)

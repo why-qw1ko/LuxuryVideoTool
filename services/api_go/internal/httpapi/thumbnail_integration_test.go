@@ -18,6 +18,7 @@ import (
 
 func TestSignedThumbnailAndOriginalPreview(t *testing.T) {
 	f := newArchiveDownloadFixture(t)
+	f.media = append(f.media, f.addFile(t, "job-1", f.ownerID, "video", "video.mp4", []byte("original-video"), nil))
 	f.deps.Thumbnails = media.NewThumbnailer(filepath.Join(t.TempDir(), "unavailable-ffmpeg"))
 	f.handler = New(f.deps)
 	webp, err := base64.StdEncoding.DecodeString("UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoCAAIAAgA0JaQAA3AA/vuUAAA=")

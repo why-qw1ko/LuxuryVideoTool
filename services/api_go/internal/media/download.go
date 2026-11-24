@@ -23,6 +23,9 @@ var (
 	ErrDownload = errors.New("media download failed")
 )
 
+const douyinMediaUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) EdgiOS/121.0.2277.107 Version/17.0 Mobile/15E148 Safari/604.1"
+const douyinMediaReferer = "https://www.douyin.com/"
+
 type DownloadResult struct {
 	SizeBytes int64
 	SHA256    string
@@ -35,9 +38,20 @@ type Downloader interface {
 type HTTPDownloader struct{ client *http.Client }
 
 func NewHTTPDownloader() *HTTPDownloader {
+	client := &http.Client{Transport: newMediaTransport()}
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > 5 {
+			return resolver.ErrURLNotAllowed
+		}
+		return validateMediaURL(req.URL)
+	}
+	return &HTTPDownloader{client: client}
+}
+
+func newMediaTransport() *http.Transport {
 	resolverDNS := net.DefaultResolver
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
-	transport := &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 15 * time.Second, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+	return &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 15 * time.Second, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
 			return nil, resolver.ErrURLNotAllowed
@@ -53,14 +67,6 @@ func NewHTTPDownloader() *HTTPDownloader {
 		}
 		return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
 	}}
-	client := &http.Client{Transport: transport}
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if len(via) > 5 {
-			return resolver.ErrURLNotAllowed
-		}
-		return validateMediaURL(req.URL)
-	}
-	return &HTTPDownloader{client: client}
 }
 
 func (d *HTTPDownloader) Download(ctx context.Context, mediaURL, temporaryPath, finalPath string, maxBytes int64) (DownloadResult, error) {
@@ -79,8 +85,8 @@ func (d *HTTPDownloader) Download(ctx context.Context, mediaURL, temporaryPath, 
 	if err != nil {
 		return DownloadResult{}, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) EdgiOS/121.0.2277.107 Version/17.0 Mobile/15E148 Safari/604.1")
-	req.Header.Set("Referer", "https://www.douyin.com/")
+	req.Header.Set("User-Agent", douyinMediaUserAgent)
+	req.Header.Set("Referer", douyinMediaReferer)
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 	req.Header.Set("Accept-Encoding", "identity")

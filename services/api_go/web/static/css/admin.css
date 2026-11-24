@@ -10,6 +10,7 @@
 .admin-nav button:hover{background:var(--hover);color:var(--text)}
 .admin-nav button.active{background:var(--primary-light);color:var(--primary);font-weight:600}
 .admin-sidebar-foot{margin-top:auto;display:flex;flex-direction:column;gap:12px;border-top:1px solid var(--border);padding-top:16px}
+#admin-logout{justify-content:flex-start;padding-inline:12px}
 .admin-user{display:flex;align-items:center;gap:10px;padding:8px}
 .admin-user-avatar{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;background:var(--primary-light);color:var(--primary);font-size:14px;font-weight:600;flex-shrink:0}
 .admin-user-info{display:flex;flex-direction:column;gap:3px;line-height:1.4;min-width:0}
@@ -94,6 +95,10 @@
 .admin-usage-checks,.admin-usage-amounts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,168px),1fr));gap:12px}
 #admin-console .admin-usage-checks input{height:15px}
 #admin-usage-fields input[name="dailyTaskLimit"]{max-width:224px}
+#admin-view-password{overflow-y:auto}
+#admin-password-form{max-width:384px;align-items:start}
+#admin-password-form .meta{margin:-8px 0 0}
+#admin-password-submit{justify-self:start}
 
 #admin-user-sessions.panel.sub{margin-top:0;max-height:40vh;padding:20px;overflow-y:auto;box-shadow:none;border:1px solid var(--border)}
 .back-btn{display:inline-flex;align-items:center;gap:7px;min-height:40px;padding:8px 14px;border:1px solid var(--border);border-radius:4px;background:var(--card);color:var(--text-secondary);font-size:13px;white-space:nowrap;transition:background .14s ease,color .14s ease,border-color .14s ease}

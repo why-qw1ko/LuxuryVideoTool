@@ -21,7 +21,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -41,8 +40,8 @@ type douyinTtwid struct {
 
 // TtwidManager 负责 ttwid 的加载、续期与引导。并发安全。
 type TtwidManager struct {
-	mu          sync.Mutex
-	browserMu   sync.Mutex
+	cookieGate  chan struct{}
+	browserGate chan struct{}
 	client      *SafeClient
 	storePath   string
 	browserPath string
@@ -50,15 +49,44 @@ type TtwidManager struct {
 }
 
 func NewTtwidManager(client *SafeClient, storePath, browserPath string) *TtwidManager {
-	return &TtwidManager{client: client, storePath: storePath, browserPath: browserPath}
+	return &TtwidManager{
+		cookieGate: make(chan struct{}, 1), browserGate: make(chan struct{}, 1),
+		client: client, storePath: storePath, browserPath: browserPath,
+	}
+}
+
+func takeGate(ctx context.Context, gate chan struct{}) error {
+	select {
+	case gate <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-gate
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func waitForContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return ctx.Err() == nil
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // Get 返回一个仍有效的 ttwid（必要时加载 / 续期 / 无头浏览器引导）。
 // hintURL 仅在完全没有 ttwid 需要浏览器引导时使用：抖音首页不生成 ttwid，
 // 必须导航到视频等完整应用页才会触发 webid SDK 生成，故传入作品页 URL。
 func (m *TtwidManager) Get(ctx context.Context, hintURL string) (string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	if err := takeGate(ctx, m.cookieGate); err != nil {
+		return "", err
+	}
+	defer func() { <-m.cookieGate }()
 
 	cur := m.current
 	if cur == nil {
@@ -150,8 +178,10 @@ func (m *TtwidManager) save(t *douyinTtwid) {
 // 轮询 CDP cookies 直到出现 ttwid → 关闭浏览器。
 // 注意：抖音首页不触发 ttwid 生成，hintURL 需指向视频/图集等完整应用页。
 func (m *TtwidManager) bootstrap(ctx context.Context, hintURL string) (string, error) {
-	m.browserMu.Lock()
-	defer m.browserMu.Unlock()
+	if err := takeGate(ctx, m.browserGate); err != nil {
+		return "", err
+	}
+	defer func() { <-m.browserGate }()
 
 	browser, err := m.launchHeadlessBrowser(ctx)
 	if err != nil {
@@ -196,7 +226,9 @@ func (m *TtwidManager) bootstrap(ctx context.Context, hintURL string) (string, e
 				}
 			}
 		}
-		time.Sleep(500 * time.Millisecond)
+		if !waitForContext(ctx, 500*time.Millisecond) {
+			return "", ctx.Err()
+		}
 	}
 	return "", fmt.Errorf("无头浏览器在 %d 秒内未取得 ttwid（请检查网络与浏览器可用性）", 25)
 }
@@ -263,7 +295,7 @@ func (m *TtwidManager) launchHeadlessBrowser(ctx context.Context) (*headlessBrow
 		_ = os.RemoveAll(userData)
 		return nil, err
 	}
-	conn, err := dialCDP(pageWS)
+	conn, err := dialCDP(ctx, pageWS)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
@@ -276,26 +308,36 @@ func (m *TtwidManager) launchHeadlessBrowser(ctx context.Context) (*headlessBrow
 // --- CDP 最小客户端 ---
 
 type cdpConn struct {
-	ws *websocket.Conn
-	id int
+	ws   *websocket.Conn
+	id   int
+	ctx  context.Context
+	stop func() bool
 }
 
-func dialCDP(rawURL string) (*cdpConn, error) {
+func dialCDP(ctx context.Context, rawURL string) (*cdpConn, error) {
 	dialer := &websocket.Dialer{HandshakeTimeout: 10 * time.Second}
-	ws, _, err := dialer.Dial(rawURL, nil)
+	ws, _, err := dialer.DialContext(ctx, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("连接 CDP 失败: %w", err)
 	}
-	return &cdpConn{ws: ws}, nil
+	return &cdpConn{ws: ws, ctx: ctx, stop: context.AfterFunc(ctx, func() { _ = ws.Close() })}, nil
 }
 
 func (c *cdpConn) Call(method string, params map[string]any, timeout time.Duration) (json.RawMessage, error) {
+	if err := c.ctx.Err(); err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(timeout)
+	if end, ok := c.ctx.Deadline(); ok && end.Before(deadline) {
+		deadline = end
+	}
+	_ = c.ws.SetWriteDeadline(deadline)
+	_ = c.ws.SetReadDeadline(deadline)
 	c.id++
 	msg := map[string]any{"id": c.id, "method": method, "params": params}
 	if err := c.ws.WriteJSON(msg); err != nil {
 		return nil, err
 	}
-	_ = c.ws.SetReadDeadline(time.Now().Add(timeout))
 	for {
 		var resp struct {
 			ID    int `json:"id"`
@@ -305,6 +347,9 @@ func (c *cdpConn) Call(method string, params map[string]any, timeout time.Durati
 			Result json.RawMessage `json:"result"`
 		}
 		if err := c.ws.ReadJSON(&resp); err != nil {
+			if c.ctx.Err() != nil {
+				return nil, c.ctx.Err()
+			}
 			return nil, err
 		}
 		if resp.ID == c.id {
@@ -316,19 +361,22 @@ func (c *cdpConn) Call(method string, params map[string]any, timeout time.Durati
 	}
 }
 
-func (c *cdpConn) Close() { _ = c.ws.Close() }
+func (c *cdpConn) Close() {
+	c.stop()
+	_ = c.ws.Close()
+}
 
 // waitForDevtoolsPage 等待调试端口就绪并返回第一个 page 目标的 WebSocket 地址。
 func waitForDevtoolsPage(ctx context.Context, port int) (string, error) {
-	deadline := time.Now().Add(20 * time.Second)
+	startupCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
 	client := &http.Client{Timeout: 3 * time.Second}
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		default:
-		}
-		resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/json", port))
+	req, err := http.NewRequestWithContext(startupCtx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/json", port), nil)
+	if err != nil {
+		return "", err
+	}
+	for startupCtx.Err() == nil {
+		resp, err := client.Do(req)
 		if err == nil {
 			var tabs []struct {
 				Type                 string `json:"type"`
@@ -344,7 +392,12 @@ func waitForDevtoolsPage(ctx context.Context, port int) (string, error) {
 				}
 			}
 		}
-		time.Sleep(300 * time.Millisecond)
+		if !waitForContext(startupCtx, 300*time.Millisecond) {
+			break
+		}
+	}
+	if ctx.Err() != nil {
+		return "", ctx.Err()
 	}
 	return "", fmt.Errorf("无头浏览器调试端口未就绪")
 }

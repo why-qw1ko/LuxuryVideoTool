@@ -126,17 +126,29 @@ func (w *Worker) process(ctx context.Context, owner string, job Job) (resultErr 
 		return err
 	}
 	work, _, err := w.resolver.Resolve(jobCtx, job.InputText, job.ForceRefresh)
+	if ctx.Err() != nil {
+		now := w.now().UTC()
+		persistCtx := context.WithoutCancel(ctx)
+		_ = w.repo.FinishStep(persistCtx, resolveStepID, "failed", "WORKER_STOPPED", "服务停止，等待继续解析", map[string]any{}, now)
+		return errors.Join(ctx.Err(), w.repo.RequeueInterruptedResolve(persistCtx, job.ID, owner, now))
+	}
 	if err != nil {
-		code, message := mediaError(err)
+		code, message, terminal := resolverError(err)
 		_ = w.repo.FinishStep(context.Background(), resolveStepID, "failed", code, message, map[string]any{}, w.now().UTC())
 		if errors.Is(err, context.Canceled) {
 			_ = w.repo.CancelOwned(context.Background(), job.ID, owner, "任务已取消", w.now().UTC())
 			return err
 		}
-		return w.failed(job, owner, err)
+		if terminal {
+			return w.failPermanently(job, owner, code, message, err)
+		}
+		return w.failedWith(job, owner, code, message, err)
 	}
 	if err := w.repo.FinishStep(jobCtx, resolveStepID, "completed", "", "", map[string]any{"workId": work.ID}, w.now().UTC()); err != nil {
 		return err
+	}
+	if job.Action == "info" {
+		return w.repo.CompleteInfo(jobCtx, job.ID, owner, work, w.now().UTC())
 	}
 	if err := w.repo.SetResolved(jobCtx, job.ID, owner, work, w.now().UTC()); err != nil {
 		return err
@@ -476,16 +488,10 @@ func (w *Worker) failedWith(job Job, owner, code, message string, cause error) e
 		return cause
 	}
 	if errors.Is(cause, asr.ErrAuth) || errors.Is(cause, asr.ErrBudgetExceeded) || errors.Is(cause, asr.ErrInputRejected) || errors.Is(cause, resolver.ErrInvalidShareLink) || errors.Is(cause, resolver.ErrWorkUnavailable) || errors.Is(cause, resolver.ErrVideoRequired) || errors.Is(cause, media.ErrTooLarge) {
-		if persistErr := w.repo.Fail(context.Background(), job.ID, code, message, w.now().UTC()); persistErr != nil {
-			return errors.Join(cause, persistErr)
-		}
-		return cause
+		return w.failPermanently(job, owner, code, message, cause)
 	}
 	if errors.Is(cause, media.ErrFFmpeg) && job.AttemptCount >= 2 {
-		if persistErr := w.repo.Fail(context.Background(), job.ID, code, message, w.now().UTC()); persistErr != nil {
-			return errors.Join(cause, persistErr)
-		}
-		return cause
+		return w.failPermanently(job, owner, code, message, cause)
 	}
 	delay := asr.RetryAfter(cause, job.AttemptCount-1)
 	if delay <= 0 {
@@ -493,6 +499,13 @@ func (w *Worker) failedWith(job Job, owner, code, message string, cause error) e
 	}
 	if persistErr := w.repo.RetryLater(context.Background(), job.ID, owner, code, message, w.now().UTC().Add(delay), w.now().UTC()); persistErr != nil {
 		return errors.Join(cause, persistErr)
+	}
+	return cause
+}
+
+func (w *Worker) failPermanently(job Job, owner, code, message string, cause error) error {
+	if err := w.repo.Fail(context.Background(), job.ID, owner, code, message, w.now().UTC()); err != nil {
+		return errors.Join(cause, err)
 	}
 	return cause
 }
@@ -528,8 +541,9 @@ func mediaError(err error) (string, string) {
 		return "DOUYIN_WORK_UNAVAILABLE", "作品不存在或不可访问"
 	case errors.Is(err, resolver.ErrVideoRequired):
 		return "VIDEO_REQUIRED", "该作品是图文或不含视频，不能下载视频或提取口播"
-	case errors.Is(err, resolver.ErrResolveFailed), errors.Is(err, resolver.ErrInvalidShareLink):
-		return "DOUYIN_RESOLVE_FAILED", diagnosticMessage("无法解析该作品", err, resolver.ErrResolveFailed)
+	case errors.Is(err, resolver.ErrResolveFailed), errors.Is(err, resolver.ErrResolveTimeout), errors.Is(err, resolver.ErrInvalidShareLink):
+		code, message, _ := resolverError(err)
+		return code, message
 	case errors.Is(err, media.ErrDownload):
 		return "MEDIA_DOWNLOAD_FAILED", diagnosticMessage("媒体下载失败", err, media.ErrDownload)
 	default:

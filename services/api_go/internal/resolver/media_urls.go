@@ -46,6 +46,18 @@ func mediaURLCandidates(object map[string]any, keys ...string) []string {
 	return candidates
 }
 
+func videoCoverURLCandidates(object map[string]any) []string {
+	var candidates []string
+	for _, key := range []string{"cover", "origin_cover", "originCover", "cover_url", "coverUrl",
+		"cover_url_list", "coverUrlList", "origin_cover_url_list", "originCoverUrlList", "dynamic_cover", "dynamicCover"} {
+		candidates = append(candidates, mediaURLCandidates(object, key)...)
+		if source := firstMap(object, key); source != nil {
+			candidates = append(candidates, mediaURLCandidates(source, "src", "url")...)
+		}
+	}
+	return candidates
+}
+
 // videoURLCandidates 保持现有顶层播放地址优先，补充码率播放地址，最后才用下载地址。
 func videoURLCandidates(video map[string]any) []string {
 	candidates := mediaURLCandidates(video, "play_addr", "playAddr")

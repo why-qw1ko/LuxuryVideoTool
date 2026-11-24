@@ -12,7 +12,7 @@
 .header-actions .icon-btn{width:36px;height:36px;min-height:36px}
 .header-actions #logout{border-left:1px solid var(--border);border-radius:0;padding-left:16px}
 /* 工作台 */
-.layout{display:grid;grid-template-columns:300px minmax(0,1fr);width:100%;align-items:stretch;min-height:calc(100dvh - 64px)}
+.layout{display:grid;grid-template-columns:clamp(224px,19vw,280px) minmax(0,1fr);width:100%;align-items:stretch;min-height:calc(100dvh - 64px)}
 .master-list{display:flex;flex-direction:column;gap:20px;padding:24px 16px 16px;background:var(--sidebar);border-right:1px solid var(--border);min-height:0}
 .sidebar-brand{display:none;align-items:center;gap:10px;padding-bottom:16px;border-bottom:1px solid var(--border)}
 .sidebar-brand .brand-text strong{display:block;font-size:15px}
@@ -52,7 +52,6 @@
 .dot-active{background:var(--primary)}
 .dot-muted{background:var(--text-tertiary)}
 /* 新建任务 */
-#view-new{max-width:960px}
 .workspace-heading{margin-bottom:20px}
 .workspace-heading h2{margin:0;font-size:20px;font-weight:600;line-height:1.5}
 .capture-card{background:var(--card);border:1px solid var(--border);border-radius:4px}
@@ -68,6 +67,8 @@
 .capture-footer{display:flex;align-items:center;gap:16px;margin-top:28px;padding-top:24px;border-top:1px solid var(--border)}
 .capture-footer>span{font-size:12px;color:var(--text-tertiary)}
 #submit-task{min-width:104px;flex-shrink:0}
+#capture-feedback:empty{margin:0}
+#capture-feedback.failed{color:var(--danger)}
 /* 登录 */
 .login-layout{width:min(360px,calc(100% - 48px));margin:64px auto}
 .login-card{padding:0}
@@ -90,10 +91,12 @@
   .master-list{overflow:hidden}
   .job-list{min-height:0}
   .content{overflow-y:auto;scrollbar-gutter:stable;min-height:0}
+  .content>section{width:100%;max-width:1200px;margin-inline:auto}
+  .content .detail-media:not(.no-cover){grid-template-columns:clamp(128px,19%,192px) minmax(0,1fr)}
   .shell:has(#login:not(.hidden)){justify-content:safe center;padding:40px 24px;background:var(--card)}
   .login-layout{flex-shrink:0;margin:0 auto}
 }
-@media(min-width:1640px){.content{padding:32px 40px}.content>section{max-width:1320px;width:100%}}
+@media(min-width:1640px){.content{padding:32px 40px}}
 @media(max-width:1240px){
   .content{padding:28px}
 }
@@ -103,6 +106,7 @@
   .header-actions .btn-label{display:none}
   .header-actions .ghost{width:36px;height:36px;min-height:36px;padding:0}
   .header-actions #logout{padding-left:0;border:0}
+  .header-actions #admin-back-front{width:auto;padding-inline:8px}
   #sidebar-toggle{display:inline-flex}
   #sidebar-toggle.nav-hidden{display:none}
   .shell{padding:0}

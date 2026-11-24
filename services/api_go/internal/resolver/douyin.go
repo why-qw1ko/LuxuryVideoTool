@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -15,7 +16,13 @@ import (
 	"time"
 )
 
-const DouyinResolverVersion = "7"
+const DouyinResolverVersion = "8"
+
+const (
+	resolveTimeout   = 25 * time.Second
+	sharePageTimeout = 5 * time.Second
+	detailAPITimeout = 7 * time.Second
+)
 
 type Douyin struct {
 	client *SafeClient
@@ -40,57 +47,115 @@ func (d *Douyin) Resolve(ctx context.Context, shareText string) (Work, error) {
 	if err != nil {
 		return Work{}, err
 	}
-
-	// 主路径：aweme/v1/web/aweme/detail 详情 API（a_bogus 签名 + ttwid cookie）。
-	// 部分分享页缺少内嵌作品数据；详情接口失败时读取浏览器接口或应用页内嵌数据。
-	workID := input.WorkID
-	workType := input.WorkType
-	if workID == "" {
-		// 短链（v.douyin.com/xxx）需先跟随跳转拿到作品 ID。跳转目标可能是
-		// /share/video/{id}（视频）或 /share/note/{id}（图文/动图），两者都要能识别，
-		// 否则图文/动图链接会因提取不到 ID 而跳过 detail API，落入失效的分享页解析。
-		if _, finalURL, redirectErr := d.client.Get(ctx, input.URL); redirectErr == nil {
-			if resolvedInput, parseErr := ExtractInput(finalURL.String()); parseErr == nil && resolvedInput.WorkID != "" {
-				workID = resolvedInput.WorkID
-				workType = resolvedInput.WorkType
-			}
+	resolveCtx, cancel := context.WithTimeout(ctx, resolveTimeout)
+	defer cancel()
+	work, err := d.resolve(resolveCtx, input)
+	if err != nil {
+		switch resolveCtx.Err() {
+		case context.Canceled:
+			return Work{}, context.Canceled
+		case context.DeadlineExceeded:
+			return Work{}, fmt.Errorf("%w: %w", ErrResolveTimeout, context.DeadlineExceeded)
 		}
 	}
-	var detailErr error
-	if workID != "" {
-		var work Work
-		var ok bool
-		work, ok, detailErr = d.resolveViaDetailAPI(ctx, workID, workType)
+	return work, err
+}
+
+func (d *Douyin) resolve(ctx context.Context, input Input) (Work, error) {
+	if ctx.Err() != nil {
+		return Work{}, ctx.Err()
+	}
+	var body []byte
+	var finalURL *url.URL
+	if input.WorkID == "" {
+		// 保留短链跳转的响应，公开页面兜底时无需重复请求短链。
+		pageCtx, cancel := context.WithTimeout(ctx, sharePageTimeout)
+		var err error
+		body, finalURL, err = d.client.Get(pageCtx, input.URL)
+		cancel()
+		if errors.Is(err, context.DeadlineExceeded) {
+			return Work{}, fmt.Errorf("%w: %w", ErrResolveTimeout, err)
+		}
+		if err != nil {
+			return Work{}, err
+		}
+		if resolved, err := ExtractInput(finalURL.String()); err == nil {
+			input.WorkID, input.WorkType = resolved.WorkID, resolved.WorkType
+		}
+	}
+	if input.WorkID != "" {
+		detailCtx, cancel := context.WithTimeout(ctx, detailAPITimeout)
+		work, ok, err := d.resolveViaDetailAPI(detailCtx, input.WorkID, input.WorkType)
+		cancel()
 		if ok {
 			return work, nil
 		}
-		logResolveError(ctx, "detail API failed, falling back to browser detail", detailErr)
-		browserWork, browserErr := d.resolveViaBrowser(ctx, workID, workType)
-		if browserErr == nil {
-			return browserWork, nil
+		if errors.Is(err, ErrURLNotAllowed) {
+			return Work{}, err
 		}
-		logResolveError(ctx, "browser detail fallback failed", browserErr)
-		if detailErr == nil {
-			detailErr = browserErr
-		} else {
-			detailErr = fmt.Errorf("%v; browser fallback: %w", detailErr, browserErr)
-		}
+		logResolveError(ctx, "detail API failed, falling back to public page", err)
 	}
+	if ctx.Err() != nil {
+		return Work{}, ctx.Err()
+	}
+	pageCtx, cancel := context.WithTimeout(ctx, sharePageTimeout)
+	pageWork, pageErr := d.resolveViaPublicPage(pageCtx, input, body, finalURL)
+	cancel()
+	if input.WorkID == "" || errors.Is(pageErr, ErrURLNotAllowed) || errors.Is(pageErr, ErrWorkUnavailable) || (pageErr == nil && workHasMedia(pageWork)) {
+		return pageWork, pageErr
+	}
+	if ctx.Err() != nil {
+		return pageWork, pageErr
+	}
+	work, err := d.resolveViaBrowser(ctx, input.WorkID, input.WorkType)
+	if err == nil {
+		return work, nil
+	}
+	logResolveError(ctx, "browser detail fallback failed", err)
+	if pageErr == nil {
+		return pageWork, nil
+	}
+	return Work{}, ErrResolveFailed
+}
 
-	body, finalURL, err := d.client.Get(ctx, input.URL)
-	if err != nil {
-		return Work{}, err
+func (d *Douyin) resolveViaPublicPage(ctx context.Context, input Input, body []byte, finalURL *url.URL) (Work, error) {
+	if finalURL == nil {
+		var err error
+		body, finalURL, err = d.client.Get(ctx, input.URL)
+		if err != nil {
+			return Work{}, err
+		}
 	}
-	if resolvedInput, inputErr := ExtractInput(finalURL.String()); inputErr == nil && resolvedInput.WorkID != "" {
+	pageWork, found := d.parsePublicPage(body, finalURL, input.WorkID)
+	if found && workHasMedia(pageWork) {
+		return pageWork, nil
+	}
+	if input.WorkID != "" {
 		kind := "video"
-		if resolvedInput.WorkType == "note" {
+		if input.WorkType == "note" {
 			kind = "note"
 		}
-		shareURL, _ := url.Parse("https://www.iesdouyin.com/share/" + kind + "/" + resolvedInput.WorkID)
-		if shareBody, shareFinalURL, shareErr := d.client.Get(ctx, shareURL); shareErr == nil {
-			body, finalURL = shareBody, shareFinalURL
+		sharePath := "/share/" + kind + "/" + input.WorkID
+		host := strings.TrimSuffix(strings.ToLower(finalURL.Hostname()), ".")
+		alreadyReadSharePage := (host == "iesdouyin.com" || host == "www.iesdouyin.com") && strings.TrimRight(finalURL.Path, "/") == sharePath
+		if !alreadyReadSharePage {
+			shareURL, _ := url.Parse("https://www.iesdouyin.com" + sharePath)
+			if shareBody, shareFinalURL, shareErr := d.client.Get(ctx, shareURL); shareErr == nil {
+				if work, ok := d.parsePublicPage(shareBody, shareFinalURL, input.WorkID); ok && (workHasMedia(work) || !found) {
+					return work, nil
+				}
+			} else if errors.Is(shareErr, ErrURLNotAllowed) {
+				return Work{}, shareErr
+			}
 		}
 	}
+	if found {
+		return pageWork, nil
+	}
+	return Work{}, ErrResolveFailed
+}
+
+func (d *Douyin) parsePublicPage(body []byte, finalURL *url.URL, workID string) (Work, bool) {
 	for _, candidate := range scriptPatterns {
 		match := candidate.re.FindSubmatch(body)
 		if len(match) != 2 {
@@ -103,7 +168,9 @@ func (d *Douyin) Resolve(ctx context.Context, shareText string) (Work, error) {
 			}
 		}
 		var data any
-		if json.Unmarshal([]byte(raw), &data) != nil {
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.UseNumber()
+		if decoder.Decode(&data) != nil || decoder.Decode(&struct{}{}) != io.EOF {
 			continue
 		}
 		work, ok := workFromRouterData(data)
@@ -111,12 +178,7 @@ func (d *Douyin) Resolve(ctx context.Context, shareText string) (Work, error) {
 			// 兜底：定向路径未命中时回退整树查找，兼容 RENDER_DATA 旧结构与结构漂移。
 			work, ok = workFromTree(data)
 		}
-		if !ok {
-			continue
-		}
-		// 拒绝空壳：整树查找可能命中仅含 itemId 的页面级对象，
-		// 返回标题/视频/作者全空的作品。这种空壳必须丢弃，否则会污染解析缓存。
-		if isEmptyShell(work) {
+		if !ok || isEmptyShell(work) || (workID != "" && workID != work.DouyinWorkID) {
 			continue
 		}
 		work.VideoURL = withoutWatermark(work.VideoURL)
@@ -124,13 +186,9 @@ func (d *Douyin) Resolve(ctx context.Context, shareText string) (Work, error) {
 		work.CanonicalURL = canonicalURL(work.Type, work.DouyinWorkID, finalURL)
 		work.ResolverName, work.ResolverVersion, work.ResolvedAt = candidate.name, DouyinResolverVersion, d.now().UTC()
 		work.Metadata = map[string]any{"source": candidate.name}
-		return work, nil
+		return work, true
 	}
-	if detailErr != nil {
-		// 详情 API 有具体错误时优先返回它，便于用户定位（风控/ttwid 等问题）。
-		return Work{}, fmt.Errorf("%w: %v", ErrResolveFailed, detailErr)
-	}
-	return Work{}, ErrResolveFailed
+	return Work{}, false
 }
 
 // isEmptyShell 判断 Work 是否只是含 ID 的空壳（无标题/作者/视频/图片/封面）。
@@ -171,13 +229,8 @@ func (d *Douyin) resolveViaDetailAPI(ctx context.Context, workID, workType strin
 	const maxDetailAttempts = 3
 	var lastErr error
 	for attempt := 0; attempt < maxDetailAttempts; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return Work{}, false, ctx.Err()
-			default:
-			}
-			time.Sleep(400 * time.Millisecond)
+		if attempt > 0 && !waitForContext(ctx, 400*time.Millisecond) {
+			return Work{}, false, ctx.Err()
 		}
 		_, fullURL, signErr := signAwemeDetailURL(workID)
 		if signErr != nil {
@@ -189,6 +242,9 @@ func (d *Douyin) resolveViaDetailAPI(ctx context.Context, workID, workType strin
 		}
 		body, _, reqErr := d.client.Request(ctx, http.MethodGet, target, headers, nil)
 		if reqErr != nil {
+			if ctx.Err() != nil || errors.Is(reqErr, ErrURLNotAllowed) || errors.Is(reqErr, ErrWorkUnavailable) {
+				return Work{}, false, reqErr
+			}
 			lastErr = reqErr
 			continue
 		}
@@ -196,6 +252,9 @@ func (d *Douyin) resolveViaDetailAPI(ctx context.Context, workID, workType strin
 		if parseErr != nil {
 			lastErr = parseErr
 			continue
+		}
+		if work.DouyinWorkID != workID || isEmptyShell(work) {
+			return Work{}, false, ErrResolveFailed
 		}
 		return work, true, nil
 	}
@@ -324,10 +383,12 @@ func parseWorkObject(object map[string]any) (Work, bool) {
 		work.AuthorID = firstString(author, "uid", "sec_uid", "secUid", "id")
 		work.AuthorName = firstString(author, "nickname", "name")
 	}
-	work.CoverURL = findURL(firstMap(object, "video"), "cover", "origin_cover", "originCover", "dynamic_cover", "dynamicCover", "coverUrlList", "originCoverUrlList")
-	work.VideoURLCandidates = videoURLCandidates(firstMap(object, "video"))
+	video := firstMap(object, "video")
+	work.CoverURLCandidates = uniqueMediaURLs(append(videoCoverURLCandidates(video), videoCoverURLCandidates(object)...), false)
+	work.CoverURL = firstMediaURL(work.CoverURLCandidates)
+	work.VideoURLCandidates = videoURLCandidates(video)
 	work.VideoURL = firstMediaURL(work.VideoURLCandidates)
-	if video := firstMap(object, "video"); video != nil {
+	if video != nil {
 		work.DurationMS = int64(firstNumber(video, "duration"))
 		work.Width, work.Height = int(firstNumber(video, "width")), int(firstNumber(video, "height"))
 	}
@@ -449,37 +510,6 @@ func firstNumber(m map[string]any, keys ...string) float64 {
 		}
 	}
 	return 0
-}
-func findURL(m map[string]any, keys ...string) string {
-	if m == nil {
-		return ""
-	}
-	for _, key := range keys {
-		switch v := m[key].(type) {
-		case string:
-			if strings.HasPrefix(v, "http") {
-				return v
-			}
-		case []any:
-			for _, item := range v {
-				if s, ok := item.(string); ok && strings.HasPrefix(s, "http") {
-					return s
-				}
-				// 应用页的 playAddr 也可能是 [{src: "https://..."}]，
-				// 图集中的动态视频使用这种结构，不能只接受字符串数组。
-				if source, ok := item.(map[string]any); ok {
-					if found := findURL(source, "src"); found != "" {
-						return found
-					}
-				}
-			}
-		case map[string]any:
-			if found := findURL(v, "url_list", "urlList"); found != "" {
-				return found
-			}
-		}
-	}
-	return ""
 }
 func withoutWatermark(value string) string { return strings.Replace(value, "playwm", "play", 1) }
 func allDigits(value string) bool {

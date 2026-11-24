@@ -17,6 +17,7 @@ const captureCode = section("$('#capture-form').addEventListener", '/* ---------
 const selectionCode = section('function selectJob(', "$('#new-task-btn').addEventListener");
 const sidebarCode = section('let sidebarLastFocus=null;', "$('#sidebar-toggle').innerHTML");
 const pollCode = section('const ACTIVE_POLL_MS=', '/* ---------- 登录 / 退出 / 连接 ---------- */');
+const adminNavigationCode = section('function openAdminConsole(', 'const ACTIVE_POLL_MS=');
 
 function harness(code = listCode) {
   const nodes = new Map(), requests = [], rendered = [], notices = [], details = [];
@@ -27,6 +28,7 @@ function harness(code = listCode) {
       setAttribute(name, value) { this.attributes[name] = value; },
       addEventListener(name, callback) { this.listeners[name] = callback; },
       focus() { this.focused = true; },
+      reset() { this.resetCount = (this.resetCount || 0) + 1; },
       scrollIntoView() {},
     });
     return nodes.get(selector);
@@ -41,7 +43,7 @@ function harness(code = listCode) {
     adminUsers: [], lastAdminJobsSig: '', adminDetailLoadId: 0, adminDetailSig: '', adminMode: false,
     selectedId: null, currentJob: null, currentView: 'new', detailSig: '',
     taskMusic: {jobId: null}, adminOpen: false, videoPreviewURLs: new Map(),
-    URLSearchParams, $: node,
+    AbortController, URLSearchParams, setTimeout, clearTimeout, $: node,
     document: {
       hidden: false, listeners: {},
       querySelectorAll() { return []; },
@@ -56,6 +58,7 @@ function harness(code = listCode) {
     renderAdminUsers(users) { rendered.push(users); },
     renderPager() {}, skeletonRows() { return ''; },
     jobSignature(job) { return JSON.stringify(job); },
+    jobIsActive(status) { return !['completed','failed','cancelled'].includes(status); },
     jobListSignature(job) { return JSON.stringify(job); },
     jobMediaExpiry(job) { return job?.mediaExpiresAt || null; },
     jobExpired() { return false; },
@@ -65,7 +68,7 @@ function harness(code = listCode) {
     enter(value) { context.sessionEpoch++; context.session = value; },
     showView(name) { context.currentView = name; },
     renderDetail() { if (context.currentJob) details.push(context.currentJob); },
-    stopTaskMusic() {}, setSidebar() {}, closePreview() {}, refreshDailyUsage() {}, uuidv4() { return 'idempotency-key'; },
+    stopTaskMusic() {}, setSidebar() {}, closePreview() {}, resetCDKView() {}, refreshDailyUsage() {}, uuidv4() { return 'idempotency-key'; },
   });
   vm.runInContext(code, context);
   return {context, node, requests, rendered, notices, details};
@@ -73,6 +76,40 @@ function harness(code = listCode) {
 
 function job(id) { return {id, status: 'queued', progress: 0}; }
 const tick = async () => { await Promise.resolve(); await Promise.resolve(); };
+
+test('旧会话的续期结果不会覆盖新账号，也不会使用新账号重试旧请求', async () => {
+  const h = harness(section('let refreshing=null;', '/* ---------- Toast'));
+  const requests = [];
+  h.context.session.accessToken = 'old';
+  h.context.save = value => { h.context.session = value; };
+  h.context.fetch = (url, options) => new Promise(resolve => requests.push({url, options, resolve}));
+  const mutation = h.context.api('/api/v1/admin/cdks', {method: 'POST'});
+  assert.equal(requests[0].options.headers.Authorization, 'Bearer old');
+  requests[0].resolve({status: 401, json: async () => ({error: {code: 'AUTH_TOKEN_EXPIRED'}})});
+  await new Promise(setImmediate);
+  assert.equal(requests[1].url, '/api/v1/auth/refresh');
+  const next = {accessToken: 'new', user: {id: 'new'}};
+  h.context.enter(next);
+  requests[1].resolve({ok: true, json: async () => ({accessToken: 'rotated-old'})});
+  await assert.rejects(mutation, /登录已过期/);
+  assert.equal(h.context.session, next);
+  assert.equal(requests.length, 2);
+});
+
+test('续期发现会话失效或 Cookie 已切换账号时，不重试原账号请求', async () => {
+  for(const replacement of [null,{accessToken:'different',user:{id:'another-account'}}]){
+    const h=harness(section('let refreshing=null;', '/* ---------- Toast'));
+    const urls=[];
+    h.context.fetch=async url=>{
+      urls.push(url);
+      if(url==='/api/v1/auth/refresh')return {ok:!!replacement,json:async()=>replacement};
+      return {status:401,json:async()=>({error:{code:'AUTH_TOKEN_EXPIRED'}})};
+    };
+    await assert.rejects(h.context.api('/api/v1/admin/cdks',{method:'POST'}),/登录已过期/);
+    assert.equal(h.context.session,replacement);
+    assert.deepEqual(urls,['/api/v1/admin/cdks','/api/v1/auth/refresh']);
+  }
+});
 
 test('前台只请求列表摘要，点击后单独取详情并忽略以前的任务响应', async () => {
   const h = harness(selectionCode + listCode);
@@ -290,6 +327,52 @@ test('空白分享内容不创建任务；无 submitter 的提交可正常使用
   h.requests[0].reject(new Error('服务暂不可用'));
   await pending;
   assert.equal(h.node('#submit-task').disabled, false);
+  assert.equal(h.node('#capture-feedback').textContent, '服务暂不可用');
+});
+
+test('仅解析提交时立即显示进度，失败结果到达后不等待列表刷新就提示', async () => {
+  const h = harness(selectionCode + captureCode + listCode);
+  h.node('#info-only').checked = true;
+  h.node('#share-text').value = 'https://www.douyin.com/video/123';
+  const pending = h.node('#capture-form').listeners.submit({preventDefault() {}});
+  assert.equal(h.node('#capture-feedback').textContent, '正在读取作品信息…');
+  assert.equal(JSON.parse(h.requests[0].options.body).action, 'info');
+  const failed = {...job('failed-info'),status:'failed',error:{message:'读取作品信息超时，请稍后重试'}};
+  h.requests[0].resolve({job:failed});
+  await tick();
+  assert.equal(h.node('#capture-feedback').textContent,'');
+  assert.deepEqual(h.notices,[{type:'error',message:failed.error.message}]);
+  assert.equal(h.details[0],failed);
+  h.requests[1].resolve({jobs:[failed],total:1});
+  await pending;
+});
+
+test('后台执行的任务切换到失败时，详情只通知一次', async () => {
+  const h = harness(listCode);
+  h.context.selectedId = 'job-id';
+  h.context.currentJob = {...job('job-id'),status:'resolving'};
+  const failed = {...job('job-id'),status:'failed',error:{message:'作品不存在或不可访问'}};
+  for(let i=0;i<2;i++){
+    const pending=h.context.loadJobDetail('job-id',true);
+    h.requests[i].resolve({job:failed});
+    await pending;
+  }
+  assert.deepEqual(h.notices,[{type:'error',message:failed.error.message}]);
+});
+
+test('手动重试后立即失败仍会显示失败原因', async () => {
+  const h = harness(selectionCode + listCode + section('async function operate(id,op)', '// 签名预览地址'));
+  const failed = {...job('job-id'),status:'failed',error:{message:'作品不存在或不可访问'}};
+  h.context.selectedId=failed.id;
+  h.context.currentJob=failed;
+  const retry=h.context.operate(failed.id,'retry');
+  h.requests[0].resolve({job:job(failed.id)});
+  await tick();
+  assert.equal(h.context.currentJob.status,'queued');
+  h.requests[1].resolve({jobs:[],total:0});
+  h.requests[2].resolve({job:failed});
+  await retry;
+  assert.equal(h.notices.at(-1).message,failed.error.message);
 });
 
 test('搜索按钮与搜索表单一致，跳回第一页后再请求', () => {
@@ -316,6 +399,38 @@ test('桌面关闭抽屉时保留导航可访问性；手机关闭时禁止聚�
   h.context.setSidebar(false);
   assert.equal(h.node('.master-list').attributes['aria-hidden'], 'true');
   assert.equal(h.node('.master-list').inert, true);
+});
+
+test('管理员进入后台后，顶栏显示返回前台，修改密码由独立菜单打开', () => {
+  const h = harness(pollCode);
+  const visible = new Map();
+  const nav = ['dashboard', 'usage', 'password'].map(name => Object.assign(h.node(name), {dataset: {adminView: name}}));
+  h.context.document.querySelectorAll = () => nav;
+  h.context.show = (selector, on) => visible.set(selector, on);
+  h.context.session.user.role = 'admin';
+  h.context.adminCurrentView = 'dashboard';
+  h.context.loadAdminStats = () => {};
+  h.context.selectJob = () => {};
+  h.context.loadJobs = () => {};
+  vm.runInContext(adminNavigationCode, h.context);
+
+  h.node('#admin-console-btn').listeners.click();
+  assert.equal(visible.get('#admin-console'), true);
+  assert.equal(visible.get('#admin-back-front'), true);
+  assert.equal(visible.get('#logout'), false);
+  assert.equal(visible.get('#change-password'), false);
+
+  h.node('password').listeners.click();
+  assert.equal(visible.get('#admin-view-password'), true);
+  assert.equal(visible.get('#admin-view-dashboard'), false);
+  assert.equal(h.node('password').attributes['aria-current'], 'page');
+
+  h.node('#admin-back-front').listeners.click();
+  assert.equal(h.node('#admin-password-form').resetCount, 1);
+  assert.equal(visible.get('#admin-console'), false);
+  assert.equal(visible.get('#logout'), true);
+  assert.equal(visible.get('#admin-back-front'), false);
+  assert.equal(h.node('#admin-console-btn').focused, true);
 });
 
 
@@ -669,6 +784,36 @@ test('画廊只加载静态缩略图，原图和动图保留给点击预览', ()
   assert.equal(h.context.jobSignature(data), h.context.jobSignature(refreshed));
   assert.notEqual(h.context.jobSignature(data), h.context.jobSignature(unavailable));
   assert.doesNotMatch(h.context.jobDetailHTML(unavailable), /<img|<video/);
+});
+
+test('视频解析使用同源签名封面，已下载视频优先使用本地缩略图', () => {
+  const h = harness(section('function esc(value)', 'function renderList(') +
+    section('function jobDetailHTML(', 'function renderDetail('));
+  Object.assign(h.context, {
+    actionLabels: {}, statusLabels: {}, statusTone: {},
+    icon: name => name, previewUsable: Boolean,
+  });
+  const coverPreviewUrl = '/api/v1/job-cover/video?signature=preview';
+  const coverUrl = 'https://p3.douyinpic.com/video.jpg';
+  const thumbnailUrl = '/api/v1/media-preview/file/thumbnail?signature=thumbnail';
+  const data = {...job('video'), action: 'info', status: 'completed',
+    work: {type: 'video', title: '视频', coverPreviewUrl, coverUrl}, result: {files: []}};
+  assert.ok(h.context.jobDetailHTML(data).includes(`class="detail-cover" src="${coverPreviewUrl}" data-cover-fallback="${coverUrl}"`));
+
+  data.result.files.push({id: 'file', kind: 'video', name: 'video.mp4', thumbnailUrl});
+  assert.ok(h.context.jobDetailHTML(data).includes(`class="detail-cover" src="${thumbnailUrl}" data-cover-fallback="${coverPreviewUrl}"`));
+  const layoutClasses = new Set();
+  const image = {
+    src: thumbnailUrl, parentElement: {classList: layoutClasses}, dataset: {coverFallback: coverPreviewUrl, coverSource: coverUrl},
+    remove() { this.removed = true; },
+  };
+  h.context.retryVideoCover(image);
+  assert.equal(image.src, coverPreviewUrl);
+  h.context.retryVideoCover(image);
+  assert.equal(image.src, coverUrl);
+  h.context.retryVideoCover(image);
+  assert.equal(image.removed, true);
+  assert.equal(layoutClasses.has('no-cover'), true);
 });
 
 test('点开画廊时优先使用当前任务轮询得到的新签名', () => {
