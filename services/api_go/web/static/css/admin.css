@@ -18,7 +18,7 @@
 .admin-view .admin-head h2{margin:0;font-size:22px;line-height:1.4;font-weight:600}
 .admin-view .admin-head .meta{margin:6px 0 0;font-size:13px;line-height:1.6}
 .admin-view.panel{padding:24px;overflow:hidden;box-shadow:none}
-.admin-view.panel>.admin-head,.admin-view.panel>.admin-filter,.admin-view.panel>.admin-form,.admin-view.panel>.pager,.admin-view.panel>#admin-user-sessions{flex-shrink:0}
+.admin-view.panel>.admin-head,.admin-view.panel>.admin-filter,.admin-view.panel>.admin-form,.admin-view.panel>.admin-batch,.admin-view.panel>.admin-batch-status,.admin-view.panel>.pager,.admin-view.panel>#admin-user-sessions{flex-shrink:0}
 
 /* ================= 概览与图表 ================= */
 .admin-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
@@ -45,13 +45,25 @@
 #admin-refresh-stats.loading svg{animation:spin 1s linear infinite}
 
 /* ================= 筛选、表格与分页 ================= */
-.admin-filter{display:grid;grid-template-columns:minmax(180px,1fr) 138px 150px auto;align-items:center;gap:12px;margin:0}
+.admin-filter{display:grid;grid-template-columns:minmax(0,1fr) 138px 150px;align-items:center;gap:12px;margin:0}
 .admin-form{display:grid;grid-template-columns:repeat(3,minmax(120px,1fr)) 120px auto;align-items:center;gap:12px;margin:0}
-#admin-console input:not([role="switch"]),#admin-console select{height:40px;padding-top:0;padding-bottom:0;border-radius:4px;background-color:var(--card);box-shadow:none;line-height:38px}
+#admin-console input:not([type="checkbox"]),#admin-console select{height:40px;padding-top:0;padding-bottom:0;border-radius:4px;background-color:var(--card);box-shadow:none;line-height:38px}
 #admin-console select{padding-right:32px;background-position:right 10px center}
-#admin-console input:not([role="switch"]):hover,#admin-console select:hover{border-color:var(--text-tertiary)}
-#admin-console input:not([role="switch"]):focus,#admin-console select:focus{border-color:var(--border-focus);box-shadow:0 0 0 2px var(--active)}
-.admin-filter button,.admin-form button,#admin-refresh-stats{min-height:40px;padding:0 16px;border-radius:4px;white-space:nowrap;box-shadow:none}
+#admin-console input:not([type="checkbox"]):hover,#admin-console select:hover{border-color:var(--text-tertiary)}
+#admin-console input:not([type="checkbox"]):focus,#admin-console select:focus{border-color:var(--border-focus);box-shadow:0 0 0 2px var(--active)}
+.admin-form button,#admin-refresh-stats{min-height:40px;padding:0 16px;border-radius:4px;white-space:nowrap;box-shadow:none}
+.admin-batch{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--input)}
+.admin-batch-select,.admin-job-selection{display:inline-flex;align-items:center;gap:8px;min-height:32px;font-size:14px;line-height:20px;cursor:pointer}
+.admin-batch-select input,.admin-selection-checkbox{display:inline-block;flex-shrink:0;width:16px;height:16px;margin:0;padding:0;accent-color:var(--primary);vertical-align:middle;cursor:pointer}
+.admin-batch-select input:focus-visible,.admin-selection-checkbox:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.admin-batch-select input:disabled,.admin-selection-checkbox:disabled{cursor:not-allowed}
+.admin-batch-actions{display:flex;flex-wrap:wrap;gap:8px}
+.admin-batch-actions .ghost{min-height:32px;padding:4px 12px;background:var(--card);font-size:14px;line-height:20px}
+.admin-batch-actions .ghost:hover:not(:disabled){background:var(--hover)}
+.admin-batch-actions .danger{color:var(--danger)}
+.admin-batch-actions .danger:hover:not(:disabled){background:var(--danger-light);border-color:var(--danger)}
+.admin-batch-status{margin:0;overflow-wrap:anywhere}
+.admin-batch-status:empty{display:none}
 .admin-list{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;gap:12px;overflow:hidden}
 .admin-table-wrap{flex:1;min-height:0;overflow:auto;border:1px solid var(--border);border-radius:4px}
 .admin-table{width:100%;min-width:880px;border-collapse:separate;border-spacing:0;font-size:13px}
@@ -65,12 +77,13 @@
 .admin-table th:last-child,.admin-table td.admin-ops{text-align:right}
 .admin-table td.admin-ops{min-width:180px}
 /* 窄桌面保留标题列宽度，通过表格容器横向滚动展示完整操作。 */
-.admin-jobs-table{table-layout:fixed;min-width:920px}
-.admin-jobs-table th:nth-child(1),.admin-jobs-table td:nth-child(1){width:140px}
-.admin-jobs-table th:nth-child(2),.admin-jobs-table td:nth-child(2){width:112px}
-.admin-jobs-table th:nth-child(4),.admin-jobs-table td:nth-child(4){width:92px}
-.admin-jobs-table th:nth-child(5),.admin-jobs-table td:nth-child(5){width:120px}
-.admin-jobs-table th:nth-child(6),.admin-jobs-table td:nth-child(6){width:224px}
+.admin-jobs-table{table-layout:fixed;min-width:968px}
+.admin-jobs-table .admin-selection-cell{width:48px;text-align:center}
+.admin-jobs-table th:nth-child(2),.admin-jobs-table td:nth-child(2){width:140px}
+.admin-jobs-table th:nth-child(3),.admin-jobs-table td:nth-child(3){width:112px}
+.admin-jobs-table th:nth-child(5),.admin-jobs-table td:nth-child(5){width:92px}
+.admin-jobs-table th:nth-child(6),.admin-jobs-table td:nth-child(6){width:120px}
+.admin-jobs-table th:nth-child(7),.admin-jobs-table td:nth-child(7){width:224px}
 .admin-jobs-table .admin-title{max-width:none}
 .admin-job-status{display:flex;flex-direction:column;align-items:flex-start;gap:4px;white-space:nowrap}
 .admin-card-head .admin-job-status{align-items:flex-end;flex-shrink:0}
@@ -167,7 +180,6 @@
 }
 @media(min-width:961px) and (max-width:1240px){
   .admin-content{padding:24px}
-  .admin-filter{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
   .admin-form{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
   .admin-form button{justify-self:start}
   .admin-charts{flex:none;grid-template-columns:1fr;min-height:0}
@@ -182,7 +194,7 @@
   .admin-view,.admin-view.panel{overflow:visible}
   .admin-charts{flex:none;grid-template-columns:1fr;min-height:0}
   .chart-card{height:340px}
-  .admin-filter,.admin-form{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .admin-form{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
   .admin-view.panel{gap:20px}
   .admin-table-wrap{max-height:70dvh}
 }
@@ -198,6 +210,7 @@
   .stat-card strong{font-size:28px}
   .chart-card{height:320px;padding:0 16px 16px}
   .chart-head{padding:16px 0}
+  .admin-batch-actions .ghost{min-height:40px}
   .admin-list{overflow:visible}
   .admin-table-wrap{display:none}
   .admin-card-list{display:grid;gap:12px}

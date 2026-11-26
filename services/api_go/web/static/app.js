@@ -403,6 +403,7 @@ function enter(value){
   resetAdminPasswordForm();
   resetProviderSettings();
   resetCDKView();
+  resetAdminJobManagement();
   resetAdminApiCatalog();
   closeAdminUserSessions();
   closeAdminUserMenu();
@@ -754,6 +755,7 @@ $('#admin-usage-form').addEventListener('submit',e=>{
 /* ---------- 新建任务 ---------- */
 let dailyUsageRequestId=0;
 let capturePermissions=null,captureUsageError=false,captureASR=null,captureCDKExhausted=false;
+const captureModes=[['download','allowDownload'],['info','allowInfo'],['full','allowTranscribe']];
 function renderCaptureProvider(action){
   const canChoose=action==='full'&&captureASR?.allowUserSelection===true&&captureASR.providers.length>0;
   show('#capture-asr-provider-wrap',canChoose);
@@ -777,10 +779,7 @@ function updateCaptureProvider(asr,transcribePermitted){
   captureASR=next;
 }
 function captureAction(){
-  if(!capturePermissions)return null;
-  if(capturePermissions.allowInfo&&$('#info-only').checked)return 'info';
-  if(capturePermissions.allowTranscribe&&$('#with-transcribe').checked)return 'full';
-  return capturePermissions.allowDownload?'download':null;
+  return captureModes.find(([mode,permission])=>capturePermissions?.[permission]&&$(`#capture-mode-${mode}`).checked)?.[0]||null;
 }
 function renderCaptureAction(){
   const action=captureAction(),button=$('#submit-task');
@@ -800,21 +799,15 @@ function applyCapturePermissions(policy){
   else if(captureASR)captureASR.transcribePermitted=policy.allowTranscribe;
   const hasProvider=!captureASR||!!captureASR.defaultProvider||(captureASR.allowUserSelection&&captureASR.providers.length>0);
   if(policy)policy={...policy,allowTranscribe:policy.allowTranscribe&&hasProvider};
-  const changed=adminUsagePermissionFields.some(name=>policy?.[name]!==capturePermissions?.[name]);
   capturePermissions=policy;
-  const {allowInfo,allowDownload,allowTranscribe}=policy||{};
-  const info=$('#info-only'),transcribe=$('#with-transcribe');
-  show('#capture-options',!!(allowInfo||allowTranscribe));
-  show('#info-only-wrap',!!allowInfo);
-  show('#with-transcribe-wrap',!!allowTranscribe);
-  if(!allowInfo)info.checked=false;
-  if(!allowTranscribe)transcribe.checked=false;
-  if(changed&&!allowDownload&&!info.checked&&!transcribe.checked){
-    info.checked=!!allowInfo;
-    transcribe.checked=!allowInfo&&!!allowTranscribe;
+  const selected=captureAction()||captureModes.find(([,permission])=>policy?.[permission])?.[0];
+  show('#capture-options',!!selected);
+  for(const [mode,permission] of captureModes){
+    const input=$(`#capture-mode-${mode}`),allowed=!!policy?.[permission];
+    show(`#capture-mode-${mode}-wrap`,allowed);
+    input.disabled=!allowed;
+    input.checked=mode===selected;
   }
-  info.disabled=!allowInfo||(!allowDownload&&!allowTranscribe);
-  transcribe.disabled=!allowTranscribe||(!allowDownload&&!allowInfo);
   renderCaptureAction();
 }
 function resetCapturePermissions(){
@@ -854,11 +847,8 @@ async function refreshDailyUsage(){
 
 $('#capture-usage-retry').addEventListener('click',refreshDailyUsage);
 $('#capture-asr-provider').addEventListener('change',renderCaptureAction);
-for(const [selected,other] of [['#info-only','#with-transcribe'],['#with-transcribe','#info-only']]){
-  $(selected).addEventListener('change',()=>{
-    if($(selected).checked)$(other).checked=false;
-    renderCaptureAction();
-  });
+for(const [mode] of captureModes){
+  $(`#capture-mode-${mode}`).addEventListener('change',renderCaptureAction);
 }
 $('#capture-form').addEventListener('submit',async e=>{
   e.preventDefault();
@@ -1121,40 +1111,137 @@ function renderTrendChart(byDay){
 }
 window.addEventListener('resize',()=>{if(statusChart)statusChart.resize();if(trendChart)trendChart.resize()});
 
-$('#admin-jobs-form').addEventListener('submit',e=>{e.preventDefault();adminJobsPage=1;loadAdminJobs()});
+const adminJobsSelected=new Set();
+const adminJobsBatchActions={
+  cancel:{label:'取消',message:'将向系统请求取消这些任务。'},
+  retry:{label:'重试',message:'这些任务将重新进入处理队列。'},
+  delete:{label:'删除',message:'这些任务及其文件将永久删除。'}
+};
+let adminJobsListKey='',adminJobsSearchTimer=null,adminJobsMutation=null;
+
+function adminJobsQuery(){
+  return String(new URLSearchParams({
+    view:'summary',q:$('#admin-jobs-q').value.trim(),status:$('#admin-jobs-status').value,
+    userId:$('#admin-jobs-user').value,limit:String(adminJobsPageSize),offset:String((adminJobsPage-1)*adminJobsPageSize)
+  }));
+}
+function viewingAdminJobs(){
+  return adminOpen&&adminCurrentView==='jobs'&&session?.user?.role==='admin';
+}
+function adminJobAllows(job,op){
+  if(op==='cancel')return jobIsActive(job.status);
+  if(op==='retry')return ['failed','cancelled'].includes(job.status);
+  return op==='delete'&&!jobIsActive(job.status);
+}
+function syncAdminJobsSelection(){
+  const list=$('#admin-jobs-list'),all=$('#admin-jobs-select-all');
+  const ready=!!adminJobsListKey&&adminJobsListKey===adminJobsQuery();
+  const locked=!ready||!!adminJobsMutation?.running;
+  show('#admin-jobs-batch',ready&&adminJobsCache.length>0);
+  all.checked=adminJobsSelected.size>0&&adminJobsSelected.size===adminJobsCache.length;
+  all.indeterminate=adminJobsSelected.size>0&&!all.checked;
+  all.disabled=locked||!adminJobsCache.length;
+  $('#admin-jobs-selected').textContent=`已选 ${adminJobsSelected.size} 项`;
+  const selected=adminJobsCache.filter(job=>adminJobsSelected.has(job.id));
+  for(const button of document.querySelectorAll('#admin-jobs-batch [data-admin-job-batch]')){
+    button.disabled=locked||!selected.some(job=>adminJobAllows(job,button.dataset.adminJobBatch));
+  }
+  for(const input of list.querySelectorAll('[data-admin-job-select]')){
+    input.disabled=locked;
+    input.checked=adminJobsSelected.has(input.value);
+  }
+  for(const button of list.querySelectorAll('button[data-op]'))button.disabled=locked;
+  syncAdminJobDetailActions();
+}
+function clearAdminJobsList(loading=false){
+  adminJobsCache=[];
+  adminJobsListKey='';lastAdminJobsSig='';
+  adminJobsSelected.clear();
+  const list=$('#admin-jobs-list');
+  list.innerHTML=loading?skeletonRows(6):'';
+  list.setAttribute('aria-busy',String(loading));
+  $('#admin-jobs-total').textContent='';
+  $('#admin-jobs-pager').replaceChildren();
+  syncAdminJobsSelection();
+}
+function resetAdminJobManagement(){
+  clearTimeout(adminJobsSearchTimer);
+  adminJobsSearchTimer=null;adminJobsMutation=null;adminJobsTotal=0;
+  $('#admin-jobs-batch-status').textContent='';
+  $('#admin-jobs-form').reset();
+  clearAdminJobsList();
+}
+function filterAdminJobs(debounce=false){
+  if(!viewingAdminJobs()||adminJobsQuery()===adminJobsListKey)return;
+  if(!adminJobsMutation)$('#admin-jobs-batch-status').textContent='';
+  adminJobsPage=1;
+  clearTimeout(adminJobsSearchTimer);
+  if(!debounce){void loadAdminJobs();return}
+  const epoch=sessionEpoch;
+  clearAdminJobsList(true);
+  adminJobsSearchTimer=setTimeout(()=>{
+    adminJobsSearchTimer=null;
+    if(epoch===sessionEpoch&&viewingAdminJobs())void loadAdminJobs();
+  },250);
+}
+$('#admin-jobs-form').addEventListener('submit',e=>{
+  e.preventDefault();
+  filterAdminJobs();
+});
+$('#admin-jobs-q').addEventListener('input',e=>{if(!e.isComposing)filterAdminJobs(true)});
+$('#admin-jobs-q').addEventListener('compositionend',()=>filterAdminJobs(true));
+$('#admin-jobs-status').addEventListener('change',()=>filterAdminJobs());
+$('#admin-jobs-user').addEventListener('change',()=>filterAdminJobs());
+
 async function loadAdminJobs(polling=false){
-  if(!session)return;
-  const q=new URLSearchParams({view:'summary',q:$('#admin-jobs-q').value.trim(),status:$('#admin-jobs-status').value,userId:$('#admin-jobs-user').value,limit:String(adminJobsPageSize),offset:String((adminJobsPage-1)*adminJobsPageSize)});
-  if(polling&&adminJobsPending?.key===String(q)&&adminJobsPending.epoch===sessionEpoch)return;
-  const requestId=++adminJobsLoadId,epoch=sessionEpoch,pending={key:String(q),epoch};
+  if(!session||(polling&&adminJobsSearchTimer!==null))return;
+  clearTimeout(adminJobsSearchTimer);
+  adminJobsSearchTimer=null;
+  const key=adminJobsQuery();
+  if(polling&&adminJobsPending?.key===key&&adminJobsPending.epoch===sessionEpoch)return;
+  const requestId=++adminJobsLoadId,epoch=sessionEpoch,pending={key,epoch};
+  const current=()=>requestId===adminJobsLoadId&&epoch===sessionEpoch&&session&&adminJobsSearchTimer===null&&key===adminJobsQuery();
   adminJobsPending=pending;
   pollRequestedAt.adminJobs=Date.now();
+  if(key!==adminJobsListKey)clearAdminJobsList(true);
+  const root=$('#admin-jobs-list');
   try{
-    const root=$('#admin-jobs-list');
-    if(root&&!root.children.length)root.innerHTML=skeletonRows(6);
-    const data=await api(`/api/v1/admin/jobs?${q}`);
-    if(requestId!==adminJobsLoadId||epoch!==sessionEpoch||!session)return;
+    const data=await api(`/api/v1/admin/jobs?${key}`);
+    if(!current())return;
     adminJobsCache=data.jobs||[];
     adminJobsTotal=data.total||0;
     const totalPages=Math.max(1,Math.ceil(adminJobsTotal/adminJobsPageSize));
     if(adminJobsPage>totalPages){adminJobsPage=totalPages;return loadAdminJobs()}
+    adminJobsListKey=key;
+    const visible=new Set(adminJobsCache.map(job=>job.id));
+    for(const id of adminJobsSelected)if(!visible.has(id))adminJobsSelected.delete(id);
+    root.setAttribute('aria-busy','false');
     // 数据与筛选条件未变化时不重绘表格，避免轮询闪烁
-    const sig=JSON.stringify([String(q),adminJobsTotal,adminJobsCache.map(jobListSignature)]);
-    if(sig===lastAdminJobsSig)return;
-    lastAdminJobsSig=sig;
-    renderAdminJobs(adminJobsCache);
-    if($('#admin-jobs-total'))$('#admin-jobs-total').textContent=`共 ${adminJobsTotal} 个任务`;
-    renderPager($('#admin-jobs-pager'),adminJobsPage,totalPages,p=>{adminJobsPage=p;loadAdminJobs()});
-  }catch(err){if(requestId===adminJobsLoadId&&epoch===sessionEpoch)toast(err.message,'error')}
+    const sig=JSON.stringify([key,adminJobsTotal,adminJobsCache.map(jobListSignature)]);
+    if(sig!==lastAdminJobsSig){
+      lastAdminJobsSig=sig;
+      renderAdminJobs(adminJobsCache);
+      $('#admin-jobs-total').textContent=`共 ${adminJobsTotal} 个任务`;
+      renderPager($('#admin-jobs-pager'),adminJobsPage,totalPages,p=>{adminJobsPage=p;void loadAdminJobs()});
+    }
+    syncAdminJobsSelection();
+  }catch(err){
+    if(!current())return;
+    root.setAttribute('aria-busy','false');
+    if(key!==adminJobsListKey)root.innerHTML=`<div class="error-box" role="status">${esc(err.message)}</div>`;
+    if(!polling)toast(err.message,'error');
+  }
   finally{if(adminJobsPending===pending)adminJobsPending=null}
 }
 function adminJobOps(job,wrap=true){
-  const terminal=['completed','failed','cancelled'].includes(job.status);
   const ops=[`<button type="button" data-op="view">${icon('search',13)} 查看</button>`];
-  if(!terminal)ops.push(`<button type="button" data-op="cancel">${icon('circle-slash',13)} 取消</button>`);
-  if(job.status==='failed'||job.status==='cancelled')ops.push(`<button type="button" data-op="retry">${icon('rotate-ccw',13)} 重试</button>`);
-  if(terminal)ops.push(`<button type="button" data-op="delete" class="danger">${icon('trash',13)} 删除</button>`);
+  if(adminJobAllows(job,'cancel'))ops.push(`<button type="button" data-op="cancel">${icon('circle-slash',13)} 取消</button>`);
+  if(adminJobAllows(job,'retry'))ops.push(`<button type="button" data-op="retry">${icon('rotate-ccw',13)} 重试</button>`);
+  if(adminJobAllows(job,'delete'))ops.push(`<button type="button" data-op="delete" class="danger">${icon('trash',13)} 删除</button>`);
   return wrap?`<div class="admin-ops-row">${ops.join('')}</div>`:ops.join('');
+}
+function adminJobCheckbox(job,title){
+  return `<input type="checkbox" class="admin-selection-checkbox" data-admin-job-select value="${esc(job.id)}" aria-label="选择任务 ${esc(title)}">`;
 }
 function adminJobExpiryBadge(job){
   return jobExpired(job)?'<span class="badge badge-warning">内容已过期</span>':'';
@@ -1171,18 +1258,19 @@ function adminJobCardHTML(job){
       <span>用户：${esc(owner)}</span>
       <span>类型：${esc(actionLabels[job.action]||job.action)}</span>
     </div>
-    <div class="admin-card-actions">${adminJobOps(job,false)}</div>
+    <div class="admin-card-actions"><label class="admin-job-selection">${adminJobCheckbox(job,title)} 选择</label>${adminJobOps(job,false)}</div>
   </article>`;
 }
 function renderAdminJobs(jobs){
   const root=$('#admin-jobs-list');
   if(!jobs.length){root.innerHTML=`<div class="empty-state">${icon('inbox',36)}<p>暂无任务</p><span>调整筛选条件后重试</span></div>`;return}
-  const table=`<div class="admin-table-wrap"><table class="admin-table admin-jobs-table"><thead><tr><th>创建时间</th><th>用户</th><th>任务</th><th>类型</th><th>状态</th><th>操作</th></tr></thead><tbody>`+jobs.map(job=>{
+  const table=`<div class="admin-table-wrap"><table class="admin-table admin-jobs-table"><thead><tr><th class="admin-selection-cell" scope="col">选择</th><th>创建时间</th><th>用户</th><th>任务</th><th>类型</th><th>状态</th><th>操作</th></tr></thead><tbody>`+jobs.map(job=>{
     const w=job.work||{};
     const title=stripHashtags(w.title,w.hashtags)||`任务 ${job.id.slice(0,8)}`;
     const tone=statusTone[job.status]||'muted';
     const owner=job.ownerDisplayName||job.ownerUsername||'-';
     return `<tr data-id="${esc(job.id)}">
+      <td class="admin-selection-cell">${adminJobCheckbox(job,title)}</td>
       <td class="nowrap">${fmtShort(job.createdAt)}</td>
       <td class="nowrap">${esc(owner)}</td>
       <td class="admin-title">${esc(title)}</td>
@@ -1194,15 +1282,30 @@ function renderAdminJobs(jobs){
   root.innerHTML=table+`<div class="admin-card-list">${jobs.map(adminJobCardHTML).join('')}</div>`;
 }
 $('#admin-view-jobs').addEventListener('click',e=>{
+  const batch=e.target.closest('button[data-admin-job-batch]');
+  if(batch&&!batch.disabled){void operateAdminJobsBatch(batch.dataset.adminJobBatch);return}
   const btn=e.target.closest('button[data-op]');
-  if(!btn)return;
+  if(!btn||btn.disabled)return;
   const row=btn.closest('tr[data-id],.admin-card[data-id]');
   if(!row)return;
   if(btn.dataset.op==='view')viewAdminJob(row.dataset.id);
   else operateAdminJob(row.dataset.id,btn.dataset.op);
 });
+$('#admin-jobs-select-all').addEventListener('change',e=>{
+  if(e.target.disabled)return;
+  adminJobsSelected.clear();
+  if(e.target.checked)for(const job of adminJobsCache)adminJobsSelected.add(job.id);
+  syncAdminJobsSelection();
+});
+$('#admin-jobs-list').addEventListener('change',e=>{
+  const input=e.target.closest('[data-admin-job-select]');
+  if(!input||input.disabled||!adminJobsCache.some(job=>job.id===input.value))return;
+  if(input.checked)adminJobsSelected.add(input.value);
+  else adminJobsSelected.delete(input.value);
+  syncAdminJobsSelection();
+});
 async function viewAdminJob(id,refresh=false,polling=false){
-  if(!session||!adminOpen)return;
+  if(!session||!adminOpen||(!refresh&&adminJobsMutation?.running))return;
   if(polling&&adminDetailPending?.id===id&&adminDetailPending.epoch===sessionEpoch)return;
   const requestId=++adminDetailLoadId,epoch=sessionEpoch,pending={id,epoch};
   adminDetailPending=pending;
@@ -1211,6 +1314,7 @@ async function viewAdminJob(id,refresh=false,polling=false){
     const data=await api(`/api/v1/admin/jobs/${encodeURIComponent(id)}`);
     if(requestId!==adminDetailLoadId||epoch!==sessionEpoch||!session||!adminOpen)return;
     if(refresh&&(adminCurrentView!=='detail'||currentJob?.id!==id))return;
+    if(!refresh&&adminJobsMutation?.running)return;
     const renewedExpiredPreview=refresh&&jobHasExpiredPreview(currentJob)&&!jobHasExpiredPreview(data.job);
     renderAdminDetail(data.job,renewedExpiredPreview);
     if(!refresh){
@@ -1226,21 +1330,93 @@ function renderAdminDetail(job,renewedExpiredPreview=false){
   if(sig!==adminDetailSig||renewedExpiredPreview){
     adminDetailSig=sig;
     $('#admin-detail').innerHTML=jobDetailHTML(job);
+    syncAdminJobDetailActions();
   }
   syncDetailMedia(job);
 }
-async function operateAdminJob(id,op){
-  if(op==='delete'&&!(await confirmDialog({title:'删除任务',message:'确认删除该任务及其文件？此操作不可撤销。',confirmText:'删除'})))return;
+function syncAdminJobDetailActions(){
+  const disabled=!!adminJobsMutation?.running;
+  for(const button of document.querySelectorAll('#admin-detail button:is([data-op="cancel"],[data-op="retry"],[data-op="delete"])'))button.disabled=disabled;
+}
+function sendAdminJobOperation(id,op){
+  return api(`/api/v1/admin/jobs/${encodeURIComponent(id)}${op==='delete'?'':`/${op}`}`,{method:op==='delete'?'DELETE':'POST'});
+}
+async function operateAdminJobsBatch(op){
+  const action=adminJobsBatchActions[op],key=adminJobsListKey;
+  if(!action||adminJobsMutation||!viewingAdminJobs()||key!==adminJobsQuery())return;
+  const jobs=adminJobsCache.filter(job=>adminJobsSelected.has(job.id)&&adminJobAllows(job,op));
+  if(!jobs.length)return;
+  const skipped=adminJobsSelected.size-jobs.length;
+  const note=skipped?`另有 ${skipped} 个所选任务当前不支持${action.label}，将跳过。`:'';
+  const epoch=sessionEpoch,request={running:false},opener=document.activeElement;
+  const current=()=>adminJobsMutation===request&&epoch===sessionEpoch;
+  adminJobsMutation=request;
   try{
-    await api(`/api/v1/admin/jobs/${encodeURIComponent(id)}${op==='delete'?'':`/${op}`}`,{method:op==='delete'?'DELETE':'POST'});
-    toast(op==='delete'?'任务已删除':op==='cancel'?'已请求取消':'已重新开始','success');
-    if(op==='delete'){
-      adminMode=false;
-      if(adminJobsPage>1&&adminJobsTotal-1<=(adminJobsPage-1)*adminJobsPageSize)adminJobsPage--;
-      adminShowView('jobs');
+    const confirmed=await confirmDialog({
+      title:`批量${action.label}任务`,message:`将${action.label} ${jobs.length} 个任务。${action.message}${note}`,
+      confirmText:`批量${action.label}`,danger:op!=='retry'
+    });
+    if(!confirmed||!current()||!viewingAdminJobs()||key!==adminJobsQuery())return;
+    request.running=true;
+    syncAdminJobsSelection();
+    const status=$('#admin-jobs-batch-status');
+    status.textContent=`正在批量${action.label} ${jobs.length} 个任务…`;
+    let succeeded=0,failed=0,firstError='';
+    for(const job of jobs){
+      if(!current())return;
+      try{
+        await sendAdminJobOperation(job.id,op);
+        if(!current())return;
+        succeeded++;
+        if(key===adminJobsListKey)adminJobsSelected.delete(job.id);
+      }catch(err){
+        failed++;
+        if(!firstError)firstError=err.message;
+      }
     }
-    else await loadAdminJobs();
-  }catch(err){toast(err.message,'error')}
+    if(!current())return;
+    status.textContent=`批量${action.label}完成：成功 ${succeeded} 个，失败 ${failed} 个${skipped?`，跳过 ${skipped} 个`:''}。${firstError?`首条失败原因：${firstError}`:''}`;
+    if(viewingAdminJobs()&&adminJobsSearchTimer===null)await loadAdminJobs();
+  }finally{
+    if(current()){
+      adminJobsMutation=null;
+      syncAdminJobsSelection();
+      if(request.running&&viewingAdminJobs()&&document.activeElement===document.body){
+        const focus=opener?.isConnected&&!opener.disabled?opener:$('#admin-jobs-q');
+        focus.focus({preventScroll:true});
+      }
+    }
+  }
+}
+async function operateAdminJob(id,op){
+  const viewingDetail=()=>adminOpen&&adminMode&&adminCurrentView==='detail'&&currentJob?.id===id&&session?.user?.role==='admin';
+  const fromDetail=viewingDetail(),key=adminJobsListKey;
+  const available=fromDetail?viewingDetail:()=>viewingAdminJobs()&&key===adminJobsQuery();
+  const job=fromDetail?currentJob:adminJobsCache.find(item=>item.id===id);
+  if(adminJobsMutation||!available()||!job||!adminJobAllows(job,op))return;
+  const epoch=sessionEpoch,request={running:false};
+  const current=()=>adminJobsMutation===request&&epoch===sessionEpoch;
+  adminJobsMutation=request;
+  try{
+    if(op==='delete'&&!(await confirmDialog({title:'删除任务',message:'确认删除该任务及其文件？此操作不可撤销。',confirmText:'删除'})))return;
+    if(!current()||!available())return;
+    request.running=true;
+    syncAdminJobsSelection();
+    await sendAdminJobOperation(id,op);
+    if(!current()||(!viewingDetail()&&!viewingAdminJobs()))return;
+    toast(op==='delete'?'任务已删除':op==='cancel'?'已请求取消':'已重新开始','success');
+    if(viewingDetail()){
+      if(op==='delete')adminShowView('jobs');
+      else await viewAdminJob(id,true);
+    }else if(adminJobsSearchTimer===null)await loadAdminJobs();
+  }catch(err){
+    if(current()&&(viewingDetail()||viewingAdminJobs()))toast(err.message,'error');
+  }finally{
+    if(current()){
+      adminJobsMutation=null;
+      syncAdminJobsSelection();
+    }
+  }
 }
 
 /* ---------- 管理后台：用户管理 ---------- */
@@ -1945,24 +2121,13 @@ function promptDialog(opts={}){
 }
 
 async function operate(id,op){
+  if(adminMode)return operateAdminJob(id,op);
   if(op==='delete'&&!(await confirmDialog({title:'删除任务',message:'确认删除该任务及其文件？此操作不可撤销。',confirmText:'删除'})))return;
-  const inAdmin=adminMode,epoch=sessionEpoch;
-  const base=inAdmin?`/api/v1/admin/jobs/${encodeURIComponent(id)}`:`/api/v1/jobs/${encodeURIComponent(id)}`;
+  const epoch=sessionEpoch;
+  const base=`/api/v1/jobs/${encodeURIComponent(id)}`;
   try{
     const data=await api(base+(op==='delete'?'':`/${op}`),{method:op==='delete'?'DELETE':'POST'});
     if(epoch!==sessionEpoch||!session)return;
-    if(inAdmin){
-      if(!adminOpen)return;
-      toast(op==='delete'?'任务已删除':op==='cancel'?'已请求取消':'已重新开始','success');
-      if(op==='delete'){
-        adminMode=false;
-        if(adminJobsPage>1&&adminJobsTotal-1<=(adminJobsPage-1)*adminJobsPageSize)adminJobsPage--;
-        adminShowView('jobs');
-      }
-      else if(adminCurrentView==='detail'&&currentJob?.id===id)await viewAdminJob(id,true);
-      else await loadAdminJobs();
-      return;
-    }
     if(op==='delete'&&selectedId===id)selectJob(null);
     if(op==='retry'){
       if(selectedId===id&&data?.job?.id===id)selectJob(id,data.job);

@@ -47,31 +47,62 @@ const adminCDKConfirmations={
   reset:{
     title:'重置已用次数',confirmText:'重置',success:'已用次数已重置',
     message:item=>`将 ${item.prefix}… 的累计已用次数清零，恢复 ${item.taskLimit} 次可用额度。`,
+    batchMessage:'累计已用次数将清零，总额度保留。',
   },
   rotate:{
     title:'轮换密钥',confirmText:'轮换',success:'密钥已轮换',
     message:item=>`轮换 ${item.prefix}… 会立即使原密钥和登录会话失效。新密钥沿用当前额度，仅在本次操作后显示。`,
+    batchMessage:'原密钥和登录会话将立即失效。新密钥沿用当前额度，仅在本次操作后显示。',
   },
   revoke:{
     title:'吊销密钥',confirmText:'吊销',success:'密钥已吊销',
     message:item=>`吊销 ${item.prefix}… 后，密钥及其登录会话将立即失效。`,
+    batchMessage:'密钥和登录会话将立即失效。',
     method:'DELETE',suffix:'',
   },
   delete:{
     title:'删除密钥记录',confirmText:'删除',success:'密钥记录已删除',
     message:item=>`删除 ${item.prefix}… 的密钥记录后无法恢复。相关任务会保留。`,
+    batchMessage:'删除密钥记录后无法恢复。相关任务会保留。',
     method:'DELETE',suffix:'/record',
   },
 };
 let adminCDKPage=1,adminCDKListID=0,adminCDKMutating=false,adminCDKItems=[];
+const adminCDKSelected=new Set();
 let generatedCDKCodes=[];
+
+function canManageCDK(item,action){
+  return action==='delete'?item.status==='revoked':item.status!=='revoked';
+}
+
+function selectedAdminCDKs(){
+  return adminCDKItems.filter(item=>adminCDKSelected.has(item.id));
+}
 
 function syncAdminCDKActions(){
   const hasCodes=generatedCDKCodes.length>0;
+  const list=$('#admin-cdk-list'),batch=$('#admin-cdk-batch'),selectAll=$('#admin-cdk-select-all');
+  const selected=selectedAdminCDKs();
   $('#cdk-generate').disabled=adminCDKMutating||hasCodes;
-  for(const button of $('#admin-cdk-list').querySelectorAll('[data-cdk-action]')){
+  $('#admin-cdk-dismiss').disabled=adminCDKMutating;
+  $('#admin-cdk-refresh').disabled=adminCDKMutating;
+  show('#admin-cdk-batch',adminCDKItems.length>0);
+  $('#admin-cdk-selected').textContent=`已选 ${selected.length} 个`;
+  selectAll.checked=selected.length>0&&selected.length===adminCDKItems.length;
+  selectAll.indeterminate=selected.length>0&&!selectAll.checked;
+  selectAll.disabled=adminCDKMutating||!adminCDKItems.length;
+  for(const input of list.querySelectorAll('[data-cdk-select]')){
+    input.checked=adminCDKSelected.has(input.dataset.cdkSelect);
+    input.disabled=adminCDKMutating;
+  }
+  for(const button of list.querySelectorAll('[data-cdk-action]')){
     const waitingForCopy=hasCodes&&button.dataset.cdkAction==='rotate';
     button.disabled=adminCDKMutating||waitingForCopy;
+    button.title=waitingForCopy?'请先保存并关闭当前显示的密钥':'';
+  }
+  for(const button of batch.querySelectorAll('[data-cdk-batch-action]')){
+    const action=button.dataset.cdkBatchAction,waitingForCopy=hasCodes&&action==='rotate';
+    button.disabled=adminCDKMutating||waitingForCopy||!selected.some(item=>canManageCDK(item,action));
     button.title=waitingForCopy?'请先保存并关闭当前显示的密钥':'';
   }
 }
@@ -83,17 +114,22 @@ function clearGeneratedCDKs(){
   syncAdminCDKActions();
 }
 
-function showGeneratedCDKs(codes){
-  generatedCDKCodes=codes;
+function appendGeneratedCDKs(items){
+  const start=generatedCDKCodes.length;
+  generatedCDKCodes.push(...items.map(item=>item.code));
   const list=$('#admin-cdk-codes');
-  list.innerHTML=codes.map((code,index)=>`<li>
-    <code>${esc(code)}</code>
-    <button type="button" class="ghost" data-copy-cdk="${index}" aria-label="复制第 ${index+1} 个密钥">复制</button>
-  </li>`).join('');
-  show('#admin-cdk-copy',codes.length>1);
+  list.insertAdjacentHTML('beforeend',items.map(({code,previousPrefix},offset)=>{
+    const index=start+offset,codeLabel=`<code>${esc(code)}</code>`;
+    return `<li>
+      ${previousPrefix?`<div><div class="meta">原密钥 ${esc(previousPrefix)}…</div>${codeLabel}</div>`:codeLabel}
+      <button type="button" class="ghost" data-copy-cdk="${index}" aria-label="复制第 ${index+1} 个密钥">复制</button>
+    </li>`;
+  }).join(''));
+  const multiple=generatedCDKCodes.length>1;
+  show('#admin-cdk-copy',multiple);
   show('#admin-cdk-generated',true);
-  if(adminOpen&&adminCurrentView==='cdks'){
-    const firstAction=codes.length>1?$('#admin-cdk-copy'):list.querySelector('button');
+  if(!start&&adminOpen&&adminCurrentView==='cdks'){
+    const firstAction=multiple?$('#admin-cdk-copy'):list.querySelector('button');
     firstAction?.focus();
   }
 }
@@ -103,6 +139,7 @@ function resetCDKView(){
   adminCDKListID++;
   adminCDKMutating=false;
   adminCDKItems=[];
+  adminCDKSelected.clear();
   $('#admin-cdk-form').reset();
   $('#admin-cdk-form').setAttribute('aria-busy','false');
   $('#admin-cdk-status').textContent='';
@@ -114,6 +151,7 @@ function resetCDKView(){
 
 async function loadAdminCDKs(page=adminCDKPage){
   if(!adminOpen||session?.user?.role!=='admin')return;
+  if(page!==adminCDKPage)adminCDKSelected.clear();
   adminCDKPage=page;
   const id=++adminCDKListID,epoch=sessionEpoch;
   const current=()=>id===adminCDKListID&&epoch===sessionEpoch;
@@ -123,6 +161,7 @@ async function loadAdminCDKs(page=adminCDKPage){
   list.setAttribute('aria-busy','true');
   list.replaceChildren();
   pager.replaceChildren();
+  syncAdminCDKActions();
   const query=new URLSearchParams({limit:adminCDKPageSize,offset:(page-1)*adminCDKPageSize});
   try{
     const {items,total}=await api(`${adminCDKPath}?${query}`,{cache:'no-store'});
@@ -130,9 +169,11 @@ async function loadAdminCDKs(page=adminCDKPage){
     const totalPages=Math.ceil(total/adminCDKPageSize);
     if(page>1&&page>totalPages)return loadAdminCDKs(Math.max(1,totalPages));
     adminCDKItems=items||[];
+    const visibleIDs=new Set(adminCDKItems.map(item=>item.id));
+    for(const selected of adminCDKSelected)if(!visibleIDs.has(selected))adminCDKSelected.delete(selected);
     status.textContent=total?`共 ${total} 个密钥`:'暂无密钥';
     if(adminCDKItems.length)renderAdminCDKs(list,adminCDKItems);
-    renderPager(pager,page,totalPages,loadAdminCDKs);
+    renderPager(pager,page,totalPages,next=>{if(!adminCDKMutating)void loadAdminCDKs(next)});
   }catch(err){if(current())status.textContent=err.message}
   finally{if(current())list.setAttribute('aria-busy','false')}
 }
@@ -149,7 +190,9 @@ function renderAdminCDKs(list,items){
       <button type="button" data-cdk-action="rotate">轮换密钥</button>
       <button type="button" class="danger" data-cdk-action="revoke">吊销</button>
     `;
-    return `<li class="admin-cdk-row" data-cdk-id="${esc(item.id)}"><dl>
+    return `<li class="admin-cdk-row" data-cdk-id="${esc(item.id)}">
+    <input type="checkbox" class="admin-selection-checkbox admin-cdk-select" data-cdk-select="${esc(item.id)}" aria-label="选择密钥 ${esc(item.prefix)}">
+    <dl>
       <div><dt>密钥前缀</dt><dd><code>${esc(item.prefix)}…</code></dd></div>
       <div><dt>状态</dt><dd><span class="badge badge-${tone}">${label}</span></dd></div>
       <div><dt>已用 / 总次数</dt><dd>${esc(item.taskCount)} / ${esc(item.taskLimit)}</dd></div>
@@ -162,7 +205,24 @@ function renderAdminCDKs(list,items){
 function bindAdminCDKs(){
   const form=$('#admin-cdk-form'),generate=$('#cdk-generate');
   $('#admin-cdk-refresh').addEventListener('click',()=>void loadAdminCDKs());
-  $('#admin-cdk-dismiss').addEventListener('click',()=>{clearGeneratedCDKs();generate.focus()});
+  $('#admin-cdk-select-all').addEventListener('change',event=>{
+    if(adminCDKMutating)return;
+    adminCDKSelected.clear();
+    if(event.target.checked)for(const item of adminCDKItems)adminCDKSelected.add(item.id);
+    syncAdminCDKActions();
+  });
+  $('#admin-cdk-list').addEventListener('change',event=>{
+    const id=event.target.dataset.cdkSelect;
+    if(adminCDKMutating||!adminCDKItems.some(item=>item.id===id))return;
+    if(event.target.checked)adminCDKSelected.add(id);
+    else adminCDKSelected.delete(id);
+    syncAdminCDKActions();
+  });
+  $('#admin-cdk-dismiss').addEventListener('click',()=>{
+    if(adminCDKMutating)return;
+    clearGeneratedCDKs();
+    generate.focus();
+  });
   $('#admin-cdk-copy').addEventListener('click',()=>copyGeneratedCDKs(generatedCDKCodes.join('\n')));
   $('#admin-cdk-codes').addEventListener('click',event=>{
     const button=event.target.closest('button[data-copy-cdk]');
@@ -192,10 +252,10 @@ function bindAdminCDKs(){
     try{
       const {items}=await api(adminCDKPath,{method:'POST',body:JSON.stringify({count,taskLimit})});
       if(epoch!==sessionEpoch)return;
-      showGeneratedCDKs(items.map(item=>item.code));
+      appendGeneratedCDKs(items);
       toast(`已生成 ${items.length} 个密钥`,'success');
-      adminCDKPage=1;
-      void loadAdminCDKs();
+      adminCDKSelected.clear();
+      void loadAdminCDKs(1);
     }catch(err){if(epoch===sessionEpoch)toast(err.message,'error')}
     finally{
       if(epoch===sessionEpoch){
@@ -205,43 +265,88 @@ function bindAdminCDKs(){
       }
     }
   });
-  $('#admin-cdk-list').addEventListener('click',async event=>{
+  $('#admin-cdk-list').addEventListener('click',event=>{
     const button=event.target.closest('button[data-cdk-action]');
-    if(!button||button.disabled||adminCDKMutating||!adminOpen||adminCurrentView!=='cdks'||session?.user?.role!=='admin')return;
+    if(!button)return;
     const row=button.closest('[data-cdk-id]');
     const item=adminCDKItems.find(entry=>entry.id===row?.dataset.cdkId);
-    const epoch=sessionEpoch,action=button.dataset.cdkAction;
-    if(!item||(action==='delete'?item.status!=='revoked':item.status==='revoked'))return;
+    if(item&&canManageCDK(item,button.dataset.cdkAction))return manageCDKs(button,[item]);
+  });
+  $('#admin-cdk-batch').addEventListener('click',event=>{
+    const button=event.target.closest('button[data-cdk-batch-action]');
+    if(!button)return;
+    const selected=selectedAdminCDKs();
+    return manageCDKs(button,selected.filter(item=>canManageCDK(item,button.dataset.cdkBatchAction)),selected.length);
+  });
+
+  async function manageCDKs(button,items,selectionSize){
+    if(!items.length||button.disabled||adminCDKMutating||!adminOpen||adminCurrentView!=='cdks'||session?.user?.role!=='admin')return;
+    const epoch=sessionEpoch,action=button.dataset.cdkBatchAction||button.dataset.cdkAction;
+    const batch=selectionSize!==undefined;
+    const skipped=batch?selectionSize-items.length:0;
+    const scope=`本次操作涉及 ${items.length} 个密钥。${skipped?`另有 ${skipped} 个所选密钥因状态不适用将被跳过。`:''}`;
+    let succeeded=0;
     adminCDKMutating=true;
     syncAdminCDKActions();
     try{
-      let path=`${adminCDKPath}/${encodeURIComponent(item.id)}`,options,success;
+      let options,success,suffix='';
       if(action==='quota'){
-        const value=await promptDialog({title:'修改任务总次数',message:'设置该密钥累计可创建的任务数（1 至 100000 次）。',placeholder:'任务总次数',numberInput:{min:1,max:100000,value:item.taskLimit,required:true},confirmText:'保存'});
+        const value=await promptDialog({
+          title:batch?'批量修改任务总次数':'修改任务总次数',
+          message:`${batch?scope:''}设置累计可创建的任务数（1 至 100000 次）。已用次数保留。`,
+          placeholder:'任务总次数',numberInput:{min:1,max:100000,value:batch?'':items[0].taskLimit,required:true},confirmText:'保存',
+        });
         if(value===null)return;
         options={method:'PATCH',body:JSON.stringify({taskLimit:Number(value)})};
         success='任务总次数已更新';
       }else{
-        const {title,confirmText,message,success:successMessage,method='POST',suffix=`/${action}`}=adminCDKConfirmations[action];
-        if(!await confirmDialog({title,confirmText,message:message(item)}))return;
+        const {title,confirmText,message,batchMessage,success:successMessage,method='POST',suffix:actionSuffix=`/${action}`}=adminCDKConfirmations[action];
+        if(!await confirmDialog({
+          title:batch?`批量${title}`:title,confirmText:batch?`批量${confirmText}`:confirmText,
+          message:batch?scope+batchMessage:message(items[0]),
+        }))return;
         options={method};
-        path+=suffix;
+        suffix=actionSuffix;
         success=successMessage;
       }
       if(epoch!==sessionEpoch||!adminOpen||adminCurrentView!=='cdks')return;
-      const {item:updated}=await api(path,options);
-      if(epoch!==sessionEpoch)return;
-      if(action==='rotate')showGeneratedCDKs([updated.code]);
-      if(action==='delete'&&adminOpen&&adminCurrentView==='cdks')$('#admin-cdk-refresh').focus();
-      toast(success,'success');
+      const failures=[];
+      for(const item of items){
+        try{
+          const {item:updated}=await api(`${adminCDKPath}/${encodeURIComponent(item.id)}${suffix}`,options);
+          if(epoch!==sessionEpoch)return;
+          if(action==='rotate'){
+            if(typeof updated?.code!=='string'||!updated.code)throw new Error('响应中缺少轮换后的密钥');
+            appendGeneratedCDKs([{code:updated.code,previousPrefix:item.prefix}]);
+          }
+          if(batch)adminCDKSelected.delete(item.id);
+          succeeded++;
+        }catch(err){
+          if(epoch!==sessionEpoch)return;
+          failures.push({prefix:item.prefix,message:err.message});
+        }
+      }
+      if(batch){
+        const firstFailure=failures[0];
+        const summary=`批量操作成功 ${succeeded} 个，失败 ${failures.length} 个${skipped?`，跳过 ${skipped} 个`:''}`;
+        toast(firstFailure?`${summary}。${firstFailure.prefix}…：${firstFailure.message}`:summary,firstFailure?(succeeded?'warning':'error'):'success');
+      }else if(failures.length){
+        toast(failures[0].message,'error');
+        return;
+      }else{
+        toast(success,'success');
+      }
       void loadAdminCDKs();
     }catch(err){if(epoch===sessionEpoch)toast(err.message,'error')}
     finally{
       if(epoch===sessionEpoch){
         adminCDKMutating=false;
         syncAdminCDKActions();
-        if(button.isConnected&&adminOpen&&adminCurrentView==='cdks')button.focus();
+        if(adminOpen&&adminCurrentView==='cdks'){
+          if(button.isConnected&&!button.disabled)button.focus();
+          else if(action==='delete'&&succeeded)$('#admin-cdk-refresh').focus();
+        }
       }
     }
-  });
+  }
 }

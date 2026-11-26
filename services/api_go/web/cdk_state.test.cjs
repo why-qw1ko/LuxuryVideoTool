@@ -14,6 +14,7 @@ const card = {id: 'card/id', prefix: 'CDK-SAMPLE', taskCount: 3, taskLimit: 8, s
 
 function harness() {
   const elements = new Map(), requests = [], confirmations = [], copied = [], notices = [];
+  const selectionInputs = new Map(), prompts = [];
   const firstCopy = {focus() { this.focused = true; }};
   let clipboardField;
   const row = {dataset: {cdkId: card.id}};
@@ -23,13 +24,22 @@ function harness() {
     closest(selector) { return selector === '[data-cdk-id]' ? row : this; },
     focus() {},
   }]));
+  const batchButtons = Object.fromEntries(Object.keys(buttons).map(action => [action, {
+    dataset: {cdkBatchAction: action}, isConnected: true, closest() { return this; }, focus() {},
+  }]));
   function node(selector) {
     if (!elements.has(selector)) elements.set(selector, {
       value: '', innerHTML: '', listeners: {},
       addEventListener(name, listener) { this.listeners[name] = listener; },
       setAttribute() {}, replaceChildren() { this.innerHTML = ''; }, reset() {}, focus() { this.focused = true; },
+      insertAdjacentHTML(position, html) { assert.equal(position, 'beforeend'); this.innerHTML += html; },
       querySelector() { return firstCopy; },
-      querySelectorAll() { return Object.values(buttons); },
+      querySelectorAll(query) {
+        if (query === '[data-cdk-action]') return Object.values(buttons);
+        if (query === '[data-cdk-batch-action]') return Object.values(batchButtons);
+        if (query === '[data-cdk-select]') return [...selectionInputs.values()];
+        return [];
+      },
     });
     return elements.get(selector);
   }
@@ -58,22 +68,35 @@ function harness() {
       },
     },
     confirmDialog(options) { confirmations.push(options); return context.confirmed; },
+    promptDialog(options) { prompts.push(options); return context.promptValue; },
+    promptValue: null,
     confirmed: true,
     async api(url, options) {
       requests.push({url, method: options.method || 'GET'});
-      if (options.method === 'POST' || options.method === 'DELETE') return context.mutation;
+      if (options.method) return context.mutate(url, options);
       return context.readList(url);
     },
     readList: () => ({items: [card], total: 1}),
+    mutate: () => context.mutation,
     mutation: {item: {...card, taskCount: 0}},
   });
   vm.runInContext(clipboardCode + source, context);
   context.bindAdminCDKs();
   const list = node('#admin-cdk-list');
   const codes = node('#admin-cdk-codes');
+  const batch = node('#admin-cdk-batch');
+  const selectAll = node('#admin-cdk-select-all');
   return {
-    context, requests, confirmations, copied, notices, buttons, list, codes, firstCopy,
+    context, requests, confirmations, copied, notices, buttons, list, codes, firstCopy, prompts, batchButtons, selectAll,
     click(action) { return list.listeners.click({target: buttons[action]}); },
+    clickBatch(action) { return batch.listeners.click({target: batchButtons[action]}); },
+    select(id, checked) {
+      const input = {dataset: {cdkSelect: id}, checked};
+      selectionInputs.set(id, input);
+      list.listeners.change({target: input});
+    },
+    selectPage(checked) { selectAll.listeners.change({target: {checked}}); },
+    selected: node('#admin-cdk-selected'),
     generate() { return node('#admin-cdk-form').listeners.submit({preventDefault() {}}); },
     copy(index) {
       const button = {dataset: {copyCdk: String(index)}};
@@ -83,6 +106,7 @@ function harness() {
     copyAllButton: node('#admin-cdk-copy'),
     get clipboardField() { return clipboardField; },
     dismiss() { node('#admin-cdk-dismiss').listeners.click(); },
+    dismissButton: node('#admin-cdk-dismiss'),
     keyPanel: node('#admin-cdk-generated'),
   };
 }
@@ -195,4 +219,118 @@ test('仅已吊销记录可确认删除，删除末页最后一项后回到上�
     {url: '/api/v1/admin/cdks?limit=25&offset=25', method: 'GET'},
     {url: '/api/v1/admin/cdks?limit=25&offset=0', method: 'GET'},
   ]);
+});
+
+test('批量修改额度只更新本页选中的未吊销密钥，分页后清空选择', async () => {
+  const h = harness();
+  const revoked = {...card, id: 'revoked', status: 'revoked'};
+  h.context.readList = url => ({items: url.endsWith('offset=0') ? [card, revoked] : [revoked], total: 26});
+  const updated = [];
+  h.context.mutate = (url, options) => { updated.push({url, body: JSON.parse(options.body)}); return {}; };
+  await h.context.loadAdminCDKs();
+  assert.match(h.list.innerHTML, /data-cdk-select="card\/id"/);
+  h.select(card.id, true);
+  assert.equal(h.selectAll.indeterminate, true);
+  assert.equal(h.batchButtons.delete.disabled, true);
+  h.selectPage(true);
+  assert.equal(h.selectAll.checked, true);
+  assert.equal(h.batchButtons.delete.disabled, false);
+  assert.equal(h.selected.textContent, '已选 2 个');
+
+  await h.clickBatch('quota');
+  assert.equal(updated.length, 0);
+  assert.match(h.prompts[0].message, /1 个密钥.*另有 1 个所选密钥.*跳过/);
+  h.context.promptValue = '15';
+  await h.clickBatch('quota');
+  await new Promise(setImmediate);
+  assert.deepEqual(updated, [{url: '/api/v1/admin/cdks/card%2Fid', body: {taskLimit: 15}}]);
+  assert.equal(h.selected.textContent, '已选 1 个');
+  assert.equal(h.batchButtons.quota.disabled, true);
+
+  await h.context.loadAdminCDKs(2);
+  assert.equal(h.selected.textContent, '已选 0 个');
+  assert.equal(h.batchButtons.delete.disabled, true);
+});
+
+test('批量轮换部分失败后保留所有成功生成的密钥，并保留失败项的选择', async () => {
+  const h = harness();
+  const failed = {...card, id: 'no-update', prefix: 'CDK-FAILED'};
+  const other = {...card, id: 'other', prefix: 'CDK-OTHER'};
+  h.context.readList = () => ({items: [card, failed, other], total: 3});
+  h.context.mutate = url => {
+    if (url.includes(failed.id)) throw new Error('无法轮换');
+    return {item: {code: url.includes(other.id) ? 'CDK-SECOND' : 'CDK-FIRST'}};
+  };
+  await h.context.loadAdminCDKs();
+  h.selectPage(true);
+  await h.clickBatch('rotate');
+  await new Promise(setImmediate);
+  assert.equal(h.confirmations.length, 1);
+  assert.match(h.notices.at(-1).message, /成功 2 个，失败 1 个.*CDK-FAILED.*无法轮换/);
+  assert.equal(h.notices.at(-1).type, 'warning');
+  assert.equal(h.selected.textContent, '已选 1 个');
+  assert.equal(h.batchButtons.rotate.disabled, true);
+  assert.equal(h.buttons.rotate.disabled, true);
+  assert.match(h.codes.innerHTML, /原密钥 CDK-SAMPLE…<\/div><code>CDK-FIRST<\/code>/);
+  assert.match(h.codes.innerHTML, /原密钥 CDK-OTHER…<\/div><code>CDK-SECOND<\/code>/);
+  await h.copyAll();
+  assert.deepEqual(h.copied, ['CDK-FIRST\nCDK-SECOND']);
+  h.dismiss();
+  assert.equal(h.batchButtons.rotate.disabled, false);
+});
+
+test('批量轮换时逐个显示新密钥，切换管理页面后仍可复制', async () => {
+  const h = harness();
+  const other = {...card, id: 'other', prefix: 'CDK-OTHER'};
+  h.context.readList = () => ({items: [card, other], total: 2});
+  let finishSecond, startSecond;
+  const secondStarted = new Promise(resolve => { startSecond = resolve; });
+  const secondResponse = new Promise(resolve => { finishSecond = resolve; });
+  h.context.mutate = url => {
+    if (!url.includes(other.id)) return {item: {code: 'CDK-FIRST'}};
+    startSecond();
+    return secondResponse;
+  };
+  await h.context.loadAdminCDKs();
+  h.selectPage(true);
+  const pending = h.clickBatch('rotate');
+  await secondStarted;
+  assert.equal(h.keyPanel.visible, true);
+  assert.match(h.codes.innerHTML, /原密钥 CDK-SAMPLE…<\/div><code>CDK-FIRST<\/code>/);
+  assert.equal(h.dismissButton.disabled, true);
+  h.dismiss();
+  assert.equal(h.keyPanel.visible, true);
+  await h.copy(0);
+  assert.deepEqual(h.copied, ['CDK-FIRST']);
+
+  h.context.adminCurrentView = 'jobs';
+  finishSecond({item: {code: 'CDK-SECOND'}});
+  await pending;
+  assert.equal(h.dismissButton.disabled, false);
+  h.context.adminCurrentView = 'cdks';
+  await h.context.loadAdminCDKs();
+  await h.copyAll();
+  assert.deepEqual(h.copied, ['CDK-FIRST', 'CDK-FIRST\nCDK-SECOND']);
+});
+
+test('批量操作期间切换登录会话，不再请求剩余密钥', async () => {
+  const h = harness();
+  const items = [card, {...card, id: 'other'}, {...card, id: 'remaining'}];
+  h.context.readList = () => ({items, total: items.length});
+  let resolveMutation;
+  const request = new Promise(resolve => { resolveMutation = resolve; });
+  h.context.mutate = url => url.endsWith('/other/rotate') ? request : {item: {code: 'CDK-FIRST'}};
+  await h.context.loadAdminCDKs();
+  h.selectPage(true);
+  const pending = h.clickBatch('rotate');
+  await new Promise(setImmediate);
+  assert.equal(h.requests.length, 3);
+  assert.match(h.codes.innerHTML, /CDK-FIRST/);
+  h.context.sessionEpoch++;
+  h.context.resetCDKView();
+  resolveMutation({item: {code: 'CDK-STALE'}});
+  await pending;
+  assert.equal(h.requests.length, 3);
+  assert.equal(h.keyPanel.visible, false);
+  assert.equal(h.codes.innerHTML, '');
 });

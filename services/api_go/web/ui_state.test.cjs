@@ -11,7 +11,10 @@ function section(start, end) {
   return source.slice(first, last);
 }
 const listCode = section('async function loadJobs(', '// 通用分页条');
-const adminListCode = section('async function loadAdminJobs(', 'function adminJobOps(');
+const adminListCode = section('const adminJobsSelected=', 'function adminJobOps(') +
+  section('function syncAdminJobDetailActions(', 'function sendAdminJobOperation(');
+const adminJobActionsCode = section("$('#admin-view-jobs').addEventListener", 'async function viewAdminJob(') +
+  section('function sendAdminJobOperation(', '/* ---------- 管理后台：用户管理 ---------- */');
 const usersCode = section('async function loadAdminUsers(){', 'function renderAdminUsers(');
 const adminUserManagementCode = section('/* ---------- 管理后台：用户管理 ---------- */', '/* ---------- 渲染 ---------- */');
 const captureCode = section('const adminUsagePermissionFields=', '/* ---------- 任务列表 ---------- */');
@@ -30,6 +33,7 @@ function harness(code = listCode) {
       value: '', checked: false, disabled: false, children: [], attributes: {}, listeners: {}, dataset: {},
       classList: {toggle() {}, add() {}, remove() {}, contains() { return false; }},
       querySelector() { return null; },
+      querySelectorAll() { return []; },
       setAttribute(name, value) { this.attributes[name] = value; },
       getAttribute(name) { return this.attributes[name]; },
       addEventListener(name, callback) { this.listeners[name] = callback; },
@@ -263,15 +267,99 @@ test('后台任务请求乱序返回时，保留最新筛选结果', async () =>
   const h = harness(adminListCode);
   const first = h.context.loadAdminJobs();
   assert.equal(new URLSearchParams(h.requests[0].url.split('?')[1]).get('view'), 'summary');
+  h.context.session.user.role = 'admin';
+  h.context.adminOpen = true;
+  h.context.adminCurrentView = 'jobs';
   h.node('#admin-jobs-user').value = 'user-2';
-  const second = h.context.loadAdminJobs();
+  h.node('#admin-jobs-user').listeners.change();
+  assert.equal(new URLSearchParams(h.requests[1].url.split('?')[1]).get('userId'), 'user-2');
   h.requests[1].resolve({jobs: [job('new')], total: 1});
-  await second;
+  await tick();
   h.requests[0].resolve({jobs: [job('old')], total: 8});
   await first;
   assert.equal(h.rendered.length, 1);
   assert.equal(h.rendered[0][0].id, 'new');
   assert.equal(h.context.adminJobsTotal, 1);
+});
+
+test('后台批量操作跳过不适用任务，搜索刷新后仍显示部分失败结果', async () => {
+  const h = harness(adminListCode + adminJobActionsCode);
+  h.context.adminOpen = true;
+  h.context.adminCurrentView = 'jobs';
+  h.context.session.user.role = 'admin';
+  const confirm = [];
+  h.context.confirmDialog = async options => { confirm.push(options); return true; };
+  let search;
+  h.context.setTimeout = (callback, delay) => { assert.equal(delay, 250); search = callback; return 1; };
+  h.context.clearTimeout = () => { search = null; };
+  const eligible = [
+    {...job('failed/one'), status: 'failed'},
+    {...job('failed-two'), status: 'cancelled'},
+  ];
+  const list = h.context.loadAdminJobs();
+  h.requests[0].resolve({jobs: [job('active'), ...eligible], total: 3});
+  await list;
+
+  const all = h.node('#admin-jobs-select-all');
+  all.checked = true;
+  all.listeners.change({target: all});
+  assert.equal(h.node('#admin-jobs-selected').textContent, '已选 3 项');
+  const batch = h.context.operateAdminJobsBatch('retry');
+  await tick();
+  assert.match(confirm[0].message, /1 个所选任务当前不支持重试/);
+  assert.equal(h.requests[1].url, '/api/v1/admin/jobs/failed%2Fone/retry');
+  h.requests[1].resolve({});
+  await tick();
+  assert.equal(h.requests[2].url, '/api/v1/admin/jobs/failed-two/retry');
+
+  const keyword = h.node('#admin-jobs-q');
+  keyword.value = '新筛选';
+  keyword.listeners.input({isComposing: true});
+  assert.equal(search, null);
+  keyword.listeners.compositionend();
+  assert.equal(typeof search, 'function');
+  assert.equal(h.requests.length, 3);
+  h.requests[2].reject(new Error('状态已变化'));
+  await batch;
+
+  search();
+  assert.equal(new URLSearchParams(h.requests[3].url.split('?')[1]).get('q'), '新筛选');
+  h.requests[3].resolve({jobs: [], total: 0});
+  await tick();
+  assert.equal(h.node('#admin-jobs-selected').textContent, '已选 0 项');
+  assert.match(h.node('#admin-jobs-batch-status').textContent, /成功 1 个，失败 1 个，跳过 1 个.*状态已变化/);
+});
+
+test('详情页重试尚未完成时，返回列表也不能对同一任务批量操作', async () => {
+  const h = harness(adminListCode + adminJobActionsCode +
+    section('async function operate(id,op){', '// 签名预览地址带 expires'));
+  h.context.adminOpen = true;
+  h.context.adminCurrentView = 'jobs';
+  h.context.session.user.role = 'admin';
+  const failed = {...job('task-1'), status: 'failed'};
+  const list = h.context.loadAdminJobs();
+  h.requests[0].resolve({jobs: [failed], total: 1});
+  await list;
+  const all = h.node('#admin-jobs-select-all');
+  all.checked = true;
+  all.listeners.change({target: all});
+
+  h.context.adminMode = true;
+  h.context.adminCurrentView = 'detail';
+  h.context.currentJob = failed;
+  const retry = h.context.operate(failed.id, 'retry');
+  assert.equal(h.requests[1].url, '/api/v1/admin/jobs/task-1/retry');
+  h.context.adminMode = false;
+  h.context.adminCurrentView = 'jobs';
+  assert.equal(all.disabled, true);
+  await h.context.operateAdminJobsBatch('delete');
+  assert.equal(h.requests.length, 2);
+
+  h.requests[1].resolve({job: job(failed.id)});
+  await tick();
+  h.requests[2].resolve({jobs: [job(failed.id)], total: 1});
+  await retry;
+  assert.equal(all.disabled, false);
 });
 
 test('刷新后台用户选项后，保留当前用户筛选', async () => {
@@ -375,10 +463,15 @@ test('空白分享内容不创建任务；无 submitter 的提交可正常使用
   assert.equal(h.node('#capture-feedback').textContent, '服务暂不可用');
 });
 
+function selectCaptureMode(h, selected) {
+  for (const mode of ['info', 'download', 'full']) h.node(`#capture-mode-${mode}`).checked = mode === selected;
+  h.node(`#capture-mode-${selected}`).listeners.change();
+}
+
 test('仅解析提交时立即显示进度，失败结果到达后不等待列表刷新就提示', async () => {
   const h = harness(selectionCode + captureCode + listCode);
   h.context.applyCapturePermissions(allCapturePermissions);
-  h.node('#info-only').checked = true;
+  selectCaptureMode(h, 'info');
   h.node('#share-text').value = 'https://www.douyin.com/video/123';
   const pending = h.node('#capture-form').listeners.submit({preventDefault() {}});
   assert.equal(h.node('#capture-feedback').textContent, '正在读取作品信息…');
@@ -398,25 +491,28 @@ test('前台按任务权限隐藏停用选项，只提交当前允许的任务�
   h.context.show = (selector, on) => visible.set(selector, on);
   h.context.resetCapturePermissions();
   assert.equal(h.node('#submit-task').disabled, true);
-  const info = h.node('#info-only'), transcribe = h.node('#with-transcribe');
+  const info = h.node('#capture-mode-info'), download = h.node('#capture-mode-download'), transcribe = h.node('#capture-mode-full');
   h.context.applyCapturePermissions(allCapturePermissions);
-  info.checked = true;
-  info.listeners.change();
+  assert.equal(download.checked, true);
+  selectCaptureMode(h, 'info');
+  h.context.applyCapturePermissions(allCapturePermissions);
+  assert.equal(h.context.captureAction(), 'info');
   h.context.applyCapturePermissions({...allCapturePermissions, allowInfo: false});
-  assert.equal(visible.get('#info-only-wrap'), false);
+  assert.equal(visible.get('#capture-mode-info-wrap'), false);
   assert.equal(info.checked, false);
   assert.equal(h.context.captureAction(), 'download');
 
   h.context.applyCapturePermissions({...allCapturePermissions, allowDownload: false});
+  assert.equal(visible.get('#capture-mode-download-wrap'), false);
+  assert.equal(download.checked, false);
   assert.equal(info.checked, true);
-  transcribe.checked = true;
-  transcribe.listeners.change();
-  assert.equal(info.checked, false);
+  selectCaptureMode(h, 'full');
   assert.equal(h.context.captureAction(), 'full');
 
   h.context.applyCapturePermissions({allowInfo: true, allowDownload: false, allowTranscribe: false});
-  assert.equal(visible.get('#with-transcribe-wrap'), false);
+  assert.equal(visible.get('#capture-mode-full-wrap'), false);
   assert.equal(transcribe.checked, false);
+  assert.equal(info.disabled, false);
   assert.equal(h.context.captureAction(), 'info');
 
   h.context.applyCapturePermissions({allowInfo: false, allowDownload: false, allowTranscribe: false});
@@ -445,7 +541,7 @@ test('任务权限读取失败可重试，较早的响应不会重新打开已�
   h.requests[1].resolve({usage: {used: 0, limit: 0, ...allCapturePermissions}});
   await old;
   assert.equal(visible.get('#capture-usage-retry'), false);
-  assert.equal(visible.get('#info-only-wrap'), false);
+  assert.equal(visible.get('#capture-mode-info-wrap'), false);
   assert.equal(h.context.captureAction(), 'download');
 });
 
@@ -455,9 +551,7 @@ test('转写服务选项遵循后台许可，提交仅携带当前可用的服�
   const asr = {allowUserSelection: true, defaultProvider: 'siliconflow', providers: [{id: 'siliconflow'}, {id: 'deepseek'}]};
   const policy = {...allCapturePermissions, asr};
   h.context.applyCapturePermissions(policy);
-  const transcribe = h.node('#with-transcribe');
-  transcribe.checked = true;
-  transcribe.listeners.change();
+  selectCaptureMode(h, 'full');
   assert.equal(visible.get('#capture-asr-provider-wrap'), true);
   const provider = h.node('#capture-asr-provider');
   assert.match(provider.innerHTML, /DeepSeek/);
@@ -482,7 +576,7 @@ test('转写服务选项遵循后台许可，提交仅携带当前可用的服�
   provider.listeners.change();
   assert.equal(h.node('#submit-task').disabled, false);
   h.context.applyCapturePermissions({...policy, allowDownload: false, allowInfo: false, asr: {...asr, defaultProvider: '', allowUserSelection: false}});
-  assert.equal(visible.get('#with-transcribe-wrap'), false);
+  assert.equal(visible.get('#capture-mode-full-wrap'), false);
   assert.equal(h.node('#submit-task').disabled, true);
   assert.match(h.node('#capture-action-hint').textContent, /没有可用的转写服务/);
 });
@@ -628,7 +722,7 @@ test('管理员进入后台后，顶栏显示返回前台，修改密码由独�
 
 
 test('后台详情在现有轮询中刷新当前任务', () => {
-  const h = harness(pollCode);
+  const h = harness(pollCode + adminListCode);
   h.context.archiveDownloads = {clear() {}};
   h.context.clearInterval = () => {};
   h.context.setInterval = callback => { h.context.pollTick = callback; return 1; };
@@ -647,7 +741,8 @@ test('后台详情在现有轮询中刷新当前任务', () => {
 });
 
 test('后台详情刷新使用最新响应，状态不变时不重绘媒体', async () => {
-  const h = harness(section('async function viewAdminJob(', 'async function operateAdminJob('));
+  const h = harness(adminListCode +
+    section('async function viewAdminJob(', 'function syncAdminJobDetailActions('));
   h.context.adminOpen = true;
   h.context.adminCurrentView = 'detail';
   h.context.currentJob = job('task-1');
@@ -673,7 +768,8 @@ test('后台详情刷新使用最新响应，状态不变时不重绘媒体', as
 });
 
 test('离开后台详情后，尚未完成的刷新不会重新打开旧任务', async () => {
-  const h = harness(section('async function viewAdminJob(', 'async function operateAdminJob('));
+  const h = harness(adminListCode +
+    section('async function viewAdminJob(', 'function syncAdminJobDetailActions('));
   h.context.adminOpen = true;
   h.context.adminCurrentView = 'detail';
   h.context.currentJob = job('task-1');
@@ -687,11 +783,13 @@ test('离开后台详情后，尚未完成的刷新不会重新打开旧任务',
 
 test('后台详情取消或重试后，立即刷新详情而非只更新隐藏列表', async () => {
   for (const operation of ['cancel', 'retry']) {
-    const h = harness(section('async function operate(id,op){', '// 签名预览地址带 expires'));
+    const h = harness(adminListCode + adminJobActionsCode +
+      section('async function operate(id,op){', '// 签名预览地址带 expires'));
     h.context.adminMode = true;
     h.context.adminOpen = true;
     h.context.adminCurrentView = 'detail';
-    h.context.currentJob = job('task-1');
+    h.context.session.user.role = 'admin';
+    h.context.currentJob = {...job('task-1'), status: operation === 'retry' ? 'failed' : 'queued'};
     h.context.viewAdminJob = async (id, refresh) => { h.context.refreshCall = {id, refresh}; };
     h.context.loadAdminJobs = () => { throw new Error('详情操作不应只刷新隐藏列表'); };
     const pending = h.context.operate('task-1', operation);
@@ -867,7 +965,7 @@ test('续签发现内容已过期时更新提示，原有预览继续播放', as
 
 
 test('任务列表慢请求跨过 5 秒轮询后仍能渲染，完成后恢复下一轮请求', async () => {
-  const h = harness(pollCode + listCode);
+  const h = harness(pollCode + listCode + adminListCode);
   h.context.archiveDownloads = {clear() {}};
   h.context.clearInterval = () => {};
   h.context.setInterval = (callback, delay) => {
@@ -958,7 +1056,8 @@ test('后台任务过期后，桌面表格和移动卡片在原状态旁补充�
 });
 
 test('后台详情慢请求不会被后续轮询饿死，取消重试后的强制刷新可替代旧请求', async () => {
-  const h = harness(section('async function viewAdminJob(', 'async function operateAdminJob('));
+  const h = harness(adminListCode +
+    section('async function viewAdminJob(', 'function syncAdminJobDetailActions('));
   h.context.adminOpen = true;
   h.context.adminCurrentView = 'detail';
   h.context.currentJob = job('task-1');

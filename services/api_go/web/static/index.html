@@ -115,15 +115,24 @@
                 <label for="share-text">抖音链接或分享文本</label>
                 <textarea id="share-text" rows="7" maxlength="4096" placeholder="粘贴作品链接或完整的分享文本" aria-describedby="share-help" required></textarea>
                 <p id="share-help" class="field-hint">支持视频、图文和动图作品。</p>
-                <div id="capture-options" class="capture-options hidden" role="group" aria-label="提取选项">
-                  <label class="capture-option" id="info-only-wrap">
-                    <span><span id="info-only-label">仅解析基本信息</span><small id="info-only-hint">不解析视频/图文内容</small></span>
-                    <input id="info-only" type="checkbox" role="switch" aria-labelledby="info-only-label" aria-describedby="info-only-hint">
-                  </label>
-                  <label class="capture-option" id="with-transcribe-wrap">
-                    <span><span id="with-transcribe-label">转写视频文案</span><small id="with-transcribe-hint">下载媒体并识别视频口播，耗时较长</small></span>
-                    <input id="with-transcribe" type="checkbox" role="switch" aria-labelledby="with-transcribe-label" aria-describedby="with-transcribe-hint">
-                  </label>
+                <div id="capture-options" class="capture-options hidden">
+                  <fieldset class="capture-mode-field">
+                    <legend>提取方式</legend>
+                    <div class="capture-mode-group">
+                      <label class="capture-mode" id="capture-mode-info-wrap">
+                        <input id="capture-mode-info" type="radio" name="capture-mode" value="info">
+                        <span>仅解析信息</span>
+                      </label>
+                      <label class="capture-mode" id="capture-mode-download-wrap">
+                        <input id="capture-mode-download" type="radio" name="capture-mode" value="download">
+                        <span>下载媒体</span>
+                      </label>
+                      <label class="capture-mode" id="capture-mode-full-wrap">
+                        <input id="capture-mode-full" type="radio" name="capture-mode" value="full">
+                        <span>下载并转写</span>
+                      </label>
+                    </div>
+                  </fieldset>
                   <label id="capture-asr-provider-wrap" class="hidden">转写服务商
                     <select id="capture-asr-provider"></select>
                   </label>
@@ -211,10 +220,10 @@
             </div>
             <span id="admin-jobs-total" class="meta"></span>
           </div>
-          <form id="admin-jobs-form" class="admin-filter">
+          <form id="admin-jobs-form" class="admin-filter" role="search" aria-label="筛选任务">
             <div class="search-wrap">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-              <input id="admin-jobs-q" aria-label="搜索全部任务" placeholder="搜索标题 / 作者 / 链接">
+              <input id="admin-jobs-q" type="search" autocomplete="off" aria-label="搜索全部任务" placeholder="搜索标题 / 作者 / 链接">
             </div>
             <select id="admin-jobs-status" aria-label="筛选任务状态">
               <option value="">全部状态</option>
@@ -226,8 +235,17 @@
               <option value="cancelled">已取消</option>
             </select>
             <select id="admin-jobs-user" aria-label="筛选所属用户"><option value="">全部用户</option></select>
-            <button type="submit" class="ghost">筛选</button>
           </form>
+          <div id="admin-jobs-batch" class="admin-batch hidden" role="group" aria-label="任务批量操作">
+            <label class="admin-batch-select"><input id="admin-jobs-select-all" type="checkbox">全选本页</label>
+            <span id="admin-jobs-selected" class="meta" role="status"></span>
+            <div class="admin-batch-actions">
+              <button type="button" class="ghost" data-admin-job-batch="cancel" disabled>批量取消</button>
+              <button type="button" class="ghost" data-admin-job-batch="retry" disabled>批量重试</button>
+              <button type="button" class="ghost danger" data-admin-job-batch="delete" disabled>批量删除</button>
+            </div>
+          </div>
+          <p id="admin-jobs-batch-status" class="admin-batch-status meta" role="status"></p>
           <div id="admin-jobs-list" class="admin-list"></div>
           <div id="admin-jobs-pager" class="pager"></div>
         </section>
@@ -284,6 +302,17 @@
             </div>
           </div>
           <p id="admin-cdk-status" class="meta" role="status"></p>
+          <div id="admin-cdk-batch" class="admin-batch hidden" role="group" aria-label="CDK 批量操作">
+            <label class="admin-batch-select"><input id="admin-cdk-select-all" type="checkbox">全选本页</label>
+            <span id="admin-cdk-selected" class="meta" role="status"></span>
+            <div class="admin-batch-actions">
+              <button type="button" class="ghost" data-cdk-batch-action="quota" disabled>批量修改次数</button>
+              <button type="button" class="ghost" data-cdk-batch-action="reset" disabled>批量重置</button>
+              <button type="button" class="ghost" data-cdk-batch-action="rotate" disabled>批量轮换</button>
+              <button type="button" class="ghost danger" data-cdk-batch-action="revoke" disabled>批量吊销</button>
+              <button type="button" class="ghost danger" data-cdk-batch-action="delete" disabled>批量删除</button>
+            </div>
+          </div>
           <div id="admin-cdk-list"></div>
           <div id="admin-cdk-pager" class="pager"></div>
         </section>
