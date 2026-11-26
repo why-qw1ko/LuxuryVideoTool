@@ -86,6 +86,12 @@ type JobPage struct {
 	Offset int `json:"offset"`
 }
 
+type DeletedJobOwner struct {
+	ID          string `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"displayName"`
+}
+
 type JobSummary struct {
 	ID               string       `json:"id"`
 	Action           string       `json:"action"`
@@ -148,6 +154,7 @@ type Repository interface {
 	FindAnyByID(ctx context.Context, jobID string) (Job, error)
 	List(ctx context.Context, input ListInput) (JobPage, error)
 	ListAll(ctx context.Context, input ListInput) (JobPage, error)
+	ListDeletedJobOwners(ctx context.Context) ([]DeletedJobOwner, error)
 	ListSummaries(ctx context.Context, input ListInput, withOwner bool) (JobSummaryPage, error)
 	Stats(ctx context.Context, now time.Time) (Stats, error)
 	Delete(ctx context.Context, userID, jobID string) error

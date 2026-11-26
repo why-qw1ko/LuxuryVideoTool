@@ -67,6 +67,9 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (TokenPair, error
 	}
 	if err := s.repository.RecordLogin(ctx, user.ID, now); err != nil {
 		_ = s.repository.RevokeSession(ctx, user.ID, session.ID, now)
+		if errors.Is(err, ErrNotFound) {
+			return TokenPair{}, ErrInactiveUser
+		}
 		return TokenPair{}, err
 	}
 	return pair, nil
@@ -177,7 +180,7 @@ func (s *Service) CreateUser(ctx context.Context, username, displayName, passwor
 	return user, nil
 }
 
-// ListUsers 返回全部用户（不含密码哈希），供管理界面使用。
+// ListUsers 返回管理界面的常规账号，排除已删除账号和 CDK 账号。
 func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 	users, err := s.repository.ListUsers(ctx)
 	if err != nil {
@@ -228,14 +231,11 @@ func (s *Service) ChangePassword(ctx context.Context, principal Principal, curre
 }
 
 func (s *Service) SetUserActive(ctx context.Context, userID string, active bool) error {
-	now := s.now().UTC()
-	if err := s.repository.SetUserActive(ctx, userID, active, now); err != nil {
-		return err
-	}
-	if !active {
-		return s.repository.RevokeAllUserSessions(ctx, userID, now)
-	}
-	return nil
+	return s.repository.SetUserActive(ctx, userID, active, s.now().UTC())
+}
+
+func (s *Service) DeleteUser(ctx context.Context, userID string, writeAudit UserDeletionAudit) error {
+	return s.repository.DeleteUser(ctx, userID, s.now().UTC(), writeAudit)
 }
 
 func (s *Service) newSession(user User, device Device, now time.Time) (TokenPair, Session, error) {

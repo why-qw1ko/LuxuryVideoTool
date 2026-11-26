@@ -121,6 +121,10 @@ func (s *Service) ListAll(ctx context.Context, input ListInput) (JobPage, error)
 	if input.Offset < 0 { input.Offset = 0 }
 	return s.repo.ListAll(ctx, input)
 }
+func (s *Service) ListDeletedJobOwners(ctx context.Context) ([]DeletedJobOwner, error) {
+	return s.repo.ListDeletedJobOwners(ctx)
+}
+
 func (s *Service) ListSummaries(ctx context.Context, input ListInput, withOwner bool) (JobSummaryPage, error) {
 	input.Query = strings.TrimSpace(input.Query)
 	if input.Limit <= 0 {

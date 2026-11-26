@@ -29,6 +29,11 @@
 .api-catalog-description dd{margin:0;color:var(--text-secondary)}
 .api-catalog-description p{margin:0;color:var(--text-secondary);white-space:pre-line;overflow-wrap:anywhere}
 .api-catalog-description button{min-height:32px;padding:4px 12px}
+.api-catalog-example{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;width:100%;min-width:0}
+.api-catalog-example-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.api-catalog-example-head strong{font-size:14px;font-weight:500}
+.api-catalog-example pre{margin:0;padding:12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--input);white-space:pre-wrap;overflow-wrap:anywhere}
+.api-catalog-example code{font-family:ui-monospace,monospace;font-size:13px}
 @media(max-width:620px){
   .api-catalog-toolbar{grid-template-columns:minmax(0,1fr)}
   .api-catalog-operation summary{grid-template-columns:64px minmax(0,1fr) 16px;gap:4px 8px}

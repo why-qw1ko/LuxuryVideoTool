@@ -73,6 +73,7 @@ function renderAdminApiCatalog(){
     const searchable=[method,path,group,summary,auth,details].join(' ').toLowerCase();
     if(!terms.every(term=>searchable.includes(term)))return;
     if(!groups.has(group))groups.set(group,[]);
+    const command=apiCatalogCurlCommand(operation);
     groups.get(group).push(`<details class="api-catalog-operation">
       <summary>
         <span class="api-catalog-method method-${method.toLowerCase()}">${method}</span>
@@ -84,6 +85,14 @@ function renderAdminApiCatalog(){
         <dl><dt>鉴权方式</dt><dd>${esc(auth)}</dd></dl>
         ${details?`<p>${esc(details)}</p>`:''}
         <button type="button" class="ghost" data-api-catalog-copy="${index}" aria-label="复制 ${method} ${esc(path)} 的地址">${icon('copy',14)} 复制地址</button>
+        ${command?`<div class="api-catalog-example">
+          <div class="api-catalog-example-head">
+            <strong>curl 示例（PowerShell）</strong>
+            <button type="button" class="ghost" data-api-catalog-copy="${index}" data-api-catalog-copy-kind="curl" aria-label="复制 ${method} ${esc(path)} 的 curl 示例">${icon('copy',14)} 复制命令</button>
+          </div>
+          <p class="meta">替换示例中的占位符后运行。</p>
+          <pre><code>${esc(command)}</code></pre>
+        </div>`:''}
       </div>
     </details>`);
     count++;
@@ -95,6 +104,23 @@ function renderAdminApiCatalog(){
     :terms.length?'没有匹配的接口。':'暂无接口。';
 }
 
+function apiCatalogCurlCommand({method,path,auth,curlExample}){
+  if(!['create-job','request','download-zip','signed-zip'].includes(curlExample))return '';
+  const url=curlExample==='signed-zip'?'DOWNLOAD_URL':location.origin+path.replaceAll('{id}','JOB_ID');
+  const args=[`curl.exe --request ${method}`,`  --url '${url.replaceAll("'","''")}'`];
+  if(auth==='bearer'||auth==='admin'){
+    const placeholder=auth==='admin'?'ADMIN_ACCESS_TOKEN':'ACCESS_TOKEN';
+    args.push(`  --header 'Authorization: Bearer ${placeholder}'`);
+  }
+  if(curlExample==='download-zip'||curlExample==='signed-zip')args.push("  --fail --output 'images.zip'");
+  if(curlExample==='create-job'){
+    args.push("  --header 'Content-Type: application/json'","  --header 'Idempotency-Key: REQUEST_KEY'","  --data-binary '@-'");
+    const json=JSON.stringify({shareText:'DOUYIN_URL',action:'download'},null,2);
+    return "@'\n"+json+"\n'@ | "+args.join(' `\n');
+  }
+  return args.join(' `\n');
+}
+
 function bindAdminApiCatalog(){
   $('#api-catalog-search').addEventListener('input',renderAdminApiCatalog);
   $('#api-catalog-retry').addEventListener('click',loadAdminApiCatalog);
@@ -103,11 +129,14 @@ function bindAdminApiCatalog(){
     if(!button||!adminApiCatalogIsVisible())return;
     const operation=adminApiOperations[Number(button.dataset.apiCatalogCopy)];
     if(!operation)return;
+    const copyingCommand=button.dataset.apiCatalogCopyKind==='curl';
+    const text=copyingCommand?apiCatalogCurlCommand(operation):location.origin+operation.path;
+    if(!text)return;
     const epoch=sessionEpoch;
     const current=()=>epoch===sessionEpoch&&adminApiCatalogIsVisible();
     try{
-      await writeClipboardText(location.origin+operation.path);
-      if(current())toast('已复制接口地址','success');
+      await writeClipboardText(text);
+      if(current())toast(copyingCommand?'已复制命令':'已复制接口地址','success');
     }catch{
       if(current())toast('复制失败，请检查浏览器的剪贴板权限','error');
     }

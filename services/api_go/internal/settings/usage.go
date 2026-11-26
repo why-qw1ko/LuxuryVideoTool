@@ -96,7 +96,7 @@ func (s *Service) SetUserDailyTaskLimit(ctx context.Context, userID string, limi
 		return ErrInvalidUsage
 	}
 	result, err := s.db.ExecContext(ctx, `INSERT INTO user_daily_task_limits(user_id, daily_task_limit, updated_at, updated_by)
-		SELECT id, ?, ?, ? FROM users WHERE id = ? AND is_cdk = 0
+		SELECT id, ?, ?, ? FROM users WHERE id = ? AND is_cdk = 0 AND deleted_at IS NULL
 		ON CONFLICT(user_id) DO UPDATE SET daily_task_limit=excluded.daily_task_limit,
 		updated_at=excluded.updated_at, updated_by=excluded.updated_by`, limit, time.Now().UTC().UnixMilli(), actorID, userID)
 	if err != nil {

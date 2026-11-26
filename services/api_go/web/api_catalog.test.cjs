@@ -53,8 +53,8 @@ function harness() {
     status: node('#api-catalog-status'), retry: node('#api-catalog-retry'),
     open() { context.adminShowView('api-catalog'); },
     type(query) { search.value = query; search.listeners.input(); },
-    copy(index) {
-      const button = {dataset: {apiCatalogCopy: String(index)}};
+    copy(index, kind) {
+      const button = {dataset: {apiCatalogCopy: String(index), apiCatalogCopyKind: kind}};
       return list.listeners.click({target: {closest() { return button; }}});
     },
   };
@@ -78,6 +78,44 @@ test('从后台入口加载，按组展示方法、路径、说明和鉴权', as
   assert.match(h.list.innerHTML, /<h3>健康检查<\/h3>/);
   assert.match(h.list.innerHTML, /<h3>任务管理<\/h3>/);
   assert.match(h.list.innerHTML, /<details[\s\S]*method-post">POST[\s\S]*retry[\s\S]*重试任意任务[\s\S]*管理员 Bearer 访问令牌/);
+});
+
+test('显示并复制 PowerShell curl 命令，凭据和任务参数使用占位符', async () => {
+  const h = harness();
+  const endpoint = '/api/v1/jobs/{id}';
+  h.context.session.accessToken = 'CURRENT_SESSION_TOKEN';
+  h.open();
+  h.requests[0].resolve({operations: [
+    {method: 'POST', path: '/api/v1/jobs', group: '用户任务', summary: '创建任务', auth: 'bearer', curlExample: 'create-job'},
+    {method: 'GET', path: endpoint, group: '用户任务', summary: '查询结果', auth: 'bearer', curlExample: 'request'},
+    {method: 'GET', path: endpoint+'/images/archive', group: '用户任务', summary: '下载 ZIP', auth: 'bearer', curlExample: 'download-zip'},
+    {method: 'POST', path: '/api/v1/admin/jobs/{id}/images/archive-download', group: '任务管理', summary: '签发 ZIP 链接', auth: 'admin', curlExample: 'request'},
+    {method: 'GET', path: '/api/v1/archive-download/{id}', group: '签名媒体', summary: '下载签名 ZIP', auth: 'signed', curlExample: 'signed-zip'},
+    {...operations[0], curlExample: 'unknown'},
+  ]});
+  await afterRequest();
+  assert.match(h.list.innerHTML, /curl 示例（PowerShell）/);
+  assert.match(h.list.innerHTML, /<pre><code>[\s\S]*&quot;shareText&quot;: &quot;DOUYIN_URL&quot;/);
+  assert.match(h.list.innerHTML, /--url &#39;DOWNLOAD_URL&#39;/);
+  assert.doesNotMatch(h.list.innerHTML, /CURRENT_SESSION_TOKEN/);
+  assert.equal((h.list.innerHTML.match(/data-api-catalog-copy-kind="curl"/g) || []).length, 5);
+
+  for (const index of [0, 1, 2, 3, 4]) await h.copy(index, 'curl');
+  const [create, result, directZip, signZip, signedZip] = h.copied;
+  assert.match(create, /'@ \| curl\.exe --request POST/);
+  assert.match(create, /--url 'https:\/\/capture\.example\/api\/v1\/jobs'/);
+  assert.match(create, /--header 'Authorization: Bearer ACCESS_TOKEN'/);
+  assert.match(create, /--header 'Idempotency-Key: REQUEST_KEY'/);
+  assert.match(create, /--data-binary '@-'/);
+  assert.deepEqual(JSON.parse(create.split("\n'@")[0].slice(3)), {shareText: 'DOUYIN_URL', action: 'download'});
+  assert.match(result, /\/jobs\/JOB_ID'/);
+  assert.match(directZip, /\/jobs\/JOB_ID\/images\/archive'/);
+  assert.match(signZip, /--header 'Authorization: Bearer ADMIN_ACCESS_TOKEN'/);
+  assert.match(signedZip, /--url 'DOWNLOAD_URL'/);
+  assert.doesNotMatch(signedZip, /--header/);
+  for (const command of [directZip, signedZip]) assert.match(command, /--fail --output 'images\.zip'/);
+  assert.equal(h.notices.at(-1).message, '已复制命令');
+  assert.equal(h.requests.length, 1);
 });
 
 test('关键词匹配描述与路径，搜索后仍复制对应的完整接口模板', async () => {

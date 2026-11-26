@@ -232,24 +232,35 @@
           <div id="admin-jobs-pager" class="pager"></div>
         </section>
 
-        <section id="admin-view-users" class="admin-view panel hidden">
+        <section id="admin-view-users" class="admin-view panel hidden" aria-labelledby="admin-users-heading">
           <div class="admin-head">
-            <div>
-              <h2>用户管理</h2>
-            </div>
+            <h2 id="admin-users-heading">用户管理</h2>
+            <button id="admin-user-create" class="btn-primary" type="button" aria-haspopup="dialog">创建用户</button>
           </div>
-          <form id="user-create-form" class="admin-form">
-            <input id="user-username" aria-label="新用户用户名" placeholder="用户名" maxlength="64" required autocomplete="off">
-            <input id="user-display" aria-label="新用户显示名" placeholder="显示名" maxlength="100" required autocomplete="off">
-            <input id="user-password" aria-label="新用户初始密码（6 至 12 位）" type="password" placeholder="初始密码（6 至 12 位）" pattern=".{6,12}" required autocomplete="new-password">
-            <select id="user-role" aria-label="新用户角色">
-              <option value="user">普通用户</option>
-              <option value="admin">管理员</option>
+          <div class="admin-user-filter" role="group" aria-label="筛选用户">
+            <input id="admin-users-q" type="search" aria-label="搜索用户名或显示名" placeholder="搜索用户名或显示名">
+            <select id="admin-users-role" aria-label="筛选用户角色">
+              <option value="">全部角色</option>
+              <option value="user">普通用户</option><option value="admin">管理员</option>
             </select>
-            <button type="submit" class="btn-primary">创建用户</button>
-          </form>
+            <select id="admin-users-active" aria-label="筛选启用状态">
+              <option value="">全部状态</option>
+              <option value="active">已启用</option><option value="disabled">已禁用</option>
+            </select>
+          </div>
           <div id="admin-users-list" class="admin-list"></div>
           <div id="admin-user-sessions" class="panel sub hidden"></div>
+          <template id="admin-user-create-template">
+            <form id="user-create-form" class="admin-user-create-form">
+              <fieldset>
+                <label>用户名<input name="username" maxlength="64" required autocomplete="off"></label>
+                <label>显示名<input name="displayName" maxlength="100" required autocomplete="off"></label>
+                <label>初始密码<input name="password" type="password" placeholder="6 至 12 位" pattern=".{6,12}" required autocomplete="new-password"></label>
+                <label>角色<select name="role"><option value="user">普通用户</option><option value="admin">管理员</option></select></label>
+              </fieldset>
+              <p class="admin-user-create-error" role="alert"></p>
+            </form>
+          </template>
         </section>
 
         <section id="admin-view-cdks" class="admin-view panel hidden" aria-labelledby="admin-cdk-heading">
@@ -426,6 +437,8 @@
     </div>
   </div>
 
+  <div id="admin-user-menu" class="admin-user-menu hidden" role="menu" aria-label="更多用户操作"></div>
+
   <div id="preview-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="preview-title">
     <div class="modal-backdrop" data-close></div>
     <div class="modal-card">
@@ -448,8 +461,8 @@
     <div class="modal-card confirm-card">
       <div class="confirm-head">
         <div class="confirm-heading"><span id="confirm-icon" class="hidden" aria-hidden="true"></span><h2 id="confirm-title">确认操作</h2></div>
+        <button type="button" class="modal-close" data-close aria-label="关闭"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
       </div>
-      <button type="button" class="modal-close" data-close aria-label="关闭"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
       <div class="confirm-body">
         <p id="confirm-message" class="hidden"></p>
         <div id="confirm-fields"></div>

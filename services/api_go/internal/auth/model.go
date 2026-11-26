@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ var (
 	ErrRevokedSession     = errors.New("revoked session")
 	ErrForbidden          = errors.New("forbidden")
 	ErrNotFound           = errors.New("not found")
+	ErrLastActiveAdmin    = errors.New("last active administrator")
 )
 
 type Role string
@@ -64,11 +66,15 @@ type Principal struct {
 	IsCDK     bool
 }
 
+// UserDeletionAudit writes the audit event in the transaction that deletes a user.
+type UserDeletionAudit func(context.Context, *sql.Tx) error
+
 type Repository interface {
 	CDKRepository
 	CreateUser(ctx context.Context, user User) error
 	UpdatePassword(ctx context.Context, userID, passwordHash string, now time.Time) error
 	SetUserActive(ctx context.Context, userID string, active bool, now time.Time) error
+	DeleteUser(ctx context.Context, userID string, now time.Time, writeAudit UserDeletionAudit) error
 	ListUsers(ctx context.Context) ([]User, error)
 	FindUserByUsername(ctx context.Context, usernameNormalized string) (User, error)
 	FindUserByID(ctx context.Context, userID string) (User, error)

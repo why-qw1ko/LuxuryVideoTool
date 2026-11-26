@@ -19,12 +19,12 @@
 .preview-prev{left:14px}
 .preview-next{right:14px}
 .confirm-card{display:flex;flex-direction:column;max-width:520px;max-height:calc(100dvh - 40px);border:0;border-radius:var(--radius);box-shadow:none}
-.confirm-head{display:flex;align-items:center;justify-content:center;min-height:48px;padding:var(--space-3) 48px;flex-shrink:0;border-bottom:1px solid var(--border)}
-.confirm-heading{display:flex;align-items:center;justify-content:center;gap:var(--space-2);min-width:0;text-align:center}
-.confirm-heading h2{margin:0;font-size:16px;font-weight:500;line-height:1.5;overflow-wrap:anywhere}
+.confirm-head{display:flex;align-items:center;justify-content:space-between;gap:var(--space-2);min-height:48px;padding:var(--space-2) var(--space-5);flex-shrink:0;border-bottom:1px solid var(--border)}
+.confirm-heading{display:flex;align-items:center;gap:var(--space-2);min-width:0;text-align:start}
+.confirm-heading h2{margin:0;font-size:16px;font-weight:600;line-height:1.5;overflow-wrap:anywhere}
 #confirm-icon{display:flex;color:var(--primary)}
 #confirm-icon.confirm-icon-warning{color:var(--warning)}
-.confirm-card>.modal-close{position:absolute;inset-block-start:var(--space-3);inset-inline-end:var(--space-4);width:24px;height:24px;border-radius:var(--radius)}
+.confirm-head .modal-close{flex-shrink:0;width:var(--control-sm);height:var(--control-sm);border-radius:var(--radius)}
 .confirm-body{min-height:0;overflow-y:auto;padding:var(--space-6) var(--space-5);font-size:14px;color:var(--text);line-height:1.6;overflow-wrap:anywhere}
 #confirm-message{margin:0}
 #confirm-message:not(.hidden)+#confirm-fields:not(:empty){margin-top:var(--space-3)}
@@ -34,8 +34,8 @@
 :root[data-theme=dark] .confirm-actions .btn-danger{color:var(--card)}
 #confirm-cancel{border-color:transparent;background:var(--hover)}
 #confirm-cancel:hover{background:var(--border)}
-.confirm-simple .confirm-card{max-width:464px;padding:var(--space-6) var(--space-8) var(--space-8)}
-.confirm-simple .confirm-head{min-height:0;padding:0 var(--space-6);border:0;margin-bottom:var(--space-6)}
+.confirm-simple .confirm-card{max-width:464px;padding:var(--space-6)}
+.confirm-simple .confirm-head{min-height:0;padding:0;border:0;margin-bottom:var(--space-3)}
 .confirm-simple .confirm-body{padding:0}
-.confirm-simple .confirm-actions{justify-content:center;padding:0;border:0;margin-top:var(--space-8)}
+.confirm-simple .confirm-actions{padding:0;border:0;margin-top:var(--space-6)}
 

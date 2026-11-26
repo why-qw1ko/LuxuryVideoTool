@@ -51,6 +51,27 @@ func TestAPICatalogMatchesRegisteredRoutes(t *testing.T) {
 	}
 }
 
+func TestAPICatalogIncludesCurlExamples(t *testing.T) {
+	examples := make(map[string]string)
+	for _, operation := range apiCatalog {
+		if operation.CurlExample != "" {
+			examples[operation.Method+" "+operation.Path] = operation.CurlExample
+		}
+	}
+	for pattern, want := range map[string]string{
+		"POST /api/v1/jobs":                                    curlCreateJob,
+		"GET /api/v1/jobs/{id}":                                curlRequest,
+		"GET /api/v1/jobs/{id}/images/archive":                 curlDownloadZIP,
+		"POST /api/v1/jobs/{id}/images/archive-download":       curlRequest,
+		"POST /api/v1/admin/jobs/{id}/images/archive-download": curlRequest,
+		"GET /api/v1/archive-download/{id}":                    curlSignedZIP,
+	} {
+		if got := examples[pattern]; got != want {
+			t.Errorf("curl example for %s = %q, want %q", pattern, got, want)
+		}
+	}
+}
+
 func explicitAPIRoutePatterns(t *testing.T) map[string]bool {
 	t.Helper()
 	files, err := filepath.Glob("*.go")
@@ -158,7 +179,8 @@ func TestAPICatalogAccess(t *testing.T) {
 				item := payload.Operations[i]
 				if item["method"] != operation.Method || item["path"] != operation.Path ||
 					item["group"] != operation.Group || item["summary"] != operation.Summary ||
-					item["auth"] != operation.Auth || item["details"] != operation.Details {
+					item["auth"] != operation.Auth || item["details"] != operation.Details ||
+					item["curlExample"] != operation.CurlExample {
 					t.Errorf("invalid catalog JSON for %s %s: %v", operation.Method, operation.Path, item)
 				}
 			}

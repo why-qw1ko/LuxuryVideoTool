@@ -13,6 +13,7 @@ function section(start, end) {
 const listCode = section('async function loadJobs(', '// 通用分页条');
 const adminListCode = section('async function loadAdminJobs(', 'function adminJobOps(');
 const usersCode = section('async function loadAdminUsers(){', 'function renderAdminUsers(');
+const adminUserManagementCode = section('/* ---------- 管理后台：用户管理 ---------- */', '/* ---------- 渲染 ---------- */');
 const captureCode = section('const adminUsagePermissionFields=', '/* ---------- 任务列表 ---------- */');
 const providerCode = section('const asrProviderNames=', '/* ---------- 管理后台：使用设置 ---------- */');
 const overviewCode = section('let adminStatsPending=null;', 'function chartColors(');
@@ -26,7 +27,7 @@ function harness(code = listCode) {
   const nodes = new Map(), requests = [], rendered = [], notices = [], details = [];
   function node(selector) {
     if (!nodes.has(selector)) nodes.set(selector, {
-      value: '', checked: false, disabled: false, children: [], attributes: {}, listeners: {},
+      value: '', checked: false, disabled: false, children: [], attributes: {}, listeners: {}, dataset: {},
       classList: {toggle() {}, add() {}, remove() {}, contains() { return false; }},
       querySelector() { return null; },
       setAttribute(name, value) { this.attributes[name] = value; },
@@ -34,6 +35,7 @@ function harness(code = listCode) {
       addEventListener(name, callback) { this.listeners[name] = callback; },
       focus() { this.focused = true; },
       reset() { this.resetCount = (this.resetCount || 0) + 1; },
+      replaceChildren() { this.innerHTML = ''; },
       scrollIntoView() {},
     });
     return nodes.get(selector);
@@ -48,7 +50,8 @@ function harness(code = listCode) {
     adminUsers: [], lastAdminJobsSig: '', adminDetailLoadId: 0, adminDetailSig: '', adminMode: false,
     selectedId: null, currentJob: null, currentView: 'new', detailSig: '',
     taskMusic: {jobId: null}, adminOpen: false, videoPreviewURLs: new Map(), videoPreviewFailure: null,
-    AbortController, URLSearchParams, setTimeout, clearTimeout, $: node,
+    AbortController, URLSearchParams, setTimeout, clearTimeout, $: node, innerWidth: 900, innerHeight: 640,
+    window: {addEventListener() {}},
     document: {
       hidden: false, listeners: {},
       querySelectorAll() { return []; },
@@ -74,7 +77,7 @@ function harness(code = listCode) {
     showView(name) { context.currentView = name; },
     renderDetail() { if (context.currentJob) details.push(context.currentJob); },
     show() {}, stopTaskMusic() {}, syncDetailMedia() {}, setSidebar() {}, closePreview() {}, resetCDKView() {}, resetCapturePermissions() {}, resetProviderSettings() {},
-    bindAdminApiCatalog() {}, resetAdminApiCatalog() {},
+    bindAdminApiCatalog() {}, resetAdminApiCatalog() {}, closeAdminUserSessions() {}, closeAdminUserMenu() {}, dismissActionDialog: null,
     asrProviderNames: {siliconflow: '硅基流动', aliyun: '阿里云', deepseek: 'DeepSeek'},
     refreshDailyUsage() {}, uuidv4() { return 'idempotency-key'; },
   });
@@ -280,6 +283,38 @@ test('刷新后台用户选项后，保留当前用户筛选', async () => {
   h.requests[0].resolve({users: [{id: 'user-1', username: 'one'}, {id: 'user-2', username: 'two'}]});
   await pending;
   assert.equal(select.value, 'user-2');
+});
+
+test('删除与读取并发时，已删除的任务所有者从管理列表移除，筛选选项只出现一次', async () => {
+  const h = harness(usersCode), select = h.node('#admin-jobs-user');
+  const owner = {id: 'deleted-owner', username: 'historical', displayName: '同名账号'};
+  const namesake = {id: 'other-deleted-owner', username: 'second', displayName: '同名账号'};
+  const pending = h.context.loadAdminUsers();
+  h.requests[0].resolve({users: [owner], deletedJobOwners: [owner, namesake]});
+  await pending;
+  assert.equal(h.context.adminUsers.length, 0);
+  assert.equal(h.rendered[0].length, 0);
+  assert.equal((select.innerHTML.match(/value="deleted-owner"/g) || []).length, 1);
+  assert.match(select.innerHTML, /<optgroup label="已删除账号">/);
+  assert.match(select.innerHTML, /同名账号（historical）/);
+  assert.match(select.innerHTML, /同名账号（second）/);
+});
+
+test('已删除账号失去全部任务后，后台任务用清空后的用户筛选重新加载', async () => {
+  const h = harness(usersCode), select = h.node('#admin-jobs-user');
+  h.context.adminOpen = true;
+  h.context.adminCurrentView = 'jobs';
+  select.value = 'deleted-owner';
+  h.context.adminJobsPage = 3;
+  let refreshed = 0;
+  h.context.loadAdminJobs = () => { refreshed++; };
+
+  const pending = h.context.loadAdminUsers();
+  h.requests[0].resolve({users: [{id: 'current-owner', username: 'current'}], deletedJobOwners: []});
+  await pending;
+  assert.equal(select.value, '');
+  assert.equal(h.context.adminJobsPage, 1);
+  assert.equal(refreshed, 1);
 });
 
 test('用户列表的旧响应不会覆盖更新后的选项', async () => {
@@ -895,6 +930,33 @@ test('前台慢请求期间切换筛选立即请求新结果，不受轮询去�
   assert.equal(h.rendered[0][0].id, 'filtered');
 });
 
+test('后台任务过期后，桌面表格和移动卡片在原状态旁补充提示', async () => {
+  const h = harness(adminListCode +
+    section('function adminJobOps(', "$('#admin-view-jobs').addEventListener") +
+    section('function esc(value)', 'function renderList('));
+  Object.assign(h.context, {
+    actionLabels: {full: '提取内容'}, statusLabels: {completed: '已完成'}, statusTone: {completed: 'success'},
+    icon: name => name,
+  });
+  let now = Date.parse('2026-11-26T00:00:00Z');
+  h.context.Date = class extends Date { static now() { return now; } };
+  const job = {id: 'task', action: 'full', status: 'completed', createdAt: '2026-11-25T00:00:00Z',
+    mediaExpiresAt: '2026-11-26T00:00:01Z'};
+  const load = h.context.loadAdminJobs();
+  h.requests[0].resolve({jobs: [job], total: 1});
+  await load;
+  assert.doesNotMatch(h.node('#admin-jobs-list').innerHTML, /内容已过期/);
+
+  now += 1000;
+  const poll = h.context.loadAdminJobs(true);
+  h.requests[1].resolve({jobs: [job], total: 1});
+  await poll;
+  const html = h.node('#admin-jobs-list').innerHTML;
+  assert.equal(html.match(/内容已过期/g)?.length, 2);
+  assert.equal(html.match(/已完成/g)?.length, 2);
+  assert.equal(html.match(/data-op="view"/g)?.length, 2);
+});
+
 test('后台详情慢请求不会被后续轮询饿死，取消重试后的强制刷新可替代旧请求', async () => {
   const h = harness(section('async function viewAdminJob(', 'async function operateAdminJob('));
   h.context.adminOpen = true;
@@ -1155,4 +1217,309 @@ test('单用户额度区分继承和不限，拒绝非法数值并阻止同一�
   await h.context.setUserDailyTaskLimit('user/1');
   assert.equal(h.requests.length, 3);
   assert.equal(reloads, 3);
+});
+
+function userDeletionHarness() {
+  const h = harness(adminUserManagementCode);
+  const own = {id: 'owner', username: 'owner', role: 'admin', isActive: true};
+  const user = {id: 'user/1', username: 'tester', displayName: '测试用户', role: 'user', isActive: true};
+  const otherAdmin = {id: 'admin/2', username: 'backup', role: 'admin', isActive: false};
+  const confirmations = [];
+  h.context.session.user.role = 'admin';
+  h.context.adminOpen = true;
+  h.context.adminCurrentView = 'users';
+  h.context.adminUsers = [own, user, otherAdmin];
+  h.context.fmtDate = () => '2026-11-26';
+  h.context.confirmDialog = options => {
+    confirmations.push(options);
+    return h.confirmed;
+  };
+  h.context.innerWidth = 390;
+  h.context.innerHeight = 820;
+  const menu = h.node('#admin-user-menu');
+  Object.assign(menu, {style: {}, offsetWidth: 144, offsetHeight: 104, firstElementChild: h.node('menu-item')});
+  return {...h, own, user, otherAdmin, menu, confirmations, confirm(value) { h.confirmed = value; },
+    openMenu(target) {
+      const button = h.node(`menu-anchor-${target.id}`);
+      button.isConnected = true;
+      button.getBoundingClientRect = () => ({right: 350, top: 100, bottom: 132});
+      h.context.toggleAdminUserMenu(target, button);
+      return button;
+    },
+  };
+}
+
+test('桌面和移动端保留常用操作，更多菜单仅对其他账号提供删除', () => {
+  const h = userDeletionHarness();
+  h.context.renderAdminUsers(h.context.adminUsers);
+  const html = h.node('#admin-users-list').innerHTML;
+  for (const op of ['view-user-jobs', 'sessions', 'daily-task-limit', 'more-user']) {
+    assert.equal((html.match(new RegExp(`data-op="${op}"`, 'g')) || []).length, 6);
+  }
+  assert.doesNotMatch(html, /data-op="(password|enable|disable|delete-user)"/);
+  const ownButton = h.openMenu(h.own);
+  assert.doesNotMatch(h.menu.innerHTML, /data-user-menu-op="delete-user"/);
+  h.openMenu(h.user);
+  assert.equal(ownButton.getAttribute('aria-expanded'), 'false');
+  assert.match(h.menu.innerHTML, /data-user-menu-op="password"/);
+  assert.match(h.menu.innerHTML, /data-user-menu-op="disable"/);
+  assert.match(h.menu.innerHTML, /aria-label="删除账号 tester"/);
+  h.openMenu(h.otherAdmin);
+  assert.match(h.menu.innerHTML, /data-user-menu-op="enable"/);
+  assert.match(h.menu.innerHTML, /aria-label="删除账号 backup"/);
+});
+
+test('用户筛选保留完整的任务用户选项，查看任务清空其他条件并跳回首页', () => {
+  const h = userDeletionHarness();
+  h.node('#admin-users-q').value = '  测试用户  ';
+  h.node('#admin-users-role').value = 'user';
+  h.node('#admin-users-active').value = 'active';
+  h.context.updateAdminUsers(h.context.adminUsers,[]);
+  assert.match(h.node('#admin-users-list').innerHTML, /tester/);
+  assert.doesNotMatch(h.node('#admin-users-list').innerHTML, /backup/);
+  assert.match(h.node('#admin-jobs-user').innerHTML, /backup/);
+  h.node('#admin-jobs-q').value = '旧关键词';
+  h.node('#admin-jobs-status').value = 'failed';
+  h.context.adminJobsPage = 3;
+  let view;
+  h.context.adminShowView = name => { view = name; };
+  h.context.viewAdminUserJobs(h.user.id);
+  assert.equal(view, 'jobs');
+  assert.equal(h.node('#admin-jobs-user').value, h.user.id);
+  assert.equal(h.node('#admin-jobs-q').value, '');
+  assert.equal(h.node('#admin-jobs-status').value, '');
+  assert.equal(h.context.adminJobsPage, 1);
+});
+
+test('删除账号后关闭其会话并保留历史任务筛选，忽略旧的用户列表响应', async () => {
+  const h = userDeletionHarness();
+  h.confirm(true);
+  const filter = h.node('#admin-jobs-user');
+  filter.value = h.user.id;
+  h.context.adminJobsPage = 3;
+  h.context.lastStatsSig = 'old stats';
+  h.context.lastAdminJobsSig = 'old jobs';
+  h.context.adminStatsPending = {};
+  h.context.adminJobsPending = {};
+  const sessions = h.context.showUserSessions(h.user.id, h.user.username);
+  const oldUsers = h.context.loadAdminUsers();
+
+  const button = h.openMenu(h.user);
+  const action = {dataset: {userMenuOp: 'delete-user'}};
+  const deletion = h.menu.listeners.click({target: {closest() { return action; }}});
+  await tick();
+  await h.context.deleteAdminUser(h.user.id);
+  assert.equal(h.confirmations.length, 1);
+  assert.match(h.confirmations[0].message, /tester.*下线.*无法登录。历史任务会保留。/);
+  assert.equal(h.requests[2].url, '/api/v1/admin/users/user%2F1');
+  assert.equal(h.requests[2].options.method, 'DELETE');
+  assert.equal(button.disabled, true);
+  h.requests[2].resolve({});
+  await deletion;
+  assert.equal(h.requests[3].url, '/api/v1/admin/users?includeDeletedJobOwners=1');
+  assert.equal(filter.value, h.user.id);
+  assert.equal(h.context.adminJobsPage, 3);
+  assert.equal(h.context.lastStatsSig, '');
+  assert.equal(h.context.lastAdminJobsSig, '');
+  assert.equal(h.context.adminStatsPending, null);
+  assert.equal(h.context.adminJobsPending, null);
+  assert.equal(h.node('#admin-user-sessions').innerHTML, '');
+  assert.doesNotMatch(h.node('#admin-users-list').innerHTML, /tester/);
+
+  h.requests[0].resolve({sessions: []});
+  h.requests[1].resolve({users: [h.own, h.user, h.otherAdmin]});
+  await Promise.all([sessions, oldUsers]);
+  assert.equal(h.node('#admin-user-sessions').innerHTML, '');
+  assert.doesNotMatch(h.node('#admin-users-list').innerHTML, /tester/);
+  h.requests[3].resolve({users: [h.own, h.otherAdmin], deletedJobOwners: [{id: h.user.id, username: h.user.username, displayName: h.user.displayName}]});
+  await tick();
+  assert.match(filter.innerHTML, /<optgroup label="已删除账号"><option value="user\/1">测试用户（tester）<\/option>/);
+  assert.equal(filter.value, h.user.id);
+  assert.doesNotMatch(h.node('#admin-users-list').innerHTML, /tester/);
+  assert.deepEqual(h.notices, [{message: '用户已删除', type: 'success'}]);
+});
+
+test('不删除当前账号、取消时不发请求、失败后显示服务端原因', async () => {
+  const h = userDeletionHarness();
+  h.confirm(false);
+  await h.context.deleteAdminUser(h.own.id);
+  assert.equal(h.confirmations.length, 0);
+  await h.context.deleteAdminUser(h.otherAdmin.id);
+  assert.equal(h.confirmations.length, 1);
+  assert.equal(h.requests.length, 0);
+
+  h.context.session.user.role = 'user';
+  await h.context.deleteAdminUser(h.otherAdmin.id);
+  assert.equal(h.confirmations.length, 1);
+  h.context.session.user.role = 'admin';
+  h.confirm(true);
+  const button = {isConnected: true, setAttribute() {}};
+  const deletion = h.context.deleteAdminUser(h.otherAdmin.id, button);
+  await tick();
+  h.requests[0].reject(new Error('不能删除最后一个有效管理员'));
+  await deletion;
+  assert.deepEqual(h.notices, [{message: '不能删除最后一个有效管理员', type: 'error'}]);
+  assert.equal(button.disabled, false);
+  assert.ok(h.context.adminUsers.some(user => user.id === h.otherAdmin.id));
+});
+
+function sessionFor(id) {
+  return {id, device: {name: id}};
+}
+
+function clickSessionRevoke(panel, id) {
+  return panel.listeners.click({target: {closest(selector) {
+    return selector === 'button[data-session]' ? {dataset: {session: id}} : null;
+  }}});
+}
+
+test('并行下线会话各自更新当前面板，迟到的刷新不恢复已下线会话', async () => {
+  const h = userDeletionHarness();
+  const panel = h.node('#admin-user-sessions');
+  const opening = h.context.showUserSessions(h.user.id, h.user.username);
+  h.requests[0].resolve({sessions: [sessionFor('first'), sessionFor('second')]});
+  await opening;
+  const first = clickSessionRevoke(panel, 'first');
+  const second = clickSessionRevoke(panel, 'second');
+  assert.equal(h.requests[1].url, '/api/v1/admin/sessions/first');
+  assert.equal(h.requests[2].url, '/api/v1/admin/sessions/second');
+
+  h.requests[1].resolve({});
+  await first;
+  h.requests[2].resolve({});
+  await second;
+  assert.equal(h.requests.length, 5);
+  assert.equal(h.requests[3].url, h.requests[0].url);
+  assert.equal(h.requests[4].url, h.requests[0].url);
+  h.requests[4].resolve({sessions: []});
+  await tick();
+  h.requests[3].resolve({sessions: [sessionFor('second')]});
+  await tick();
+  assert.match(panel.innerHTML, /该用户当前没有活跃会话/);
+  assert.doesNotMatch(panel.innerHTML, /data-session=/);
+  assert.equal(h.notices.filter(notice => notice.message === '会话已下线').length, 2);
+});
+
+test('原面板的撤销完成后只刷新同账号的新面板，其他面板保持不变', async () => {
+  for (const reopenSameUser of [true, false]) {
+    const h = userDeletionHarness();
+    const panel = h.node('#admin-user-sessions');
+    const opening = h.context.showUserSessions(h.user.id, h.user.username);
+    h.requests[0].resolve({sessions: [sessionFor('old-device')]});
+    await opening;
+    const revocation = clickSessionRevoke(panel, 'old-device');
+    h.context.closeAdminUserSessions();
+    const user = reopenSameUser ? h.user : h.otherAdmin;
+    const reopening = h.context.showUserSessions(user.id, user.username);
+    h.requests[2].resolve({sessions: [sessionFor(reopenSameUser ? 'old-device' : 'other-device')]});
+    await reopening;
+
+    h.requests[1].resolve({});
+    await revocation;
+    assert.equal(h.notices.length, 0);
+    if (reopenSameUser) {
+      assert.equal(h.requests.length, 4);
+      assert.equal(h.requests[3].url, h.requests[0].url);
+      h.requests[3].resolve({sessions: []});
+      await tick();
+      assert.doesNotMatch(panel.innerHTML, /old-device/);
+    } else {
+      assert.equal(h.requests.length, 3);
+      assert.match(panel.innerHTML, /other-device/);
+    }
+  }
+});
+
+test('创建用户请求超时后恢复表单并重新核对用户列表', async () => {
+  const h = harness(section("$('#admin-user-create').addEventListener", "$('#admin-users-q').addEventListener"));
+  h.context.session.user.role = 'admin';
+  h.context.adminOpen = true;
+  h.context.adminCurrentView = 'users';
+
+  const fields = h.node('fieldset'), error = h.node('.admin-user-create-error');
+  const elements = {username: h.node('username'), displayName: h.node('displayName'), password: h.node('password'), role: h.node('role')};
+  elements.username.value = 'tester';
+  elements.password.value = '123456';
+  elements.role.value = 'user';
+  const form = h.node('user-create-form');
+  form.elements = elements;
+  form.querySelector = selector => selector === 'fieldset' ? fields : error;
+  form.reportValidity = () => true;
+  h.node('#admin-user-create-template').content = {firstElementChild: {cloneNode: () => form}};
+
+  let dialog, timeout, refreshes = 0;
+  h.context.openActionDialog = options => { dialog = options; };
+  h.context.validNewPassword = () => true;
+  h.context.setTimeout = (callback, delay) => {
+    assert.equal(delay, 15000);
+    timeout = callback;
+    return 1;
+  };
+  h.context.clearTimeout = id => {
+    assert.equal(id, 1);
+    timeout = null;
+  };
+  h.context.loadAdminUsers = () => { refreshes++; };
+
+  h.context.openAdminUserCreate();
+  const submission = dialog.submit(dialog.collect());
+  assert.equal(h.requests[0].url, '/api/v1/admin/users');
+  assert.equal(h.requests[0].options.method, 'POST');
+  assert.equal(fields.disabled, true);
+  timeout();
+  assert.equal(await submission, false);
+  assert.equal(h.requests[0].options.signal.aborted, true);
+  assert.equal(timeout, null);
+  assert.equal(fields.disabled, false);
+  assert.equal(elements.username.value, 'tester');
+  assert.equal(elements.password.value, '123456');
+  assert.match(error.textContent, /结果尚未确认.*在用户列表中核对/);
+  assert.equal(refreshes, 1);
+
+  h.requests[0].resolve({});
+  await tick();
+  assert.deepEqual(h.notices, []);
+  assert.equal(refreshes, 1);
+  const retry = dialog.submit(dialog.collect());
+  h.requests[1].resolve({});
+  assert.equal(await retry, true);
+  assert.equal(timeout, null);
+  assert.equal(refreshes, 2);
+  assert.deepEqual(h.notices, [{message: '用户已创建', type: 'success'}]);
+});
+
+test('创建表单异步保存失败后保留输入，提交期间拒绝重复确认', async () => {
+  const h = harness(section('let dismissActionDialog=null;', 'function confirmDialog('));
+  const modal = h.node('#confirm-modal'), fields = h.node('#confirm-fields');
+  const close = h.node('.modal-close'), ok = h.node('#confirm-ok'), cancel = h.node('#confirm-cancel');
+  const input = h.node('username-input'), opener = h.node('#admin-user-create'), pending = [];
+  opener.isConnected = true;
+  h.context.document.activeElement = opener;
+  h.context.document.body = {classList: h.node('body').classList};
+  modal.querySelector = () => close;
+  modal.querySelectorAll = () => [close];
+  fields.appendChild = value => { fields.content = value; };
+  fields.replaceChildren = () => { fields.content = null; };
+  const form = {username: 'tester'};
+  const result = h.context.openActionDialog({
+    title: '创建用户', fields: form, initialFocus: input, collect: () => form,
+    submit: value => new Promise(resolve => pending.push({value, resolve})),
+  });
+  const first = ok.onclick();
+  await ok.onclick();
+  cancel.onclick();
+  assert.equal(pending.length, 1);
+  assert.equal(close.disabled, true);
+  assert.equal(fields.content, form);
+  pending[0].resolve(false);
+  await first;
+  assert.equal(ok.disabled, false);
+  assert.equal(input.focused, true);
+  assert.equal(fields.content, form);
+  const second = ok.onclick();
+  pending[1].resolve(true);
+  await second;
+  assert.equal(await result, form);
+  assert.equal(fields.content, null);
+  assert.equal(opener.focused, true);
 });

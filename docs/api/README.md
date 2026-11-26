@@ -21,6 +21,7 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 ## 管理 API（仅管理员，普通用户一律 403）
 
 - 后台「接口文档」通过 `GET /api/v1/admin/api-catalog` 读取接口目录，仅管理员可访问。
+- 创建任务、查询结果和下载图文 ZIP 等操作提供 PowerShell 的 `curl.exe` 示例。执行前替换令牌、任务 ID 等占位符，签名下载使用由站点基址和 `downloadUrl` 组成的完整链接。
 
 ### 使用设置
 
@@ -40,11 +41,12 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 
 ### 用户管理
 
-- `GET /api/v1/admin/users`：列出全部用户（不含密码哈希），`dailyTaskLimitOverride` 为 `null` 时继承全局额度。
+- `GET /api/v1/admin/users`：列出常规账号，排除已删除账号和 CDK 账号。`dailyTaskLimitOverride` 为 `null` 时继承全局额度。
 - `PUT /api/v1/admin/users/{id}/daily-task-limit` 接收 `{dailyTaskLimit}`。`null` 继承默认值，`0` 不限，正整数设置该用户独立额度。
 - `POST /api/v1/admin/users`：创建用户，请求体 `{username, displayName, password, role}`。密码须为 6 至 12 个字符，用户名重复返回 409。
+- `DELETE /api/v1/admin/users/{id}` 删除常规账号并撤销其会话，保留用户名、历史任务、文件和审计。成功返回 `{requestId}`，已删除或不存在的账号返回 `404 USER_NOT_FOUND`。当前登录的管理员和最后一个可用管理员不能删除。
 - `POST /api/v1/admin/users/{id}/password`：重置密码（6 至 12 个字符），并立即撤销该用户全部会话。
-- `PATCH /api/v1/admin/users/{id}/active`：启用/禁用账号，请求体 `{active: bool}`；禁用会撤销该用户全部会话，不能禁用当前登录账号。
+- `PATCH /api/v1/admin/users/{id}/active` 启用或禁用账号，请求体为 `{active: bool}`。禁用会撤销该用户全部会话。当前登录账号和最后一个可用管理员不能禁用。
 - `GET /api/v1/admin/users/{id}/sessions`：查看任意用户的活跃设备会话。
 - `DELETE /api/v1/admin/sessions/{id}`：管理员下线任意用户的会话。
 
@@ -61,6 +63,7 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 
 ### 任务管理（跨用户）
 
+- `GET /api/v1/admin/users?includeDeletedJobOwners=1`：附带 `deletedJobOwners`，包含仍有任务的已删除账号的 ID、用户名和显示名。可用账号 ID 按 `userId` 筛选历史任务。
 - `GET /api/v1/admin/jobs`：跨用户任务列表，支持 `q/status/action/userId/limit/offset` 筛选分页；返回 `ownerUsername`/`ownerDisplayName`。
 - `GET /api/v1/admin/jobs/{id}`：管理员视角查看任意任务详情（含媒体文件）。
 - `POST /api/v1/admin/jobs/{id}/images/archive-download`：为任意用户已完成的图文任务获取配图 ZIP 短期下载地址。返回 `{downloadUrl, expiresAt}`，有效期 5 分钟。

@@ -15,6 +15,78 @@ import (
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/resolver"
 )
 
+func TestAdminCanFilterHistoricalJobsByDeletedOwner(t *testing.T) {
+	fixture := newArchiveDownloadFixture(t)
+	ctx := context.Background()
+	admin, err := fixture.deps.Auth.CreateUser(ctx, "maintainer", "Admin", "OwnerPass!", auth.RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := fixture.deps.Auth.Login(ctx, auth.LoginInput{
+		Username: admin.UsernameNormalized, Password: "OwnerPass!",
+		Device: auth.Device{ID: "job-owner-test", Name: "PC", Platform: "windows", AppVersion: "1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutJobs, err := fixture.deps.Auth.CreateUser(ctx, "unused", "Unused", "OwnerPass!", auth.RoleUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.addJob(t, "second-job", fixture.ownerID, "completed")
+
+	for _, id := range []string{fixture.ownerID, withoutJobs.ID} {
+		response := performJSON(fixture.handler, http.MethodDelete, "/api/v1/admin/users/"+id, nil, pair.AccessToken)
+		if response.Code != http.StatusOK {
+			t.Fatalf("delete user: %d %s", response.Code, response.Body.String())
+		}
+	}
+
+	const usersPath = "/api/v1/admin/users"
+	const ownersPath = usersPath + "?includeDeletedJobOwners=1"
+	if response := performJSON(fixture.handler, http.MethodGet, ownersPath, nil, fixture.otherToken); response.Code != http.StatusForbidden {
+		t.Fatalf("non-admin read of job owners: %d", response.Code)
+	}
+	if response := performJSON(fixture.handler, http.MethodGet, usersPath, nil, pair.AccessToken); response.Code != http.StatusOK || strings.Contains(response.Body.String(), fixture.ownerID) {
+		t.Fatalf("default user list includes deleted owners: %d %s", response.Code, response.Body.String())
+	}
+
+	response := performJSON(fixture.handler, http.MethodGet, ownersPath, nil, pair.AccessToken)
+	if response.Code != http.StatusOK {
+		t.Fatalf("list deleted job owners: %d %s", response.Code, response.Body.String())
+	}
+	var list struct {
+		Users            []struct{ ID string }  `json:"users"`
+		DeletedJobOwners []jobs.DeletedJobOwner `json:"deletedJobOwners"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(list.Users, func(user struct{ ID string }) bool {
+		return user.ID == fixture.ownerID || user.ID == withoutJobs.ID
+	}) {
+		t.Fatalf("deleted account in user management: %+v", list.Users)
+	}
+	want := []jobs.DeletedJobOwner{{ID: fixture.ownerID, Username: "owner", DisplayName: "Owner"}}
+	if !slices.Equal(list.DeletedJobOwners, want) {
+		t.Fatalf("deleted job owners = %+v, want %+v", list.DeletedJobOwners, want)
+	}
+
+	response = performJSON(fixture.handler, http.MethodGet, "/api/v1/admin/jobs?view=summary&userId="+url.QueryEscape(list.DeletedJobOwners[0].ID), nil, pair.AccessToken)
+	if response.Code != http.StatusOK {
+		t.Fatalf("list historical jobs: %d %s", response.Code, response.Body.String())
+	}
+	var page struct {
+		Jobs []jobs.JobSummary `json:"jobs"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Jobs) != 2 || slices.ContainsFunc(page.Jobs, func(job jobs.JobSummary) bool { return job.OwnerUsername != "owner" }) {
+		t.Fatalf("unexpected jobs for deleted owner: %+v", page.Jobs)
+	}
+}
+
 func TestJobSummaryListsPreservePermissionsAndFullDetails(t *testing.T) {
 	fixture := newArchiveDownloadFixture(t)
 	ctx := context.Background()

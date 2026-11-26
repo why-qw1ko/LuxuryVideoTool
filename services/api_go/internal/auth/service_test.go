@@ -23,7 +23,10 @@ func (r *memoryRepository) UpdatePassword(_ context.Context, userID, hash string
 	return nil
 }
 func (r *memoryRepository) SetUserActive(context.Context, string, bool, time.Time) error { return nil }
-func (r *memoryRepository) ListUsers(context.Context) ([]User, error)                    { return []User{r.user}, nil }
+func (r *memoryRepository) DeleteUser(context.Context, string, time.Time, UserDeletionAudit) error {
+	return nil
+}
+func (r *memoryRepository) ListUsers(context.Context) ([]User, error) { return []User{r.user}, nil }
 func (r *memoryRepository) FindUserByUsername(_ context.Context, username string) (User, error) {
 	if r.user.UsernameNormalized != username {
 		return User{}, ErrNotFound

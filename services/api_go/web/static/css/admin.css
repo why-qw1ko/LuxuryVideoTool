@@ -69,9 +69,11 @@
 .admin-jobs-table th:nth-child(1),.admin-jobs-table td:nth-child(1){width:140px}
 .admin-jobs-table th:nth-child(2),.admin-jobs-table td:nth-child(2){width:112px}
 .admin-jobs-table th:nth-child(4),.admin-jobs-table td:nth-child(4){width:92px}
-.admin-jobs-table th:nth-child(5),.admin-jobs-table td:nth-child(5){width:100px}
+.admin-jobs-table th:nth-child(5),.admin-jobs-table td:nth-child(5){width:120px}
 .admin-jobs-table th:nth-child(6),.admin-jobs-table td:nth-child(6){width:224px}
 .admin-jobs-table .admin-title{max-width:none}
+.admin-job-status{display:flex;flex-direction:column;align-items:flex-start;gap:4px;white-space:nowrap}
+.admin-card-head .admin-job-status{align-items:flex-end;flex-shrink:0}
 .admin-ops-row,.admin-card-actions{display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap}
 .admin-ops button,.admin-card-actions button,.pager button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:4px 10px;border:1px solid var(--border);border-radius:4px;background:var(--card);color:var(--text-secondary);font-weight:400;font-size:12px;line-height:1.4;transition:background .14s ease,border-color .14s ease,color .14s ease}
 .admin-ops button:hover,.admin-card-actions button:hover,.pager button:not(:disabled):hover{background:var(--primary-light);color:var(--primary);border-color:var(--border-focus)}
@@ -134,6 +136,20 @@
 #admin-password-submit{justify-self:start}
 
 #admin-user-sessions.panel.sub{margin-top:0;max-height:40vh;padding:20px;overflow-y:auto;box-shadow:none;border:1px solid var(--border)}
+.admin-user-filter{display:grid;grid-template-columns:minmax(0,1fr) minmax(112px,144px) minmax(112px,144px);gap:12px;flex-shrink:0}
+.admin-user-filter input{padding-inline:12px}
+.admin-user-create-form{gap:12px}
+.admin-user-create-form fieldset{display:grid;gap:12px;min-inline-size:0;margin:0;padding:0;border:0}
+.admin-user-create-error{margin:0;color:var(--danger);font-size:13px;overflow-wrap:anywhere}
+.admin-user-create-error:empty{display:none}
+.admin-user-menu{position:fixed;z-index:64;display:grid;min-width:144px;max-width:calc(100vw - 16px);padding:4px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);box-shadow:var(--shadow-lg)}
+.admin-user-menu button{display:block;min-height:32px;padding:4px 12px;border:0;border-radius:var(--radius);background:transparent;text-align:start;white-space:nowrap}
+.admin-user-menu button:hover,.admin-user-menu button:focus-visible{background:var(--hover)}
+.admin-user-menu button.danger{color:var(--danger)}
+@media(max-width:620px){
+  .admin-user-filter{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .admin-user-filter input{grid-column:1/-1}
+}
 .back-btn{display:inline-flex;align-items:center;gap:7px;min-height:40px;padding:8px 14px;border:1px solid var(--border);border-radius:4px;background:var(--card);color:var(--text-secondary);font-size:13px;white-space:nowrap;transition:background .14s ease,color .14s ease,border-color .14s ease}
 .back-btn:hover:not(:disabled){background:var(--hover);color:var(--primary);border-color:var(--border-focus)}
 

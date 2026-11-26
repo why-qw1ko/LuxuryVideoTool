@@ -259,6 +259,8 @@ function closeAdminConsole(){
   resetAdminPasswordForm();
   resetProviderSettings();
   resetAdminApiCatalog();
+  closeAdminUserSessions();
+  closeAdminUserMenu();
   adminOpen=false;adminMode=false;
   setSidebar(false);
   show('#admin-console',false);show('#app',true);
@@ -273,6 +275,7 @@ function adminShowView(name){
   if(adminCurrentView==='password'&&name!=='password')resetAdminPasswordForm();
   if(adminCurrentView==='providers'&&name!=='providers')resetProviderSettings();
   if(adminCurrentView==='api-catalog'&&name!=='api-catalog')resetAdminApiCatalog();
+  if(adminCurrentView==='users'&&name!=='users'){closeAdminUserSessions();closeAdminUserMenu()}
   adminCurrentView=name;
   ['dashboard','jobs','users','cdks','usage','providers','api-catalog','password','detail'].forEach(v=>show('#admin-view-'+v,v===name));
   document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>{
@@ -372,6 +375,7 @@ function syncHeaderActions(){
   show('#logout',!!session&&!adminOpen);
 }
 function enter(value){
+  dismissActionDialog?.();
   clearInterval(poll);
   sessionEpoch++;jobsLoadId++;jobDetailLoadId++;adminJobsLoadId++;adminUsersLoadId++;adminDetailLoadId++;
   adminDetailSig='';jobsPending=null;jobDetailPending=null;adminJobsPending=null;adminDetailPending=null;
@@ -400,6 +404,12 @@ function enter(value){
   resetProviderSettings();
   resetCDKView();
   resetAdminApiCatalog();
+  closeAdminUserSessions();
+  closeAdminUserMenu();
+  $('#admin-users-q').value='';
+  $('#admin-users-role').value='';
+  $('#admin-users-active').value='';
+  $('#admin-jobs-user').innerHTML='<option value="">全部用户</option>';
   syncHeaderActions();
   // 未登录时隐藏左上角菜单按钮：导航抽屉是登录后的功能，登录页点了只会打开空的抽屉。
   // 用 visibility 而非 display，保留其在顶栏网格中的 40px 占位，避免品牌文字被顶位裁剪。
@@ -1146,13 +1156,16 @@ function adminJobOps(job,wrap=true){
   if(terminal)ops.push(`<button type="button" data-op="delete" class="danger">${icon('trash',13)} 删除</button>`);
   return wrap?`<div class="admin-ops-row">${ops.join('')}</div>`:ops.join('');
 }
+function adminJobExpiryBadge(job){
+  return jobExpired(job)?'<span class="badge badge-warning">内容已过期</span>':'';
+}
 function adminJobCardHTML(job){
   const w=job.work||{};
   const title=stripHashtags(w.title,w.hashtags)||`任务 ${job.id.slice(0,8)}`;
   const tone=statusTone[job.status]||'muted';
   const owner=job.ownerDisplayName||job.ownerUsername||'-';
   return `<article class="admin-card" data-id="${esc(job.id)}">
-    <div class="admin-card-head"><strong>${esc(title)}</strong><span class="badge badge-${tone}">${esc(statusLabels[job.status]||job.status)}</span></div>
+    <div class="admin-card-head"><strong>${esc(title)}</strong><div class="admin-job-status"><span class="badge badge-${tone}">${esc(statusLabels[job.status]||job.status)}</span>${adminJobExpiryBadge(job)}</div></div>
     <div class="admin-card-meta">
       <span>创建：${fmtShort(job.createdAt)}</span>
       <span>用户：${esc(owner)}</span>
@@ -1174,7 +1187,7 @@ function renderAdminJobs(jobs){
       <td class="nowrap">${esc(owner)}</td>
       <td class="admin-title">${esc(title)}</td>
       <td>${esc(actionLabels[job.action]||job.action)}</td>
-      <td class="nowrap"><span class="dot dot-${tone}"></span>${esc(statusLabels[job.status]||job.status)}</td>
+      <td><div class="admin-job-status"><span><span class="dot dot-${tone}"></span>${esc(statusLabels[job.status]||job.status)}</span>${adminJobExpiryBadge(job)}</div></td>
       <td class="admin-ops nowrap">${adminJobOps(job)}</td>
     </tr>`;
   }).join('')+`</tbody></table></div>`;
@@ -1231,39 +1244,121 @@ async function operateAdminJob(id,op){
 }
 
 /* ---------- 管理后台：用户管理 ---------- */
-$('#user-create-form').addEventListener('submit',async e=>{
-  e.preventDefault();
-  const password=$('#user-password').value;
-  if(!validNewPassword(password))return toast('密码须为 6 至 12 位','warning');
-  try{
-    await api('/api/v1/admin/users',{method:'POST',body:JSON.stringify({username:$('#user-username').value.trim(),displayName:$('#user-display').value.trim(),password,role:$('#user-role').value})});
-    e.target.reset();toast('用户已创建','success');await loadAdminUsers();
-  }catch(err){toast(err.message,'error')}
-});
+$('#admin-user-create').addEventListener('click',openAdminUserCreate);
+function openAdminUserCreate(){
+  const epoch=sessionEpoch;
+  const current=()=>epoch===sessionEpoch&&adminOpen&&adminCurrentView==='users'&&session?.user?.role==='admin';
+  if(!current())return;
+  const form=$('#admin-user-create-template').content.firstElementChild.cloneNode(true);
+  const fields=form.querySelector('fieldset'),error=form.querySelector('.admin-user-create-error');
+  const {username,displayName,password,role}=form.elements;
+  form.addEventListener('submit',event=>{event.preventDefault();$('#confirm-ok').click()});
+  return openActionDialog({
+    title:'创建用户',confirmText:'创建用户',fields:form,initialFocus:username,
+    collect(){
+      if(!current())return;
+      error.textContent='';
+      username.value=username.value.trim();
+      displayName.value=displayName.value.trim();
+      if(!form.reportValidity())return;
+      if(!validNewPassword(password.value)){
+        error.textContent='密码须为 6 至 12 位。';
+        password.focus();
+        return;
+      }
+      return {username:username.value,displayName:displayName.value,password:password.value,role:role.value};
+    },
+    async submit(value){
+      fields.disabled=true;
+      const controller=new AbortController();
+      let timer;
+      const timeout=new Promise((_,reject)=>{
+        timer=setTimeout(()=>{
+          controller.abort();
+          reject(new Error('创建请求超时'));
+        },15000);
+      });
+      try{
+        await Promise.race([
+          api('/api/v1/admin/users',{method:'POST',body:JSON.stringify(value),signal:controller.signal}),
+          timeout,
+        ]);
+        if(current()){
+          toast('用户已创建','success');
+          void loadAdminUsers();
+        }
+        return true;
+      }catch(err){
+        if(!current())return true;
+        if(controller.signal.aborted){
+          error.textContent='创建请求超时，结果尚未确认。请关闭弹窗，在用户列表中核对账号是否已创建，再重新提交。';
+          void loadAdminUsers();
+        }else{
+          error.textContent=err.message;
+        }
+        return false;
+      }finally{
+        clearTimeout(timer);
+        fields.disabled=false;
+      }
+    },
+  });
+}
+$('#admin-users-q').addEventListener('input',()=>renderAdminUsers(filterAdminUsers(adminUsers)));
+$('#admin-users-role').addEventListener('change',()=>renderAdminUsers(filterAdminUsers(adminUsers)));
+$('#admin-users-active').addEventListener('change',()=>renderAdminUsers(filterAdminUsers(adminUsers)));
+
 async function loadAdminUsers(){
   if(!session)return;
   const requestId=++adminUsersLoadId,epoch=sessionEpoch;
   try{
     const root=$('#admin-users-list');
     if(root&&!root.children.length)root.innerHTML=skeletonRows(5);
-    const data=await api('/api/v1/admin/users');
+    const data=await api('/api/v1/admin/users?includeDeletedJobOwners=1');
     if(requestId!==adminUsersLoadId||epoch!==sessionEpoch||!session)return;
-    adminUsers=data.users||[];
-    renderAdminUsers(adminUsers);
-    const select=$('#admin-jobs-user');
-    if(select){
-      const selected=select.value;
-      select.innerHTML=`<option value="">全部用户</option>`+adminUsers.map(u=>`<option value="${esc(u.id)}">${esc(u.displayName||u.username)}</option>`).join('');
-      select.value=adminUsers.some(u=>u.id===selected)?selected:'';
-    }
+    updateAdminUsers(data.users||[],data.deletedJobOwners||[]);
   }catch(err){if(requestId===adminUsersLoadId&&epoch===sessionEpoch)toast(err.message,'error')}
+}
+function updateAdminUsers(users,deletedJobOwners){
+  const deletedIds=new Set(deletedJobOwners?.map(owner=>owner.id));
+  adminUsers=deletedIds.size?users.filter(user=>!deletedIds.has(user.id)):users;
+  renderAdminUsers(filterAdminUsers(adminUsers));
+  if(!deletedJobOwners)return;
+  const select=$('#admin-jobs-user'),selected=select.value;
+  const options=(owners,includeUsername)=>owners.map(owner=>{
+    const name=owner.displayName||owner.username;
+    const label=includeUsername&&name!==owner.username?`${name}（${owner.username}）`:name;
+    return `<option value="${esc(owner.id)}">${esc(label)}</option>`;
+  }).join('');
+  select.innerHTML='<option value="">全部用户</option>'+options(adminUsers,false)+
+    (deletedJobOwners.length?`<optgroup label="已删除账号">${options(deletedJobOwners,true)}</optgroup>`:'');
+  const hasSelection=deletedIds.has(selected)||adminUsers.some(owner=>owner.id===selected);
+  select.value=hasSelection?selected:'';
+  if(select.value!==selected){
+    adminJobsPage=1;
+    if(adminOpen&&adminCurrentView==='jobs')void loadAdminJobs();
+  }
+}
+function filterAdminUsers(users){
+  const query=$('#admin-users-q').value.trim().toLowerCase();
+  const role=$('#admin-users-role').value,active=$('#admin-users-active').value;
+  return users.filter(user=>(
+    (!query||[user.username,user.displayName].some(value=>(value||'').toLowerCase().includes(query)))&&
+    (!role||user.role===role)&&
+    (!active||Boolean(user.isActive)===(active==='active'))
+  ));
 }
 function taskLimitLabel(value){
   if(value==null)return '继承全局';
   return value===0?'不限':`${value} 次/天`;
 }
 function renderAdminUsers(users){
+  closeAdminUserMenu();
   const root=$('#admin-users-list');
+  if(!users.length){
+    root.innerHTML='<p class="meta" role="status">没有匹配的用户。</p>';
+    return;
+  }
   const table=`<div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>用户名</th><th>显示名</th><th>角色</th><th>状态</th><th>最近登录</th><th>创建时间</th><th>每日额度</th><th>操作</th></tr></thead><tbody>`+users.map(u=>`<tr data-id="${esc(u.id)}">
     <td class="nowrap">${esc(u.username)}</td>
     <td>${esc(u.displayName)}</td>
@@ -1272,12 +1367,7 @@ function renderAdminUsers(users){
     <td class="nowrap">${u.lastLoginAt?fmtDate(u.lastLoginAt):'-'}</td>
     <td class="nowrap">${fmtDate(u.createdAt)}</td>
     <td class="nowrap">${esc(taskLimitLabel(u.dailyTaskLimitOverride))}</td>
-    <td class="admin-ops nowrap"><div class="admin-ops-row">
-      <button type="button" data-op="${u.isActive?'disable':'enable'}">${u.isActive?'禁用':'启用'}</button>
-      <button type="button" data-op="password">重置密码</button>
-      <button type="button" data-op="sessions">会话</button>
-      <button type="button" data-op="daily-task-limit" aria-haspopup="dialog">设置额度</button>
-    </div></td>
+    <td class="admin-ops nowrap"><div class="admin-ops-row">${adminUserOps(u)}</div></td>
   </tr>`).join('')+`</tbody></table></div>`;
   const cards=`<div class="admin-card-list">${users.map(u=>`<article class="admin-card" data-id="${esc(u.id)}">
     <div class="admin-card-head"><strong>${esc(u.displayName||u.username)}</strong><span class="badge ${u.isActive?'badge-success':'badge-danger'}">${u.isActive?'正常':'已禁用'}</span></div>
@@ -1288,28 +1378,141 @@ function renderAdminUsers(users){
       <span>创建：${fmtDate(u.createdAt)}</span>
       <span>每日额度：${esc(taskLimitLabel(u.dailyTaskLimitOverride))}</span>
     </div>
-    <div class="admin-card-actions">
-      <button type="button" data-op="${u.isActive?'disable':'enable'}">${u.isActive?'禁用':'启用'}</button>
-      <button type="button" data-op="password">重置密码</button>
-      <button type="button" data-op="sessions">会话</button>
-      <button type="button" data-op="daily-task-limit" aria-haspopup="dialog">设置额度</button>
-    </div>
+    <div class="admin-card-actions">${adminUserOps(u)}</div>
   </article>`).join('')}</div>`;
   root.innerHTML=table+cards;
+}
+function adminUserOps(user){
+  return `
+      <button type="button" data-op="view-user-jobs">查看任务</button>
+      <button type="button" data-op="sessions">会话</button>
+      <button type="button" data-op="daily-task-limit" aria-haspopup="dialog">设置额度</button>
+      <button type="button" data-op="more-user" aria-haspopup="menu" aria-expanded="false" aria-controls="admin-user-menu" aria-label="更多操作 ${esc(user.username)}">更多</button>`;
 }
 $('#admin-view-users').addEventListener('click',e=>{
   const btn=e.target.closest('button[data-op]');
   if(!btn)return;
   const row=btn.closest('tr[data-id],.admin-card[data-id]');
   if(!row)return;
+  const user=adminUsers.find(item=>item.id===row.dataset.id);
+  if(!user)return;
   const op=btn.dataset.op;
-  if(op==='disable')return setUserActive(row.dataset.id,false);
-  if(op==='enable')return setUserActive(row.dataset.id,true);
-  if(op==='password')return resetUserPassword(row.dataset.id);
-  if(op==='daily-task-limit')return setUserDailyTaskLimit(row.dataset.id);
-  // 显示名优先从用户缓存取：移动端卡片布局没有 td，querySelector 会取到空串导致会话面板标题丢用户名。
-  if(op==='sessions'){const u=adminUsers.find(x=>x.id===row.dataset.id);return showUserSessions(row.dataset.id,u?.displayName||u?.username||'')}
+  if(op==='view-user-jobs')return viewAdminUserJobs(user.id);
+  if(op==='daily-task-limit')return setUserDailyTaskLimit(user.id);
+  if(op==='sessions')return showUserSessions(user.id,user.displayName||user.username);
+  if(op==='more-user')return toggleAdminUserMenu(user,btn);
 });
+function viewAdminUserJobs(id){
+  $('#admin-jobs-user').value=id;
+  $('#admin-jobs-q').value='';
+  $('#admin-jobs-status').value='';
+  adminJobsPage=1;
+  adminShowView('jobs');
+  $('#admin-jobs-q').focus();
+}
+
+let adminUserMenuAnchor=null;
+function closeAdminUserMenu(restoreFocus=false){
+  const anchor=adminUserMenuAnchor;
+  if(!anchor)return;
+  adminUserMenuAnchor=null;
+  const menu=$('#admin-user-menu');
+  menu.classList.add('hidden');
+  delete menu.dataset.userId;
+  menu.replaceChildren();
+  anchor.setAttribute('aria-expanded','false');
+  if(restoreFocus&&anchor.isConnected)anchor.focus();
+}
+function toggleAdminUserMenu(user,anchor){
+  if(!adminOpen||adminCurrentView!=='users'||session?.user?.role!=='admin')return;
+  if(anchor===adminUserMenuAnchor){closeAdminUserMenu(true);return}
+  closeAdminUserMenu();
+  adminUserMenuAnchor=anchor;
+  anchor.setAttribute('aria-expanded','true');
+  const menu=$('#admin-user-menu'),own=user.id===session.user.id;
+  menu.dataset.userId=user.id;
+  menu.innerHTML=`<button type="button" role="menuitem" tabindex="-1" data-user-menu-op="password">重置密码</button>
+    <button type="button" role="menuitem" tabindex="-1" data-user-menu-op="${user.isActive?'disable':'enable'}">${user.isActive?'禁用':'启用'}</button>
+    ${own?'':`<button type="button" role="menuitem" tabindex="-1" data-user-menu-op="delete-user" class="danger" aria-label="删除账号 ${esc(user.username)}">删除</button>`}`;
+  menu.classList.remove('hidden');
+  const rect=anchor.getBoundingClientRect(),{offsetWidth:width,offsetHeight:height}=menu;
+  menu.style.left=`${Math.max(8,Math.min(rect.right-width,innerWidth-width-8))}px`;
+  const top=rect.bottom+height+12<=innerHeight?rect.bottom+4:rect.top-height-4;
+  menu.style.top=`${Math.max(8,top)}px`;
+  menu.firstElementChild.focus({preventScroll:true});
+}
+$('#admin-user-menu').addEventListener('click',event=>{
+  const button=event.target.closest('button[data-user-menu-op]');
+  if(!adminUserMenuAnchor||!button)return;
+  const id=$('#admin-user-menu').dataset.userId,anchor=adminUserMenuAnchor;
+  closeAdminUserMenu(true);
+  const op=button.dataset.userMenuOp;
+  if(op==='password')return resetUserPassword(id);
+  if(op==='delete-user')return deleteAdminUser(id,anchor);
+  if(op==='disable'||op==='enable')return setUserActive(id,op==='enable');
+});
+$('#admin-user-menu').addEventListener('keydown',event=>{
+  if(event.key==='Escape'||event.key==='Tab'){
+    if(event.key==='Escape')event.preventDefault();
+    closeAdminUserMenu(true);
+    return;
+  }
+  const keys=['ArrowDown','ArrowUp','Home','End'];
+  if(!keys.includes(event.key))return;
+  event.preventDefault();
+  const items=[...event.currentTarget.querySelectorAll('button')];
+  const position=items.indexOf(document.activeElement);
+  const next={ArrowDown:(position+1)%items.length,ArrowUp:(position+items.length-1)%items.length,Home:0,End:items.length-1};
+  items[next[event.key]]?.focus();
+});
+document.addEventListener('click',event=>{
+  if(adminUserMenuAnchor&&!adminUserMenuAnchor.contains(event.target)&&!$('#admin-user-menu').contains(event.target))closeAdminUserMenu();
+});
+document.addEventListener('scroll',()=>closeAdminUserMenu(),true);
+window.addEventListener('resize',()=>closeAdminUserMenu());
+
+const pendingUserDeletions=new Set();
+async function deleteAdminUser(id,button){
+  const user=adminUsers.find(item=>item.id===id),epoch=sessionEpoch,key=`${epoch}:${id}`;
+  const current=()=>epoch===sessionEpoch&&session?.user?.role==='admin';
+  const viewingUsers=()=>adminOpen&&adminCurrentView==='users';
+  if(!current()||!viewingUsers()||!user||session.user.id===id||pendingUserDeletions.has(key))return;
+  pendingUserDeletions.add(key);
+  try{
+    const confirmed=await confirmDialog({
+      title:'删除用户',
+      message:`账号「${user.username}」的所有会话将立即下线，之后无法登录。历史任务会保留。`,
+      confirmText:'删除'
+    });
+    if(!confirmed||!current()||!viewingUsers()||!adminUsers.some(item=>item.id===id))return;
+    if(button){
+      button.disabled=true;
+      button.setAttribute('aria-busy','true');
+    }
+    await api(`/api/v1/admin/users/${encodeURIComponent(id)}`,{method:'DELETE'});
+    if(!current())return;
+    // 丢弃删除前发起的读取，随后用当前筛选重新加载。
+    adminUsersLoadId++;adminJobsLoadId++;adminJobsPending=null;
+    lastAdminJobsSig='';lastStatsSig='';adminStatsPending=null;
+    if($('#admin-user-sessions').dataset.userId===id)closeAdminUserSessions();
+    // 保留当前任务筛选，等待服务器确认该账号是否还有历史任务。
+    updateAdminUsers(adminUsers.filter(item=>item.id!==id));
+    if(adminOpen){
+      toast('用户已删除','success');
+      void loadAdminUsers();
+      if(adminCurrentView==='jobs')void loadAdminJobs();
+      if(adminCurrentView==='dashboard')void loadAdminStats();
+    }
+  }catch(err){
+    if(current()&&adminOpen)toast(err.message,'error');
+  }finally{
+    pendingUserDeletions.delete(key);
+    if(button?.isConnected){
+      button.disabled=false;
+      button.setAttribute('aria-busy','false');
+    }
+  }
+}
 async function setUserActive(id,active){
   if(!active&&!(await confirmDialog({title:'禁用用户',message:'禁用后该用户的所有会话会立即下线且无法登录，确定？',confirmText:'禁用'})))return;
   try{
@@ -1352,29 +1555,49 @@ async function setUserDailyTaskLimit(id){
     pendingUserTaskLimits.delete(key);
   }
 }
+let adminUserSessionsPanelId=0,adminUserSessionsRequestId=0;
+function closeAdminUserSessions(){
+  adminUserSessionsPanelId++;
+  const host=$('#admin-user-sessions');
+  delete host.dataset.userId;
+  delete host.dataset.userName;
+  host.classList.add('hidden');
+  host.replaceChildren();
+}
 async function showUserSessions(id,username){
   const host=$('#admin-user-sessions');
+  adminUserSessionsPanelId++;
   host.dataset.userId=id;host.dataset.userName=username||'';
   host.classList.remove('hidden');
+  return loadAdminUserSessions();
+}
+async function loadAdminUserSessions(){
+  const host=$('#admin-user-sessions');
+  const {userId:id,userName:username}=host.dataset;
+  const panelId=adminUserSessionsPanelId,requestId=++adminUserSessionsRequestId,epoch=sessionEpoch;
+  const current=()=>panelId===adminUserSessionsPanelId&&requestId===adminUserSessionsRequestId&&epoch===sessionEpoch;
   host.innerHTML='<p class="meta">加载会话…</p>';
   try{
     const data=await api(`/api/v1/admin/users/${encodeURIComponent(id)}/sessions`);
+    if(!current())return;
     const sessions=data.sessions||[];
     host.innerHTML=`<div class="admin-head"><div><h3>${esc(username||'用户')} 的会话</h3></div><button type="button" class="ghost" data-close-sessions>收起</button></div>`+
       (sessions.length?sessions.map(s=>`<div class="admin-session"><span>${esc(s.device.name||s.device.platform)}</span><span class="meta">${fmtDate(s.lastUsedAt)} 活跃</span>${s.current?'<span class="badge badge-success">当前</span>':''}<button type="button" class="danger" data-session="${esc(s.id)}">下线</button></div>`).join(''):'<p class="meta">该用户当前没有活跃会话</p>');
-  }catch(err){toast(err.message,'error')}
+  }catch(err){if(current())toast(err.message,'error')}
 }
 $('#admin-user-sessions').addEventListener('click',async e=>{
   const close=e.target.closest('[data-close-sessions]');
-  if(close){$('#admin-user-sessions').classList.add('hidden');$('#admin-user-sessions').innerHTML='';return}
+  if(close){closeAdminUserSessions();return}
   const btn=e.target.closest('button[data-session]');
   if(!btn)return;
   const host=$('#admin-user-sessions');
+  const {userId}=host.dataset,panelId=adminUserSessionsPanelId,epoch=sessionEpoch;
+  const current=()=>panelId===adminUserSessionsPanelId&&epoch===sessionEpoch;
   try{
     await api(`/api/v1/admin/sessions/${encodeURIComponent(btn.dataset.session)}`,{method:'DELETE'});
-    toast('会话已下线','success');
-    showUserSessions(host.dataset.userId,host.dataset.userName);
-  }catch(err){toast(err.message,'error')}
+    if(current())toast('会话已下线','success');
+    if(epoch===sessionEpoch&&host.dataset.userId===userId)void loadAdminUserSessions();
+  }catch(err){if(current())toast(err.message,'error')}
 });
 
 /* ---------- 渲染 ---------- */
@@ -1615,13 +1838,14 @@ $('#admin-console').addEventListener('click',handleContentClick);
 
 /* ---------- 自定义确认弹窗 ---------- */
 let dismissActionDialog=null;
-function openActionDialog({title,message,confirmText,danger,fields,initialFocus,collect,cancelValue=null}){
+function openActionDialog({title,message,confirmText,danger,fields,initialFocus,collect,submit,cancelValue=null}){
   dismissActionDialog?.();
   return new Promise(resolve=>{
     const modal=$('#confirm-modal'),ok=$('#confirm-ok'),cancel=$('#confirm-cancel');
     const messageNode=$('#confirm-message'),fieldsNode=$('#confirm-fields'),iconNode=$('#confirm-icon');
     const opener=document.activeElement;
     const closeButtons=modal.querySelectorAll('[data-close]');
+    const closeButton=modal.querySelector('.modal-close');
     modal.classList.toggle('confirm-simple',!fields);
     $('#confirm-title').textContent=title||'确认操作';
     messageNode.textContent=message||'';
@@ -1632,8 +1856,16 @@ function openActionDialog({title,message,confirmText,danger,fields,initialFocus,
     iconNode.classList.toggle('confirm-icon-warning',!!danger);
     ok.textContent=confirmText||'确认';
     ok.className=danger?'btn-danger':'btn-primary';
+    let pending=false;
+    const updatePending=value=>{
+      pending=value;
+      ok.disabled=cancel.disabled=closeButton.disabled=value;
+      modal.setAttribute('aria-busy',String(value));
+    };
     const close=value=>{
+      if(dismissActionDialog!==dismiss)return;
       dismissActionDialog=null;
+      updatePending(false);
       modal.classList.add('hidden');
       document.body.classList.remove('modal-open');
       fieldsNode.replaceChildren();
@@ -1642,27 +1874,42 @@ function openActionDialog({title,message,confirmText,danger,fields,initialFocus,
       if(opener?.isConnected)opener.focus({preventScroll:true});
       resolve(value);
     };
-    dismissActionDialog=()=>close(cancelValue);
-    ok.onclick=()=>{
+    const dismiss=()=>close(cancelValue);
+    dismissActionDialog=dismiss;
+    ok.onclick=async()=>{
+      if(pending)return;
       const value=collect();
-      if(value!==undefined)close(value);
+      if(value===undefined)return;
+      if(!submit){close(value);return}
+      updatePending(true);
+      modal.focus();
+      try{if(await submit(value))close(value)}
+      finally{
+        if(dismissActionDialog===dismiss){
+          updatePending(false);
+          (initialFocus||ok).focus();
+        }
+      }
     };
-    cancel.onclick=dismissActionDialog;
-    closeButtons.forEach(button=>button.onclick=dismissActionDialog);
+    const cancelIfIdle=()=>{if(!pending)dismiss()};
+    cancel.onclick=cancelIfIdle;
+    closeButtons.forEach(button=>button.onclick=cancelIfIdle);
     modal.onkeydown=e=>{
       if(e.isComposing)return;
       if(e.key==='Escape'){
-        e.preventDefault();e.stopPropagation();dismissActionDialog();
+        e.preventDefault();e.stopPropagation();cancelIfIdle();
       }else if(e.key==='Enter'&&e.target.tagName==='INPUT'){
         e.preventDefault();ok.click();
       }else if(e.key==='Tab'){
-        const controls=modal.querySelectorAll('button:not(:disabled),input:not(:disabled)');
+        if(pending){e.preventDefault();return}
+        const controls=modal.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled)');
         const first=controls[0],last=controls[controls.length-1];
         if(e.shiftKey?document.activeElement===first:document.activeElement===last){
           e.preventDefault();(e.shiftKey?last:first).focus();
         }
       }
     };
+    modal.tabIndex=-1;
     modal.classList.remove('hidden');document.body.classList.add('modal-open');
     (initialFocus||cancel).focus();
   });

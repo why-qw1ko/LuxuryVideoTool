@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -368,7 +370,16 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 			}
 			items = append(items, entry)
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"users": items, "requestId": RequestID(r.Context())})
+		response := map[string]any{"users": items, "requestId": RequestID(r.Context())}
+		if deps.Jobs != nil && r.URL.Query().Get("includeDeletedJobOwners") == "1" {
+			owners, err := deps.Jobs.ListDeletedJobOwners(r.Context())
+			if err != nil {
+				writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务所属用户", true)
+				return
+			}
+			response["deletedJobOwners"] = owners
+		}
+		writeJSON(w, http.StatusOK, response)
 	})
 	protected.HandleFunc("POST /api/v1/admin/users", func(w http.ResponseWriter, r *http.Request) {
 		principal, _ := Principal(r.Context())
@@ -430,6 +441,43 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 		recordAudit(deps.Audit, r, principal.UserID, "admin.user.reset_password", targetID, nil)
 		writeJSON(w, http.StatusOK, map[string]any{"requestId": RequestID(r.Context())})
 	})
+	protected.HandleFunc("DELETE /api/v1/admin/users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		principal, _ := Principal(r.Context())
+		if !adminAllowed(principal, w, r) {
+			return
+		}
+		targetID := r.PathValue("id")
+		if targetID == principal.UserID {
+			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "不能删除当前登录的管理员账号", false)
+			return
+		}
+		var writeAudit auth.UserDeletionAudit
+		if deps.Audit != nil {
+			event := audit.Event{
+				ActorUserID: principal.UserID, Action: "admin.user.delete", TargetType: "user", TargetID: targetID,
+				RequestID: RequestID(r.Context()), IP: remoteIP(r.RemoteAddr),
+			}
+			writeAudit = func(ctx context.Context, tx *sql.Tx) error {
+				err := deps.Audit.RecordInTransaction(ctx, tx, event)
+				if err != nil {
+					slog.ErrorContext(ctx, "admin audit failed", "request_id", event.RequestID, "action", event.Action)
+				}
+				return err
+			}
+		}
+		if err := deps.Auth.DeleteUser(r.Context(), targetID, writeAudit); err != nil {
+			switch {
+			case errors.Is(err, auth.ErrNotFound):
+				writeError(w, r, http.StatusNotFound, "USER_NOT_FOUND", "用户不存在", false)
+			case errors.Is(err, auth.ErrLastActiveAdmin):
+				writeError(w, r, http.StatusConflict, "LAST_ACTIVE_ADMIN", "至少需要保留一个可用的管理员账号", false)
+			default:
+				writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "删除用户失败", true)
+			}
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"requestId": RequestID(r.Context())})
+	})
 	protected.HandleFunc("PATCH /api/v1/admin/users/{id}/active", func(w http.ResponseWriter, r *http.Request) {
 		principal, _ := Principal(r.Context())
 		if !adminAllowed(principal, w, r) {
@@ -448,6 +496,9 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 		}
 		if err := deps.Auth.SetUserActive(r.Context(), targetID, input.Active); errors.Is(err, auth.ErrNotFound) {
 			writeError(w, r, http.StatusNotFound, "USER_NOT_FOUND", "用户不存在", false)
+			return
+		} else if errors.Is(err, auth.ErrLastActiveAdmin) {
+			writeError(w, r, http.StatusConflict, "LAST_ACTIVE_ADMIN", "至少需要保留一个可用的管理员账号", false)
 			return
 		} else if err != nil {
 			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "更新用户状态失败", true)
@@ -1021,6 +1072,7 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 		mux.Handle("GET /api/v1/admin/users", requireAuth(deps.Auth, protected))
 		mux.Handle("POST /api/v1/admin/users", requireAuth(deps.Auth, protected))
 		mux.Handle("POST /api/v1/admin/users/{id}/password", requireAuth(deps.Auth, protected))
+		mux.Handle("DELETE /api/v1/admin/users/{id}", requireAuth(deps.Auth, protected))
 		mux.Handle("PATCH /api/v1/admin/users/{id}/active", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/admin/users/{id}/sessions", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/admin/jobs", requireAuth(deps.Auth, protected))

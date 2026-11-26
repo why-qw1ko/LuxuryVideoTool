@@ -36,7 +36,7 @@ func insertUser(ctx context.Context, db execer, user User) error {
 }
 
 func (r *SQLiteRepository) UpdatePassword(ctx context.Context, userID, passwordHash string, now time.Time) error {
-	result, err := r.db.ExecContext(ctx, "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ? AND is_cdk = 0", passwordHash, millis(now), userID)
+	result, err := r.db.ExecContext(ctx, "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ? AND is_cdk = 0 AND deleted_at IS NULL", passwordHash, millis(now), userID)
 	if err != nil {
 		return fmt.Errorf("update password: %w", err)
 	}
@@ -44,17 +44,61 @@ func (r *SQLiteRepository) UpdatePassword(ctx context.Context, userID, passwordH
 }
 
 func (r *SQLiteRepository) SetUserActive(ctx context.Context, userID string, active bool, now time.Time) error {
-	result, err := r.db.ExecContext(ctx, "UPDATE users SET is_active = ?, updated_at = ? WHERE id = ? AND is_cdk = 0", boolInt(active), millis(now), userID)
+	return r.updateUserAccess(ctx, userID, active, now, sql.NullInt64{}, nil)
+}
+
+func (r *SQLiteRepository) DeleteUser(ctx context.Context, userID string, now time.Time, writeAudit UserDeletionAudit) error {
+	return r.updateUserAccess(ctx, userID, false, now, sql.NullInt64{Int64: millis(now), Valid: true}, writeAudit)
+}
+
+func (r *SQLiteRepository) updateUserAccess(ctx context.Context, userID string, active bool, now time.Time, deletedAt sql.NullInt64, writeAudit UserDeletionAudit) error {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("set user active: %w", err)
+		return fmt.Errorf("begin user access update: %w", err)
 	}
-	return requireChanged(result)
+	defer tx.Rollback()
+
+	// Enforce the last-admin check in the write shared by deletion and deactivation.
+	result, err := tx.ExecContext(ctx, `UPDATE users SET is_active = ?, updated_at = ?, deleted_at = ?
+		WHERE id = ? AND is_cdk = 0 AND deleted_at IS NULL
+		AND (? = 1 OR is_active = 0 OR role <> 'admin' OR EXISTS (
+			SELECT 1 FROM users other WHERE other.id <> users.id AND other.role = 'admin'
+				AND other.is_active = 1 AND other.is_cdk = 0 AND other.deleted_at IS NULL
+		))`, boolInt(active), millis(now), deletedAt, userID, boolInt(active))
+	if err != nil {
+		return fmt.Errorf("update user access: %w", err)
+	}
+	if err := requireChanged(result); errors.Is(err, ErrNotFound) {
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
+			SELECT 1 FROM users WHERE id = ? AND is_cdk = 0 AND deleted_at IS NULL
+		)`, userID).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			return ErrLastActiveAdmin
+		}
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	if !active {
+		if err := revokeAllUserSessions(ctx, tx, userID, now); err != nil {
+			return err
+		}
+	}
+	if writeAudit != nil {
+		if err := writeAudit(ctx, tx); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (r *SQLiteRepository) ListUsers(ctx context.Context) ([]User, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id, username_normalized, display_name, password_hash,
 		role, is_active, is_cdk, created_at, updated_at, last_login_at FROM users
-		WHERE is_cdk = 0 ORDER BY created_at ASC, username_normalized ASC`)
+		WHERE is_cdk = 0 AND deleted_at IS NULL ORDER BY created_at ASC, username_normalized ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
@@ -116,7 +160,7 @@ func (r *SQLiteRepository) FindSessionByID(ctx context.Context, userID, sessionI
 }
 
 func (r *SQLiteRepository) RecordLogin(ctx context.Context, userID string, now time.Time) error {
-	result, err := r.db.ExecContext(ctx, "UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?", millis(now), millis(now), userID)
+	result, err := r.db.ExecContext(ctx, "UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ? AND is_active = 1", millis(now), millis(now), userID)
 	if err != nil {
 		return fmt.Errorf("record login: %w", err)
 	}
@@ -128,16 +172,20 @@ func (r *SQLiteRepository) CreateSession(ctx context.Context, session Session) e
 }
 
 func insertSession(ctx context.Context, db execer, session Session) error {
-	_, err := db.ExecContext(ctx, `INSERT INTO refresh_tokens(
+	result, err := db.ExecContext(ctx, `INSERT INTO refresh_tokens(
 		id, user_id, token_hash, device_id, device_name, platform, app_version,
 		expires_at, created_at, last_used_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, session.ID, session.UserID, session.TokenHash,
+	) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM users WHERE id = ? AND is_active = 1`, session.ID, session.UserID, session.TokenHash,
 		session.Device.ID, session.Device.Name, session.Device.Platform, session.Device.AppVersion,
-		millis(session.ExpiresAt), millis(session.CreatedAt), millis(session.LastUsedAt))
+		millis(session.ExpiresAt), millis(session.CreatedAt), millis(session.LastUsedAt), session.UserID)
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
-	return nil
+	err = requireChanged(result)
+	if errors.Is(err, ErrNotFound) {
+		return ErrInactiveUser
+	}
+	return err
 }
 
 func (r *SQLiteRepository) FindSessionByTokenHash(ctx context.Context, tokenHash string) (Session, User, error) {
@@ -241,7 +289,11 @@ func (r *SQLiteRepository) RevokeSession(ctx context.Context, userID, sessionID 
 }
 
 func (r *SQLiteRepository) RevokeAllUserSessions(ctx context.Context, userID string, now time.Time) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE refresh_tokens SET revoked_at = ?, last_used_at = ?
+	return revokeAllUserSessions(ctx, r.db, userID, now)
+}
+
+func revokeAllUserSessions(ctx context.Context, db execer, userID string, now time.Time) error {
+	_, err := db.ExecContext(ctx, `UPDATE refresh_tokens SET revoked_at = ?, last_used_at = ?
 		WHERE user_id = ? AND revoked_at IS NULL`, millis(now), millis(now), userID)
 	if err != nil {
 		return fmt.Errorf("revoke user sessions: %w", err)

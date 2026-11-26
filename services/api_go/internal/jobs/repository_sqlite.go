@@ -60,6 +60,30 @@ func (r *SQLiteRepository) FindAnyByID(ctx context.Context, jobID string) (Job, 
 	return job, nil
 }
 
+func (r *SQLiteRepository) ListDeletedJobOwners(ctx context.Context) ([]DeletedJobOwner, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT u.id, u.username_normalized, u.display_name
+		FROM users u
+		WHERE u.deleted_at IS NOT NULL AND EXISTS (SELECT 1 FROM jobs j WHERE j.user_id = u.id)
+		ORDER BY u.username_normalized ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list deleted job owners: %w", err)
+	}
+	defer rows.Close()
+
+	owners := make([]DeletedJobOwner, 0)
+	for rows.Next() {
+		var owner DeletedJobOwner
+		if err := rows.Scan(&owner.ID, &owner.Username, &owner.DisplayName); err != nil {
+			return nil, fmt.Errorf("scan deleted job owner: %w", err)
+		}
+		owners = append(owners, owner)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list deleted job owners: %w", err)
+	}
+	return owners, nil
+}
+
 const jobListFrom = ` FROM jobs j LEFT JOIN works w ON w.id = j.work_id`
 
 func jobListFilter(input ListInput, withOwner bool) (string, []any) {

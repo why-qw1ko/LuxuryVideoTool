@@ -3,12 +3,13 @@ package httpapi
 import "net/http"
 
 type apiOperation struct {
-	Method  string `json:"method"`
-	Path    string `json:"path"`
-	Group   string `json:"group"`
-	Summary string `json:"summary"`
-	Auth    string `json:"auth"`
-	Details string `json:"details,omitempty"`
+	Method      string `json:"method"`
+	Path        string `json:"path"`
+	Group       string `json:"group"`
+	Summary     string `json:"summary"`
+	Auth        string `json:"auth"`
+	Details     string `json:"details,omitempty"`
+	CurlExample string `json:"curlExample,omitempty"`
 }
 
 const (
@@ -17,6 +18,11 @@ const (
 	apiAuthAdmin   = "admin"
 	apiAuthRefresh = "refresh"
 	apiAuthSigned  = "signed"
+
+	curlCreateJob   = "create-job"
+	curlRequest     = "request"
+	curlDownloadZIP = "download-zip"
+	curlSignedZIP   = "signed-zip"
 
 	groupHealth     = "健康检查"
 	groupAuth       = "登录与会话"
@@ -52,13 +58,14 @@ var apiCatalog = []apiOperation{
 		Summary: "修改当前账号密码", Details: "请求体包含 currentPassword 和 newPassword。成功后下线其他会话。"},
 
 	{Method: http.MethodPost, Path: "/api/v1/jobs", Group: groupJobs, Auth: apiAuthBearer,
-		Summary: "创建任务", Details: "请求头须带 Idempotency-Key。请求体包含 shareText 和 action，可传 options。"},
+		Summary: "创建任务", Details: "请求头须带 Idempotency-Key。每个新的任务请求使用不同的键。请求体包含 shareText 和 action，可传 options。",
+		CurlExample: curlCreateJob},
 	{Method: http.MethodGet, Path: "/api/v1/jobs", Group: groupJobs, Auth: apiAuthBearer,
 		Summary: "查看自己的任务列表", Details: "支持 q、status、action、limit、offset 和 view=summary。"},
 	{Method: http.MethodGet, Path: "/api/v1/jobs/usage", Group: groupJobs, Auth: apiAuthBearer,
 		Summary: "查看任务配额和创建权限", Details: "返回每日配额和可用任务类型。CDK 会话还返回累计额度。"},
 	{Method: http.MethodGet, Path: "/api/v1/jobs/{id}", Group: groupJobs, Auth: apiAuthBearer,
-		Summary: "查看自己的任务详情", Details: "id 为任务 ID。"},
+		Summary: "查看自己的任务详情", Details: "id 为创建任务时返回的 job.id。", CurlExample: curlRequest},
 	{Method: http.MethodPost, Path: "/api/v1/jobs/{id}/cancel", Group: groupJobs, Auth: apiAuthBearer,
 		Summary: "取消自己的任务", Details: "id 为任务 ID。"},
 	{Method: http.MethodPost, Path: "/api/v1/jobs/{id}/retry", Group: groupJobs, Auth: apiAuthBearer,
@@ -66,9 +73,9 @@ var apiCatalog = []apiOperation{
 	{Method: http.MethodDelete, Path: "/api/v1/jobs/{id}", Group: groupJobs, Auth: apiAuthBearer,
 		Summary: "删除自己的任务", Details: "id 为任务 ID。进行中的任务须先取消。"},
 	{Method: http.MethodGet, Path: "/api/v1/jobs/{id}/images/archive", Group: groupJobs, Auth: apiAuthBearer,
-		Summary: "直接下载图文 ZIP", Details: "id 为任务 ID。用于兼容已有客户端。"},
+		Summary: "直接下载图文 ZIP", Details: "id 为任务 ID。用于兼容已有客户端。", CurlExample: curlDownloadZIP},
 	{Method: http.MethodPost, Path: "/api/v1/jobs/{id}/images/archive-download", Group: groupJobs, Auth: apiAuthBearer,
-		Summary: "获取图文 ZIP 下载链接", Details: "id 为任务 ID。签名链接有效期为 5 分钟。"},
+		Summary: "获取图文 ZIP 下载链接", Details: "id 为任务 ID。返回的 downloadUrl 有效期为 5 分钟。", CurlExample: curlRequest},
 	{Method: http.MethodGet, Path: "/api/v1/files/{id}", Group: groupJobs, Auth: apiAuthBearer,
 		Summary: "下载自己的任务文件", Details: "id 为文件 ID。支持 Range。"},
 
@@ -79,7 +86,7 @@ var apiCatalog = []apiOperation{
 	{Method: http.MethodGet, Path: "/api/v1/job-cover/{id}", Group: groupSigned, Auth: apiAuthSigned,
 		Summary: "获取任务封面", Details: "id 为任务 ID。使用封面链接中的 expires 和 signature。"},
 	{Method: http.MethodGet, Path: "/api/v1/archive-download/{id}", Group: groupSigned, Auth: apiAuthSigned,
-		Summary: "下载已签名的图文 ZIP", Details: "id 为任务 ID。使用下载链接中的 user、expires 和 signature。"},
+		Summary: "下载已签名的图文 ZIP", Details: "将服务基址和签发接口返回的 downloadUrl 拼成完整链接，填入 DOWNLOAD_URL。", CurlExample: curlSignedZIP},
 	{Method: http.MethodGet, Path: "/api/v1/asr-source/{id}", Group: groupSigned, Auth: apiAuthSigned,
 		Summary: "获取转写服务所需的音频", Details: "使用音频链接中的 expires 和 signature。"},
 
@@ -92,6 +99,8 @@ var apiCatalog = []apiOperation{
 		Summary: "查看用户列表", Details: "返回常规账号及其每日额度配置。"},
 	{Method: http.MethodPost, Path: "/api/v1/admin/users", Group: groupAdminUsers, Auth: apiAuthAdmin,
 		Summary: "创建账号", Details: "请求体包含 username、displayName、password 和 role。"},
+	{Method: http.MethodDelete, Path: "/api/v1/admin/users/{id}", Group: groupAdminUsers, Auth: apiAuthAdmin,
+		Summary: "删除用户账号", Details: "id 为用户 ID。撤销账号会话，保留历史任务。当前登录的管理员和最后一个可用管理员不能删除。"},
 	{Method: http.MethodPost, Path: "/api/v1/admin/users/{id}/password", Group: groupAdminUsers, Auth: apiAuthAdmin,
 		Summary: "重置用户密码", Details: "id 为用户 ID。请求体包含 password，重置后下线该用户的会话。"},
 	{Method: http.MethodPatch, Path: "/api/v1/admin/users/{id}/active", Group: groupAdminUsers, Auth: apiAuthAdmin,
@@ -129,7 +138,7 @@ var apiCatalog = []apiOperation{
 	{Method: http.MethodDelete, Path: "/api/v1/admin/jobs/{id}", Group: groupAdminJobs, Auth: apiAuthAdmin,
 		Summary: "删除任意用户的任务", Details: "id 为任务 ID。进行中的任务须先取消。"},
 	{Method: http.MethodPost, Path: "/api/v1/admin/jobs/{id}/images/archive-download", Group: groupAdminJobs, Auth: apiAuthAdmin,
-		Summary: "获取任意用户的图文 ZIP 下载链接", Details: "id 为任务 ID。签名链接有效期为 5 分钟。"},
+		Summary: "获取任意用户的图文 ZIP 下载链接", Details: "id 为任务 ID。返回的 downloadUrl 有效期为 5 分钟。", CurlExample: curlRequest},
 	{Method: http.MethodGet, Path: "/api/v1/admin/files/{id}", Group: groupAdminJobs, Auth: apiAuthAdmin,
 		Summary: "下载任意用户的任务文件", Details: "id 为文件 ID。支持 Range。"},
 

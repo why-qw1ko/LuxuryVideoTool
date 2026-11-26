@@ -29,11 +29,23 @@ type Event struct {
 	Metadata    map[string]any
 }
 
+type execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
 func New(db *sql.DB, key []byte) *Recorder {
 	return &Recorder{db: db, key: append([]byte(nil), key...), now: time.Now}
 }
 
 func (r *Recorder) Record(ctx context.Context, event Event) error {
+	return r.record(ctx, r.db, event)
+}
+
+func (r *Recorder) RecordInTransaction(ctx context.Context, tx *sql.Tx, event Event) error {
+	return r.record(ctx, tx, event)
+}
+
+func (r *Recorder) record(ctx context.Context, db execer, event Event) error {
 	id, err := auth.NewID(r.now())
 	if err != nil {
 		return err
@@ -49,7 +61,7 @@ func (r *Recorder) Record(ctx context.Context, event Event) error {
 	if event.TargetID != "" {
 		target = event.TargetID
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO audit_logs(
+	_, err = db.ExecContext(ctx, `INSERT INTO audit_logs(
 		id, actor_user_id, action, target_type, target_id, request_id, ip_hash, metadata_json, created_at
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, actor, event.Action, event.TargetType, target,
 		event.RequestID, r.hashIP(event.IP), string(metadata), r.now().UTC().UnixMilli())
