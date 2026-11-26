@@ -12,20 +12,21 @@ import (
 var ErrCDKTaskLimit = errors.New("CDK task limit reached")
 
 func countCDKTask(ctx context.Context, tx *sql.Tx, userID string) error {
-	var used, limit int
-	var revoked sql.NullInt64
-	err := tx.QueryRowContext(ctx, "SELECT task_count, task_limit, revoked_at FROM login_cdks WHERE user_id = ?", userID).
-		Scan(&used, &limit, &revoked)
+	var used, limit, revoked sql.NullInt64
+	err := tx.QueryRowContext(ctx, `SELECT c.task_count, c.task_limit, c.revoked_at
+		FROM users u LEFT JOIN login_cdks c ON c.user_id = u.id
+		WHERE u.id = ? AND u.is_cdk = 1`, userID).Scan(&used, &limit, &revoked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("read CDK task usage: %w", err)
 	}
-	if revoked.Valid {
+	// A removed CDK record must still reject requests authenticated before revocation.
+	if !used.Valid || revoked.Valid {
 		return auth.ErrRevokedSession
 	}
-	if used >= limit {
+	if used.Int64 >= limit.Int64 {
 		return ErrCDKTaskLimit
 	}
 	if _, err := tx.ExecContext(ctx, "UPDATE login_cdks SET task_count = task_count + 1 WHERE user_id = ?", userID); err != nil {

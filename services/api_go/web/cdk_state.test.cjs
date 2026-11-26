@@ -17,7 +17,7 @@ function harness() {
   const firstCopy = {focus() { this.focused = true; }};
   let clipboardField;
   const row = {dataset: {cdkId: card.id}};
-  const buttons = Object.fromEntries(['quota', 'reset', 'rotate', 'revoke'].map(action => [action, {
+  const buttons = Object.fromEntries(['quota', 'reset', 'rotate', 'revoke', 'delete'].map(action => [action, {
     dataset: {cdkAction: action},
     isConnected: true,
     closest(selector) { return selector === '[data-cdk-id]' ? row : this; },
@@ -61,9 +61,10 @@ function harness() {
     confirmed: true,
     async api(url, options) {
       requests.push({url, method: options.method || 'GET'});
-      if (options.method === 'POST') return context.mutation;
-      return {items: [card], total: 1};
+      if (options.method === 'POST' || options.method === 'DELETE') return context.mutation;
+      return context.readList(url);
     },
+    readList: () => ({items: [card], total: 1}),
     mutation: {item: {...card, taskCount: 0}},
   });
   vm.runInContext(clipboardCode + source, context);
@@ -71,7 +72,7 @@ function harness() {
   const list = node('#admin-cdk-list');
   const codes = node('#admin-cdk-codes');
   return {
-    context, requests, confirmations, copied, notices, buttons, codes, firstCopy,
+    context, requests, confirmations, copied, notices, buttons, list, codes, firstCopy,
     click(action) { return list.listeners.click({target: buttons[action]}); },
     generate() { return node('#admin-cdk-form').listeners.submit({preventDefault() {}}); },
     copy(index) {
@@ -166,4 +167,32 @@ test('Clipboard API 不可用时仍通过复制按钮写入剪贴板，失败时
   await h.copy(0);
   assert.equal(h.clipboardField, undefined);
   assert.equal(h.notices.at(-1).type, 'error');
+});
+
+test('仅已吊销记录可确认删除，删除末页最后一项后回到上一页', async () => {
+  const h = harness();
+  await h.context.loadAdminCDKs();
+  assert.doesNotMatch(h.list.innerHTML, /data-cdk-action="delete"/);
+  await h.click('delete');
+  assert.equal(h.requests.length, 1);
+
+  h.context.readList = () => ({items: [{...card, status: 'revoked'}], total: 26});
+  await h.context.loadAdminCDKs(2);
+  assert.match(h.list.innerHTML, /data-cdk-action="delete"/);
+  assert.doesNotMatch(h.list.innerHTML, /data-cdk-action="revoke"/);
+  h.context.confirmed = false;
+  await h.click('delete');
+  assert.equal(h.confirmations[0].title, '删除密钥记录');
+  assert.equal(h.requests.length, 2);
+
+  h.context.confirmed = true;
+  h.context.mutation = {};
+  h.context.readList = url => ({items: url.endsWith('offset=0') ? [card] : [], total: 25});
+  await h.click('delete');
+  await new Promise(setImmediate);
+  assert.deepEqual(h.requests.slice(2), [
+    {url: '/api/v1/admin/cdks/card%2Fid/record', method: 'DELETE'},
+    {url: '/api/v1/admin/cdks?limit=25&offset=25', method: 'GET'},
+    {url: '/api/v1/admin/cdks?limit=25&offset=0', method: 'GET'},
+  ]);
 });

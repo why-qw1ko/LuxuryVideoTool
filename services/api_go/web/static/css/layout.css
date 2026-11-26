@@ -9,6 +9,9 @@
 .brand p{margin:0;font-size:11px;color:var(--text-tertiary);white-space:nowrap}
 .header-actions{margin-left:auto;display:flex;gap:8px;align-items:center}
 .header-actions .ghost{border-color:transparent;font-weight:400;color:var(--text-secondary);white-space:nowrap}
+.header-actions .workspace-nav-btn{min-height:36px;padding:6px 12px;gap:6px;background:var(--primary-light);color:var(--primary);font-size:13px;font-weight:500}
+.header-actions .workspace-nav-btn:hover:not(:disabled){border-color:var(--border-focus);background:var(--primary-light);color:var(--primary)}
+.workspace-nav-btn svg{flex-shrink:0}
 .header-actions .icon-btn{width:36px;height:36px;min-height:36px}
 .header-actions #logout{border-left:1px solid var(--border);border-radius:0;padding-left:16px}
 /* 工作台 */
@@ -60,12 +63,12 @@
 #capture-form>label{margin-bottom:10px;font-weight:500}
 #share-text{min-height:200px;padding:12px;background:var(--card);resize:vertical;font-size:14px;font-weight:400}
 .field-hint{margin:8px 0 24px;font-size:12px;color:var(--text-tertiary)}
-.capture-options{display:flex;flex-direction:column;gap:16px}
-.capture-option{align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:400}
-.capture-option input{margin:0;flex-shrink:0}
-.capture-option>span{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px}
-.capture-option small{font-size:12px;font-weight:400;color:var(--text-tertiary)}
-#capture-asr-provider-wrap{width:min(100%,320px)}
+.capture-options{display:grid;width:min(100%,480px)}
+.capture-option{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:48px;padding:8px 0;cursor:pointer;font-size:14px;line-height:20px}
+.capture-option:not(.hidden)+.capture-option{border-top:1px solid var(--border)}
+.capture-option:has(input:disabled){cursor:not-allowed}
+.capture-option small{display:block;margin-top:4px;font-size:12px;font-weight:400;line-height:16px;color:var(--text-secondary)}
+#capture-asr-provider-wrap{width:min(100%,320px);margin-top:12px}
 #capture-asr-status{margin:8px 0 0}
 .capture-footer{display:flex;align-items:center;gap:16px;margin-top:28px;padding-top:24px;border-top:1px solid var(--border)}
 .capture-footer>span{font-size:12px;color:var(--text-tertiary)}
@@ -85,6 +88,7 @@
 .connection-settings summary{font-size:12px;color:var(--text-secondary);cursor:pointer;width:fit-content}
 .connection-settings[open] summary{margin-bottom:16px}
 .connection-settings .api-form{grid-template-columns:1fr;gap:12px}
+.connection-settings .meta{margin:0}
 .connection-settings label{font-size:12px}
 @media(min-width:961px){
   html,body{height:100%;overflow:hidden}
@@ -158,8 +162,11 @@
   .action-group{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;width:100%}
   .action-group+.action-group{padding-left:0;padding-top:12px;border-left:0;border-top:1px solid var(--border)}
   .actions .btn,.actions button{width:100%;min-height:44px;padding:8px}
-  .confirm-actions{flex-direction:column-reverse}
   .modal{padding:12px}
+  .confirm-card{max-height:calc(100dvh - 24px)}
+  .confirm-head,.confirm-body,.confirm-actions{padding-inline:var(--space-4)}
+  .confirm-head .modal-close{width:var(--control-h);height:var(--control-h)}
+  .confirm-actions button{flex:1;min-height:44px}
   #preview-modal .modal-card{width:100%;min-width:0;max-height:calc(100dvh - 24px)}
   #preview-video,#preview-video[controls],.preview-image{width:100%;min-width:0;max-height:calc(100dvh - 96px);border-radius:0}
   .preview-nav{width:42px;height:42px}

@@ -55,6 +55,12 @@ const adminCDKConfirmations={
   revoke:{
     title:'吊销密钥',confirmText:'吊销',success:'密钥已吊销',
     message:item=>`吊销 ${item.prefix}… 后，密钥及其登录会话将立即失效。`,
+    method:'DELETE',suffix:'',
+  },
+  delete:{
+    title:'删除密钥记录',confirmText:'删除',success:'密钥记录已删除',
+    message:item=>`删除 ${item.prefix}… 的密钥记录后无法恢复。相关任务会保留。`,
+    method:'DELETE',suffix:'/record',
   },
 };
 let adminCDKPage=1,adminCDKListID=0,adminCDKMutating=false,adminCDKItems=[];
@@ -121,10 +127,12 @@ async function loadAdminCDKs(page=adminCDKPage){
   try{
     const {items,total}=await api(`${adminCDKPath}?${query}`,{cache:'no-store'});
     if(!current())return;
+    const totalPages=Math.ceil(total/adminCDKPageSize);
+    if(page>1&&page>totalPages)return loadAdminCDKs(Math.max(1,totalPages));
     adminCDKItems=items||[];
     status.textContent=total?`共 ${total} 个密钥`:'暂无密钥';
     if(adminCDKItems.length)renderAdminCDKs(list,adminCDKItems);
-    renderPager(pager,page,Math.ceil(total/adminCDKPageSize),loadAdminCDKs);
+    renderPager(pager,page,totalPages,loadAdminCDKs);
   }catch(err){if(current())status.textContent=err.message}
   finally{if(current())list.setAttribute('aria-busy','false')}
 }
@@ -133,18 +141,20 @@ function renderAdminCDKs(list,items){
   list.innerHTML=`<ul class="admin-cdk-items">${items.map(item=>{
     const state=item.status!=='revoked'&&item.taskCount>=item.taskLimit?['次数用尽','warning']:adminCDKStates[item.status];
     const [label,tone]=state||['未知','muted'];
-    const actions=item.status==='revoked'?'':`<div class="admin-card-actions">
+    const actions=item.status==='revoked'?`
+      <button type="button" class="danger" data-cdk-action="delete">删除</button>
+    `:`
       <button type="button" data-cdk-action="quota">修改次数</button>
       <button type="button" data-cdk-action="reset">重置次数</button>
       <button type="button" data-cdk-action="rotate">轮换密钥</button>
       <button type="button" class="danger" data-cdk-action="revoke">吊销</button>
-    </div>`;
+    `;
     return `<li class="admin-cdk-row" data-cdk-id="${esc(item.id)}"><dl>
       <div><dt>密钥前缀</dt><dd><code>${esc(item.prefix)}…</code></dd></div>
       <div><dt>状态</dt><dd><span class="badge badge-${tone}">${label}</span></dd></div>
       <div><dt>已用 / 总次数</dt><dd>${esc(item.taskCount)} / ${esc(item.taskLimit)}</dd></div>
       <div><dt>生成时间</dt><dd><time datetime="${esc(item.createdAt)}">${esc(fmtDate(item.createdAt))}</time></dd></div>
-    </dl>${actions}</li>`;
+    </dl><div class="admin-card-actions">${actions}</div></li>`;
   }).join('')}</ul>`;
   syncAdminCDKActions();
 }
@@ -200,8 +210,8 @@ function bindAdminCDKs(){
     if(!button||button.disabled||adminCDKMutating||!adminOpen||adminCurrentView!=='cdks'||session?.user?.role!=='admin')return;
     const row=button.closest('[data-cdk-id]');
     const item=adminCDKItems.find(entry=>entry.id===row?.dataset.cdkId);
-    if(!item||item.status==='revoked')return;
     const epoch=sessionEpoch,action=button.dataset.cdkAction;
+    if(!item||(action==='delete'?item.status!=='revoked':item.status==='revoked'))return;
     adminCDKMutating=true;
     syncAdminCDKActions();
     try{
@@ -212,16 +222,17 @@ function bindAdminCDKs(){
         options={method:'PATCH',body:JSON.stringify({taskLimit:Number(value)})};
         success='任务总次数已更新';
       }else{
-        const {title,confirmText,message,success:successMessage}=adminCDKConfirmations[action];
+        const {title,confirmText,message,success:successMessage,method='POST',suffix=`/${action}`}=adminCDKConfirmations[action];
         if(!await confirmDialog({title,confirmText,message:message(item)}))return;
-        options={method:action==='revoke'?'DELETE':'POST'};
-        if(action!=='revoke')path+=`/${action}`;
+        options={method};
+        path+=suffix;
         success=successMessage;
       }
       if(epoch!==sessionEpoch||!adminOpen||adminCurrentView!=='cdks')return;
       const {item:updated}=await api(path,options);
       if(epoch!==sessionEpoch)return;
       if(action==='rotate')showGeneratedCDKs([updated.code]);
+      if(action==='delete'&&adminOpen&&adminCurrentView==='cdks')$('#admin-cdk-refresh').focus();
       toast(success,'success');
       void loadAdminCDKs();
     }catch(err){if(epoch===sessionEpoch)toast(err.message,'error')}

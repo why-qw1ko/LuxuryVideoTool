@@ -139,6 +139,15 @@ func registerCDKRoutes(mux *http.ServeMux, deps Dependencies, limiter *loginLimi
 		recordAdminAudit(deps.Audit, r, principal.UserID, "admin.cdk.revoke", "cdk", item.ID, nil)
 		writeJSON(w, http.StatusOK, map[string]any{"item": item, "requestId": RequestID(r.Context())})
 	})
+	register("DELETE /api/v1/admin/cdks/{id}/record", func(w http.ResponseWriter, r *http.Request, principal auth.Principal) {
+		id := r.PathValue("id")
+		if err := deps.Auth.DeleteRevokedCDK(r.Context(), id); err != nil {
+			writeCDKError(w, r, err)
+			return
+		}
+		recordAdminAudit(deps.Audit, r, principal.UserID, "admin.cdk.delete", "cdk", id, nil)
+		writeJSON(w, http.StatusOK, map[string]any{"requestId": RequestID(r.Context())})
+	})
 }
 
 func writeCDKError(w http.ResponseWriter, r *http.Request, err error) {
@@ -149,6 +158,8 @@ func writeCDKError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusNotFound, "CDK_NOT_FOUND", "CDK 密钥不存在", false)
 	case errors.Is(err, auth.ErrCDKRevoked):
 		writeError(w, r, http.StatusConflict, "CDK_REVOKED", "CDK 密钥已作废", false)
+	case errors.Is(err, auth.ErrCDKNotRevoked):
+		writeError(w, r, http.StatusConflict, "CDK_NOT_REVOKED", "请先吊销 CDK 密钥，再删除记录", false)
 	default:
 		writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "暂时无法管理 CDK 密钥", true)
 	}

@@ -6,7 +6,6 @@
 .admin-nav button:hover{background:var(--hover);color:var(--text)}
 .admin-nav button.active{background:var(--primary-light);color:var(--primary);font-weight:600}
 .admin-sidebar-foot{margin-top:auto;display:flex;flex-direction:column;gap:12px;border-top:1px solid var(--border);padding-top:16px}
-#admin-logout{justify-content:flex-start;padding-inline:12px}
 .admin-user{display:flex;align-items:center;gap:10px;padding:8px}
 .admin-user-avatar{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;background:var(--primary-light);color:var(--primary);font-size:14px;font-weight:600;flex-shrink:0}
 .admin-user-info{display:flex;flex-direction:column;gap:3px;line-height:1.4;min-width:0}
@@ -48,10 +47,10 @@
 /* ================= 筛选、表格与分页 ================= */
 .admin-filter{display:grid;grid-template-columns:minmax(180px,1fr) 138px 150px auto;align-items:center;gap:12px;margin:0}
 .admin-form{display:grid;grid-template-columns:repeat(3,minmax(120px,1fr)) 120px auto;align-items:center;gap:12px;margin:0}
-#admin-console input,#admin-console select{height:40px;padding-top:0;padding-bottom:0;border-radius:4px;background-color:var(--card);box-shadow:none;line-height:38px}
+#admin-console input:not([role="switch"]),#admin-console select{height:40px;padding-top:0;padding-bottom:0;border-radius:4px;background-color:var(--card);box-shadow:none;line-height:38px}
 #admin-console select{padding-right:32px;background-position:right 10px center}
-#admin-console input:hover,#admin-console select:hover{border-color:var(--text-tertiary)}
-#admin-console input:focus,#admin-console select:focus{border-color:var(--border-focus);box-shadow:0 0 0 2px var(--active)}
+#admin-console input:not([role="switch"]):hover,#admin-console select:hover{border-color:var(--text-tertiary)}
+#admin-console input:not([role="switch"]):focus,#admin-console select:focus{border-color:var(--border-focus);box-shadow:0 0 0 2px var(--active)}
 .admin-filter button,.admin-form button,#admin-refresh-stats{min-height:40px;padding:0 16px;border-radius:4px;white-space:nowrap;box-shadow:none}
 .admin-list{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;gap:12px;overflow:hidden}
 .admin-table-wrap{flex:1;min-height:0;overflow:auto;border:1px solid var(--border);border-radius:4px}
@@ -99,15 +98,9 @@
 .admin-usage-group p,#admin-usage-status{margin:0}
 .admin-usage-switches{display:grid;max-width:480px}
 .admin-usage-switch{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:48px;padding-block:4px;font-size:14px;line-height:20px;cursor:pointer}
+.admin-usage-switch small{display:block;margin-top:4px;font-size:12px;font-weight:400;line-height:16px;color:var(--text-secondary)}
 .admin-usage-switch+.admin-usage-switch{border-top:1px solid var(--border)}
 .admin-usage-fields:disabled .admin-usage-switch{cursor:not-allowed}
-#admin-console input[role="switch"]{appearance:none;display:grid;align-items:center;flex-shrink:0;width:40px;height:24px;margin:0;padding:2px;border:0;border-radius:9999px;background:var(--text-tertiary);cursor:pointer}
-#admin-console input[role="switch"]::after{content:"";width:16px;height:16px;border-radius:50%;background:#fff;transform:translateX(2px);transition:transform .2s cubic-bezier(.22,1,.36,1)}
-#admin-console input[role="switch"]:checked{background:var(--primary)}
-#admin-console input[role="switch"]:checked::after{transform:translateX(18px)}
-#admin-console input[role="switch"]:hover:not(:disabled){box-shadow:0 0 0 2px var(--active)}
-#admin-console input[role="switch"]:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
-#admin-console input[role="switch"]:disabled{opacity:.55;cursor:not-allowed}
 .admin-usage-footer{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px}
 .admin-usage-footer .failed{color:var(--danger)}
 #admin-usage-fields input[name="dailyTaskLimit"]{max-width:224px}

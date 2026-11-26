@@ -117,6 +117,30 @@ func (r *SQLiteRepository) RevokeCDK(ctx context.Context, id string, now time.Ti
 	return item, nil
 }
 
+func (r *SQLiteRepository) DeleteRevokedCDK(ctx context.Context, id string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var deletedID string
+	err = tx.QueryRowContext(ctx, "DELETE FROM login_cdks WHERE id = ? AND revoked_at IS NOT NULL RETURNING id", id).Scan(&deletedID)
+	if errors.Is(err, sql.ErrNoRows) {
+		var exists bool
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM login_cdks WHERE id = ?)", id).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			return ErrCDKNotRevoked
+		}
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (r *SQLiteRepository) CreateCDKSession(ctx context.Context, hash string, user User, newSession func(User) (Session, error)) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {

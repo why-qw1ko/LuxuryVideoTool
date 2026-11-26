@@ -65,7 +65,11 @@ function show(id,on){$(id).classList.toggle('hidden',!on)}
 // 网页端安全方案：access token 只保存在内存，refresh token 存服务端 httpOnly Cookie。
 // 页面刷新后通过 /api/v1/auth/refresh 用 Cookie 静默恢复会话，JS 不再接触任何长效凭证。
 function save(value){session=value}
-function normaliseAPI(value){const url=new URL(value);if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw new Error('API 地址必须是有效的 HTTP/HTTPS 地址');url.pathname=url.pathname.replace(/\/+$/,'')||'/';return url.origin+url.pathname.replace(/\/$/,'')}
+function normaliseAPI(value){
+  const url=new URL(value);
+  if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw new Error('请输入有效的 HTTP 或 HTTPS 服务地址');
+  return url.origin+url.pathname.replace(/\/+$/,'');
+}
 /* crypto.randomUUID 仅在安全上下文（HTTPS 或 localhost）可用；内网穿透的 http 地址不可用，需兜底 */
 function uuidv4(){
   if(typeof crypto!=='undefined'&&crypto.randomUUID)return crypto.randomUUID();
@@ -410,7 +414,7 @@ function enter(value){
 /* ---------- 登录 / 退出 / 连接 ---------- */
 $('#api-url').value=location.origin;
 if($('#current-api')){$('#current-api').textContent=location.origin;$('.foot-api').title=location.origin;}
-$('#api-form').addEventListener('submit',e=>{e.preventDefault();try{const target=normaliseAPI($('#api-url').value);if(target===location.origin)return toast('当前已连接此 API 服务');location.assign(`${target}/`)}catch(err){toast(err.message,'error')}});
+$('#api-form').addEventListener('submit',e=>{e.preventDefault();try{const target=normaliseAPI($('#api-url').value);if(target===location.origin)return toast('当前已打开此服务');location.assign(`${target}/`)}catch(err){toast(err.message,'error')}});
 function loginDevice(){
   return {id:localStorage.dc_device||(localStorage.dc_device=uuidv4()),name:navigator.platform||'Web 浏览器',platform:'windows',appVersion:'web-0.1.0'};
 }
@@ -454,67 +458,55 @@ async function logout(){
 }
 
 function passwordChangeDialog(){
-  return new Promise(resolve=>{
-    const modal=$('#confirm-modal'),ok=$('#confirm-ok'),cancel=$('#confirm-cancel'),message=$('#confirm-message');
-    $('#confirm-title').textContent='修改密码';
-    message.innerHTML='';
-    const hint=document.createElement('p');
-    hint.className='dialog-hint';
-    hint.textContent='修改成功后，其他设备会话将下线，当前设备保持登录。';
-    const wrap=document.createElement('div');
-    wrap.className='password-change-grid';
-    const fields=[
-      {key:'currentPassword',label:'当前密码',autocomplete:'current-password'},
-      {key:'newPassword',label:'新密码（6 至 12 位）',autocomplete:'new-password'},
-      {key:'confirmPassword',label:'确认新密码',autocomplete:'new-password'}
-    ];
-    const inputs={};
-    fields.forEach(field=>{
-      const label=document.createElement('label');
-      label.appendChild(document.createTextNode(field.label));
-      const box=document.createElement('span');
-      box.className='password-wrap';
-      const input=document.createElement('input');
-      input.type='password';
-      if(field.key==='currentPassword')input.maxLength=1024;
-      else input.pattern='.{6,12}';
-      input.required=true;
-      input.autocomplete=field.autocomplete;
-      const toggle=document.createElement('button');
-      toggle.type='button';
-      toggle.className='password-eye';
-      toggle.setAttribute('aria-label','显示密码');
-      toggle.title='显示密码';
-      toggle.innerHTML=icon('eye',16);
-      toggle.addEventListener('click',e=>{
-        e.preventDefault();e.stopPropagation();
-        const show=input.type==='password';
-        input.type=show?'text':'password';
-        toggle.classList.toggle('on',show);
-        toggle.setAttribute('aria-label',show?'隐藏密码':'显示密码');
-        toggle.title=show?'隐藏密码':'显示密码';
-        toggle.innerHTML=icon(show?'eye-off':'eye',16);
-        input.focus();
-      });
-      input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();ok.click()}});
-      box.appendChild(input);
-      box.appendChild(toggle);
-      label.appendChild(box);
-      wrap.appendChild(label);
-      inputs[field.key]=input;
+  const wrap=document.createElement('div');
+  wrap.className='password-change-grid';
+  const fields=[
+    {key:'currentPassword',label:'当前密码',autocomplete:'current-password'},
+    {key:'newPassword',label:'新密码（6 至 12 位）',autocomplete:'new-password'},
+    {key:'confirmPassword',label:'确认新密码',autocomplete:'new-password'}
+  ];
+  const inputs={};
+  fields.forEach(field=>{
+    const label=document.createElement('label');
+    label.appendChild(document.createTextNode(field.label));
+    const box=document.createElement('span');
+    box.className='password-wrap';
+    const input=document.createElement('input');
+    input.type='password';
+    if(field.key==='currentPassword')input.maxLength=1024;
+    else input.pattern='.{6,12}';
+    input.required=true;
+    input.autocomplete=field.autocomplete;
+    const toggle=document.createElement('button');
+    toggle.type='button';
+    toggle.className='password-eye';
+    toggle.setAttribute('aria-label','显示密码');
+    toggle.title='显示密码';
+    toggle.innerHTML=icon('eye',16);
+    toggle.addEventListener('click',e=>{
+      e.preventDefault();e.stopPropagation();
+      const show=input.type==='password';
+      input.type=show?'text':'password';
+      toggle.classList.toggle('on',show);
+      toggle.setAttribute('aria-label',show?'隐藏密码':'显示密码');
+      toggle.title=show?'隐藏密码':'显示密码';
+      toggle.innerHTML=icon(show?'eye-off':'eye',16);
+      input.focus();
     });
-    message.appendChild(hint);
-    message.appendChild(wrap);
-    ok.textContent='保存';
-    ok.className='btn-primary';
-    const close=value=>{modal.classList.add('hidden');document.body.classList.remove('modal-open');resolve(value)};
-    ok.onclick=()=>{
-      if(Object.values(inputs).every(input=>input.reportValidity()))close({currentPassword:inputs.currentPassword.value,newPassword:inputs.newPassword.value,confirmPassword:inputs.confirmPassword.value});
-    };
-    cancel.onclick=()=>close(null);
-    modal.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>close(null));
-    modal.classList.remove('hidden');document.body.classList.add('modal-open');
-    inputs.currentPassword.focus();
+    box.appendChild(input);
+    box.appendChild(toggle);
+    label.appendChild(box);
+    wrap.appendChild(label);
+    inputs[field.key]=input;
+  });
+  return openActionDialog({
+    title:'修改密码',message:'保存后，其他设备将退出登录，当前设备保持登录。',confirmText:'保存',
+    fields:wrap,initialFocus:inputs.currentPassword,
+    collect:()=>{
+      if(Object.values(inputs).every(input=>input.reportValidity())){
+        return {currentPassword:inputs.currentPassword.value,newPassword:inputs.newPassword.value,confirmPassword:inputs.confirmPassword.value};
+      }
+    }
   });
 }
 async function changeOwnPassword(){
@@ -1617,56 +1609,84 @@ $('#app').addEventListener('click',handleContentClick);
 $('#admin-console').addEventListener('click',handleContentClick);
 
 /* ---------- 自定义确认弹窗 ---------- */
-function confirmDialog(opts={}){
+let dismissActionDialog=null;
+function openActionDialog({title,message,confirmText,danger,fields,initialFocus,collect,cancelValue=null}){
+  dismissActionDialog?.();
   return new Promise(resolve=>{
     const modal=$('#confirm-modal'),ok=$('#confirm-ok'),cancel=$('#confirm-cancel');
-    $('#confirm-title').textContent=opts.title||'确认操作';
-    $('#confirm-message').textContent=opts.message||'';
-    ok.textContent=opts.confirmText||'确认';
-    ok.className=opts.danger===false?'btn-primary':'btn-danger';
-    const close=v=>{modal.classList.add('hidden');document.body.classList.remove('modal-open');resolve(v)};
-    ok.onclick=()=>close(true);
-    cancel.onclick=()=>close(false);
-    modal.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>close(false));
+    const messageNode=$('#confirm-message'),fieldsNode=$('#confirm-fields'),iconNode=$('#confirm-icon');
+    const opener=document.activeElement;
+    const closeButtons=modal.querySelectorAll('[data-close]');
+    $('#confirm-title').textContent=title||'确认操作';
+    messageNode.textContent=message||'';
+    messageNode.classList.toggle('hidden',!message);
+    if(fields)fieldsNode.appendChild(fields);
+    iconNode.innerHTML=danger?icon('alert-triangle',18):'';
+    iconNode.classList.toggle('hidden',!danger);
+    ok.textContent=confirmText||'确认';
+    ok.className=danger?'btn-danger':'btn-primary';
+    const close=value=>{
+      dismissActionDialog=null;
+      modal.classList.add('hidden');
+      document.body.classList.remove('modal-open');
+      fieldsNode.replaceChildren();
+      modal.onkeydown=ok.onclick=cancel.onclick=null;
+      closeButtons.forEach(button=>button.onclick=null);
+      if(opener?.isConnected)opener.focus({preventScroll:true});
+      resolve(value);
+    };
+    dismissActionDialog=()=>close(cancelValue);
+    ok.onclick=()=>{
+      const value=collect();
+      if(value!==undefined)close(value);
+    };
+    cancel.onclick=dismissActionDialog;
+    closeButtons.forEach(button=>button.onclick=dismissActionDialog);
+    modal.onkeydown=e=>{
+      if(e.isComposing)return;
+      if(e.key==='Escape'){
+        e.preventDefault();e.stopPropagation();dismissActionDialog();
+      }else if(e.key==='Enter'&&e.target.tagName==='INPUT'){
+        e.preventDefault();ok.click();
+      }else if(e.key==='Tab'){
+        const controls=modal.querySelectorAll('button:not(:disabled),input:not(:disabled)');
+        const first=controls[0],last=controls[controls.length-1];
+        if(e.shiftKey?document.activeElement===first:document.activeElement===last){
+          e.preventDefault();(e.shiftKey?last:first).focus();
+        }
+      }
+    };
     modal.classList.remove('hidden');document.body.classList.add('modal-open');
-    cancel.focus();
+    (initialFocus||cancel).focus();
   });
+}
+
+function confirmDialog(opts={}){
+  return openActionDialog({...opts,danger:opts.danger!==false,collect:()=>true,cancelValue:false});
 }
 
 /* 带输入框的弹窗（用于重置密码等）；取消返回 null，确定返回输入值 */
 function promptDialog(opts={}){
-  return new Promise(resolve=>{
-    const modal=$('#confirm-modal'),ok=$('#confirm-ok'),cancel=$('#confirm-cancel');
-    $('#confirm-title').textContent=opts.title||'输入';
-    const message=$('#confirm-message');
-    message.innerHTML='';
-    if(opts.message)message.appendChild(document.createTextNode(opts.message));
-    const input=document.createElement('input');
-    input.type=opts.password?'password':opts.numberInput?'number':'text';
-    if(opts.numberInput){
-      input.min=String(opts.numberInput.min??0);
-      input.max=String(opts.numberInput.max);
-      input.step='1';
-      input.value=opts.numberInput.value??'';
-      input.inputMode='numeric';
-    }
-    input.placeholder=opts.placeholder||'';
-    input.setAttribute('aria-label',opts.placeholder||opts.title||'输入');
-    if(opts.password)input.pattern='.{6,12}';
-    else input.maxLength=1024;
-    input.required=!!opts.password||!!opts.numberInput?.required;
-    input.autocomplete=opts.password?'new-password':'off';
-    input.className='prompt-input';
-    message.appendChild(input);
-    ok.textContent=opts.confirmText||'确定';
-    ok.className='btn-primary';
-    const close=v=>{modal.classList.add('hidden');document.body.classList.remove('modal-open');resolve(v)};
-    ok.onclick=()=>{if(input.reportValidity())close(input.value)};
-    cancel.onclick=()=>close(null);
-    modal.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>close(null));
-    modal.classList.remove('hidden');document.body.classList.add('modal-open');
-    input.focus();
-    input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();ok.click()}});
+  const input=document.createElement('input');
+  input.type=opts.password?'password':opts.numberInput?'number':'text';
+  if(opts.numberInput){
+    input.min=String(opts.numberInput.min??0);
+    input.max=String(opts.numberInput.max);
+    input.step='1';
+    input.value=opts.numberInput.value??'';
+    input.inputMode='numeric';
+  }
+  input.placeholder=opts.placeholder||'';
+  input.setAttribute('aria-label',opts.placeholder||opts.title||'输入');
+  if(opts.password)input.pattern='.{6,12}';
+  else input.maxLength=1024;
+  input.required=!!opts.password||!!opts.numberInput?.required;
+  input.autocomplete=opts.password?'new-password':'off';
+  input.className='prompt-input';
+  return openActionDialog({
+    title:opts.title||'输入',message:opts.message,confirmText:opts.confirmText||'确定',
+    fields:input,initialFocus:input,
+    collect:()=>{if(input.reportValidity())return input.value}
   });
 }
 

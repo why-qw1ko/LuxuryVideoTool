@@ -82,6 +82,11 @@ func TestCDKHTTPFlow(t *testing.T) {
 	}
 	key := generate(1)[0]
 	keyPath := cdkAdminPath + "/" + key.ID
+	deletePath := keyPath + "/record"
+	request(http.MethodDelete, deletePath, nil, "", http.StatusUnauthorized)
+	if body := request(http.MethodDelete, deletePath, nil, token, http.StatusConflict).Body.String(); !strings.Contains(body, "CDK_NOT_REVOKED") {
+		t.Errorf("expected active CDK deletion to return CDK_NOT_REVOKED, got %s", body)
+	}
 	batch := generate(2)
 	if batch[0].Code == batch[1].Code || batch[0].Code == key.Code || batch[1].Code == key.Code {
 		t.Fatal("generated duplicate codes")
@@ -133,6 +138,7 @@ func TestCDKHTTPFlow(t *testing.T) {
 		t.Fatalf("CDK repeat login did not create a new session on the original account: %v", err)
 	}
 	request(http.MethodGet, cdkAdminPath, nil, cdkPair.AccessToken, http.StatusForbidden)
+	request(http.MethodDelete, deletePath, nil, cdkPair.AccessToken, http.StatusForbidden)
 	for _, action := range []string{"/reset", "/rotate"} {
 		request(http.MethodPost, keyPath+action, nil, "", http.StatusUnauthorized)
 		request(http.MethodPost, keyPath+action, nil, cdkPair.AccessToken, http.StatusForbidden)
@@ -267,15 +273,9 @@ func TestCDKHTTPFlow(t *testing.T) {
 		t.Fatal(body)
 	}
 	submit("third", http.StatusAccepted)
-	for _, action := range []string{"admin.cdk.rotate", "admin.cdk.reset_task_count"} {
-		var metadata string
-		if err := db.QueryRowContext(ctx, `SELECT metadata_json FROM audit_logs WHERE action = ? AND target_id = ? AND actor_user_id = ?`,
-			action, key.ID, admin.ID).Scan(&metadata); err != nil || strings.Contains(metadata, newCode) || strings.Contains(metadata, key.Code) {
-			t.Fatalf("invalid %s audit record, query error = %v", action, err)
-		}
-	}
 
 	request(http.MethodDelete, cdkAdminPath+"/"+batch[0].ID, nil, token, http.StatusOK)
+	request(http.MethodDelete, cdkAdminPath+"/"+batch[0].ID+"/record", nil, token, http.StatusOK)
 	login(batch[0].Code, http.StatusUnauthorized)
 	request(http.MethodDelete, keyPath, nil, token, http.StatusOK)
 	request(http.MethodGet, "/api/v1/jobs/usage", nil, active, http.StatusUnauthorized)
@@ -287,6 +287,33 @@ func TestCDKHTTPFlow(t *testing.T) {
 	handler.ServeHTTP(revoked, webRequest(http.MethodPost, "/api/v1/auth/refresh", nil, newLogin.Result().Cookies()))
 	if revoked.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked CDK refresh status = %d", revoked.Code)
+	}
+
+	request(http.MethodDelete, deletePath, nil, token, http.StatusOK)
+	request(http.MethodDelete, deletePath, nil, token, http.StatusNotFound)
+	login(newCode, http.StatusUnauthorized)
+	request(http.MethodGet, "/api/v1/admin/jobs/"+created.Job.ID, nil, token, http.StatusOK)
+	request(http.MethodGet, "/api/v1/jobs/usage", nil, active, http.StatusUnauthorized)
+	page = request(http.MethodGet, cdkAdminPath, nil, token, http.StatusOK)
+	if err := json.Unmarshal(page.Body.Bytes(), &list); err != nil || list.Total != 1 || len(list.Items) != 1 || list.Items[0].ID != batch[1].ID {
+		t.Fatalf("unexpected CDK list after deletion, decode error = %v", err)
+	}
+	user, err := repository.FindUserByID(ctx, newPair.User.ID)
+	if err != nil || !user.IsCDK || user.IsActive {
+		t.Fatalf("deletion did not preserve the disabled CDK account: %v", err)
+	}
+	jobService := jobs.NewService(jobs.NewSQLiteRepository(db), nil)
+	if _, _, err := jobService.CreateDownload(ctx, jobs.CreateInput{
+		UserID: user.ID, ShareText: "https://www.douyin.com/video/123", IdempotencyKey: "in-flight",
+	}); !errors.Is(err, auth.ErrRevokedSession) {
+		t.Fatalf("deleted CDK allowed an in-flight request to create a new task: %v", err)
+	}
+	for _, action := range []string{"admin.cdk.rotate", "admin.cdk.reset_task_count", "admin.cdk.revoke", "admin.cdk.delete"} {
+		var metadata string
+		if err := db.QueryRowContext(ctx, `SELECT metadata_json FROM audit_logs WHERE action = ? AND target_id = ? AND actor_user_id = ?`,
+			action, key.ID, admin.ID).Scan(&metadata); err != nil || strings.Contains(metadata, newCode) || strings.Contains(metadata, key.Code) {
+			t.Fatalf("invalid %s audit record, query error = %v", action, err)
+		}
 	}
 }
 

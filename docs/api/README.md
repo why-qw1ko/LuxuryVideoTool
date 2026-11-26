@@ -54,6 +54,7 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 - `POST /api/v1/admin/cdks/{id}/reset` 将累计已用次数清零，保留总额度、每日用量和任务历史，返回 `{item, requestId}`。
 - `POST /api/v1/admin/cdks/{id}/rotate` 返回 `{item, requestId}`，`item.code` 含新密钥。旧密钥及其会话立即失效，新密钥沿用原账号、剩余额度和任务历史。已吊销的 CDK 禁止重置次数及轮换，返回 `409 CDK_REVOKED`。
 - `DELETE /api/v1/admin/cdks/{id}` 吊销密钥及其登录会话，保留密钥记录和任务历史。
+- `DELETE /api/v1/admin/cdks/{id}/record` 删除已吊销的密钥记录，保留关联账号、任务历史和审计记录。密钥未吊销时返回 `409 CDK_NOT_REVOKED`。
 - CDK 会话的 `GET /api/v1/jobs/usage` 额外返回 `usage.cdk`，含 `used`、`limit`。累计额度用完时新建任务返回 `429 CDK_LIMIT_REACHED`，当前会话仍可查看任务历史。每日额度继续适用，幂等重放、任务重试和删除均不改变累计用量。
 
 ### 任务管理（跨用户）

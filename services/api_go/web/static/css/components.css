@@ -31,6 +31,13 @@ label{display:grid;gap:7px;font-size:13px;font-weight:500;color:var(--text)}
 .check.disabled input{cursor:not-allowed}
 input,textarea,select{font:inherit;font-weight:400;width:100%;min-width:0;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--input);color:var(--text);outline:none;transition:border-color .15s,box-shadow .15s,background .15s}
 input:focus,textarea:focus,select:focus{border-color:var(--border-focus);box-shadow:0 0 0 2px var(--active);background-color:var(--card)}
+input[role="switch"]{appearance:none;display:grid;align-items:center;flex-shrink:0;width:40px;height:24px;margin:0;padding:2px;border:0;border-radius:9999px;background:var(--text-tertiary);cursor:pointer}
+input[role="switch"]::after{content:"";width:16px;height:16px;border-radius:50%;background:#fff;transform:translateX(2px);transition:transform .2s cubic-bezier(.22,1,.36,1)}
+input[role="switch"]:checked{background:var(--primary)}
+input[role="switch"]:checked::after{transform:translateX(18px)}
+input[role="switch"]:hover:not(:disabled){box-shadow:0 0 0 2px var(--active)}
+input[role="switch"]:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+input[role="switch"]:disabled{opacity:.55;cursor:not-allowed}
 .password-wrap{position:relative;display:block}
 .password-wrap input{padding-right:40px}
 .password-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;min-height:30px;padding:0;border:none;background:transparent;color:var(--text-tertiary);cursor:pointer;border-radius:var(--radius)}

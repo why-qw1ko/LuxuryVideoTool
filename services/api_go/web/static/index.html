@@ -30,11 +30,11 @@
         </span>
       </div>
       <div class="header-actions">
-        <button id="admin-console-btn" aria-label="管理后台" class="ghost hidden" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg><span class="btn-label">管理后台</span></button>
+        <button id="admin-console-btn" aria-label="管理后台" title="管理后台" class="ghost workspace-nav-btn hidden" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s7-3 7-10V5l-7-3-7 3v7c0 7 7 10 7 10Z"/><path d="m9 12 2 2 4-4"/></svg><span class="btn-label">管理后台</span></button>
         <button id="change-password" aria-label="修改密码" class="ghost hidden" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 18v3h3l9.7-9.7"/><path d="m15.6 5.4 3 3"/><path d="M20.5 7.5a2.12 2.12 0 0 0-3-3l-12 12"/></svg><span class="btn-label">修改密码</span></button>
         <button id="theme-toggle" class="ghost icon-btn" type="button" aria-label="切换主题"></button>
         <button id="logout" aria-label="退出登录" class="ghost hidden" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg><span class="btn-label">退出</span></button>
-        <button id="admin-back-front" class="ghost hidden" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>返回前台</button>
+        <button id="admin-back-front" class="ghost workspace-nav-btn hidden" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 21v-7h6v7"/></svg>返回前台</button>
       </div>
     </div>
   </header>
@@ -60,10 +60,11 @@
           <button type="submit" class="btn-primary" disabled>登录</button>
         </form>
         <details class="connection-settings">
-          <summary>更换服务地址</summary>
+          <summary>打开其他服务</summary>
           <form id="api-form" class="api-form">
-            <label>API 服务地址<input id="api-url" type="url" placeholder="http://127.0.0.1:8080" required></label>
-            <button type="submit" class="ghost">连接此服务</button>
+            <p id="api-address-hint" class="meta">跳转到另一套 Luxury Capture 服务的登录页。</p>
+            <label>服务地址<input id="api-url" type="url" placeholder="http://127.0.0.1:7788" aria-describedby="api-address-hint" required></label>
+            <button type="submit" class="ghost">打开服务</button>
           </form>
         </details>
       </div>
@@ -114,8 +115,14 @@
                 <textarea id="share-text" rows="7" maxlength="4096" placeholder="粘贴作品链接或完整的分享文本" aria-describedby="share-help" required></textarea>
                 <p id="share-help" class="field-hint">支持视频、图文和动图作品。</p>
                 <div id="capture-options" class="capture-options hidden" role="group" aria-label="提取选项">
-                  <label class="check capture-option" id="info-only-wrap"><input id="info-only" type="checkbox"><span>仅解析基本信息<small>不解析视频/图文内容</small></span></label>
-                  <label class="check capture-option" id="with-transcribe-wrap"><input id="with-transcribe" type="checkbox"><span>转写视频文案<small>下载媒体并识别视频口播，耗时较长</small></span></label>
+                  <label class="capture-option" id="info-only-wrap">
+                    <span><span id="info-only-label">仅解析基本信息</span><small id="info-only-hint">不解析视频/图文内容</small></span>
+                    <input id="info-only" type="checkbox" role="switch" aria-labelledby="info-only-label" aria-describedby="info-only-hint">
+                  </label>
+                  <label class="capture-option" id="with-transcribe-wrap">
+                    <span><span id="with-transcribe-label">转写视频文案</span><small id="with-transcribe-hint">下载媒体并识别视频口播，耗时较长</small></span>
+                    <input id="with-transcribe" type="checkbox" role="switch" aria-labelledby="with-transcribe-label" aria-describedby="with-transcribe-hint">
+                  </label>
                   <label id="capture-asr-provider-wrap" class="hidden">转写服务商
                     <select id="capture-asr-provider"></select>
                   </label>
@@ -286,7 +293,10 @@
                 <legend>新建任务权限</legend>
                 <div class="admin-usage-switches">
                   <label class="admin-usage-switch">仅解析基本信息<input name="allowInfo" type="checkbox" role="switch"></label>
-                  <label class="admin-usage-switch">独立下载媒体<input name="allowDownload" type="checkbox" role="switch"></label>
+                  <label class="admin-usage-switch">
+                    <span><span id="admin-usage-download-label">仅下载媒体</span><small id="admin-usage-download-hint">允许只下载视频或配图。关闭后，已开启的「下载并转写」仍可用。</small></span>
+                    <input name="allowDownload" type="checkbox" role="switch" aria-labelledby="admin-usage-download-label" aria-describedby="admin-usage-download-hint">
+                  </label>
                   <label class="admin-usage-switch">下载并转写<input name="allowTranscribe" type="checkbox" role="switch"></label>
                 </div>
                 <p class="meta">保存后全站生效，用户只能新建已开启的任务类型。</p>
@@ -418,11 +428,17 @@
     </div>
   </div>
 
-  <div id="confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+  <div id="confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message">
     <div class="modal-backdrop" data-close></div>
     <div class="modal-card confirm-card">
-      <div class="modal-head"><strong id="confirm-title">确认操作</strong><button type="button" class="modal-close" data-close aria-label="关闭"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
-      <div class="confirm-body"><div id="confirm-message"></div></div>
+      <div class="confirm-head">
+        <div class="confirm-heading"><span id="confirm-icon" class="hidden" aria-hidden="true"></span><h2 id="confirm-title">确认操作</h2></div>
+        <button type="button" class="modal-close" data-close aria-label="关闭"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      </div>
+      <div class="confirm-body">
+        <p id="confirm-message" class="hidden"></p>
+        <div id="confirm-fields"></div>
+      </div>
       <div class="confirm-actions">
         <button id="confirm-cancel" class="ghost" type="button">取消</button>
         <button id="confirm-ok" class="btn-danger" type="button">确认</button>

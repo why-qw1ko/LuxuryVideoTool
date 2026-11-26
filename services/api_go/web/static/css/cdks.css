@@ -34,6 +34,7 @@
   background:transparent;color:var(--primary);line-height:16px
 }
 .admin-cdk-row .admin-card-actions button.danger{color:var(--danger)}
+.admin-cdk-row [data-cdk-action="delete"]{grid-column:-2}
 .admin-cdk-row .admin-card-actions button:hover:not(:disabled){background:var(--primary-light)}
 .admin-cdk-row .admin-card-actions button.danger:hover:not(:disabled){background:var(--danger-light)}
 .admin-cdk-row .admin-card-actions button:hover:disabled{background:transparent}

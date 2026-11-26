@@ -18,8 +18,16 @@
 .preview-nav:disabled{opacity:.35;cursor:not-allowed;background:rgba(15,18,25,.35)}
 .preview-prev{left:14px}
 .preview-next{right:14px}
-.confirm-card{max-width:min(92vw,440px)}
-.confirm-body{padding:24px;font-size:14px;color:var(--text-secondary);line-height:1.7}
-.confirm-body p,.confirm-body #confirm-message{margin:0}
-.confirm-actions{display:flex;justify-content:flex-end;gap:10px;padding:16px 20px;border-top:1px solid var(--border);background:var(--card)}
+.confirm-card{display:flex;flex-direction:column;max-width:440px;max-height:calc(100dvh - 40px)}
+.confirm-head{display:flex;align-items:center;justify-content:space-between;gap:var(--space-2);padding:var(--space-3) var(--space-4) var(--space-3) var(--space-6);flex-shrink:0;border-bottom:1px solid var(--border)}
+.confirm-heading{display:flex;align-items:center;gap:var(--space-2);min-width:0}
+.confirm-heading h2{margin:0;font-size:16px;font-weight:600;line-height:1.5;overflow-wrap:anywhere}
+#confirm-icon{display:flex;color:var(--danger)}
+.confirm-head .modal-close{flex-shrink:0;width:var(--control-sm);height:var(--control-sm);border-radius:var(--radius)}
+.confirm-body{min-height:0;overflow-y:auto;padding:var(--space-4) var(--space-6);font-size:14px;color:var(--text-secondary);line-height:1.5;overflow-wrap:anywhere}
+#confirm-message{margin:0}
+#confirm-message:not(.hidden)+#confirm-fields:not(:empty){margin-top:var(--space-3)}
+#confirm-fields>.prompt-input,#confirm-fields>.password-change-grid{margin-top:0}
+.confirm-actions{display:flex;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;gap:var(--space-2);padding:var(--space-3) var(--space-6);border-top:1px solid var(--border)}
+.confirm-actions button{min-width:64px}
 

@@ -18,11 +18,12 @@ const (
 )
 
 var (
-	ErrInvalidCDK   = errors.New("invalid or unavailable CDK")
-	ErrCDKExhausted = errors.New("CDK task quota exhausted")
-	ErrCDKInput     = errors.New("invalid CDK settings")
-	ErrCDKRevoked   = errors.New("CDK is revoked")
-	cdkEncoding     = base32.StdEncoding.WithPadding(base32.NoPadding)
+	ErrInvalidCDK    = errors.New("invalid or unavailable CDK")
+	ErrCDKExhausted  = errors.New("CDK task quota exhausted")
+	ErrCDKInput      = errors.New("invalid CDK settings")
+	ErrCDKRevoked    = errors.New("CDK is revoked")
+	ErrCDKNotRevoked = errors.New("CDK is not revoked")
+	cdkEncoding      = base32.StdEncoding.WithPadding(base32.NoPadding)
 )
 
 type CDK struct {
@@ -50,6 +51,7 @@ type CDKRepository interface {
 	ResetCDKTaskCount(ctx context.Context, id string) (CDK, error)
 	RotateCDK(ctx context.Context, id, prefix, hash string, now time.Time) (CDK, error)
 	RevokeCDK(ctx context.Context, id string, now time.Time) (CDK, error)
+	DeleteRevokedCDK(ctx context.Context, id string) error
 	CreateCDKSession(ctx context.Context, hash string, user User, newSession func(User) (Session, error)) error
 	CDKUsage(ctx context.Context, userID string) (CDKUsage, error)
 }
@@ -149,6 +151,10 @@ func (s *Service) RotateCDK(ctx context.Context, id string) (CDK, error) {
 
 func (s *Service) RevokeCDK(ctx context.Context, id string) (CDK, error) {
 	return s.repository.RevokeCDK(ctx, id, s.now().UTC())
+}
+
+func (s *Service) DeleteRevokedCDK(ctx context.Context, id string) error {
+	return s.repository.DeleteRevokedCDK(ctx, id)
 }
 
 func (s *Service) CDKUsage(ctx context.Context, userID string) (CDKUsage, error) {
