@@ -258,6 +258,7 @@ let adminReturnFocus='#admin-console-btn';
 function closeAdminConsole(){
   resetAdminPasswordForm();
   resetProviderSettings();
+  resetAdminApiCatalog();
   adminOpen=false;adminMode=false;
   setSidebar(false);
   show('#admin-console',false);show('#app',true);
@@ -271,8 +272,9 @@ function adminShowView(name){
   if(name!=='detail'){adminMode=false;adminDetailSig=''}
   if(adminCurrentView==='password'&&name!=='password')resetAdminPasswordForm();
   if(adminCurrentView==='providers'&&name!=='providers')resetProviderSettings();
+  if(adminCurrentView==='api-catalog'&&name!=='api-catalog')resetAdminApiCatalog();
   adminCurrentView=name;
-  ['dashboard','jobs','users','cdks','usage','providers','password','detail'].forEach(v=>show('#admin-view-'+v,v===name));
+  ['dashboard','jobs','users','cdks','usage','providers','api-catalog','password','detail'].forEach(v=>show('#admin-view-'+v,v===name));
   document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>{
     const current=btn.dataset.adminView===name;
     btn.classList.toggle('active',current);
@@ -284,7 +286,9 @@ function adminShowView(name){
   if(name==='cdks')void loadAdminCDKs();
   if(name==='usage')requestAdminUsageSettings();
   if(name==='providers')void loadProviders();
+  if(name==='api-catalog')void loadAdminApiCatalog();
 }
+bindAdminApiCatalog();
 $('#admin-console-btn').addEventListener('click',()=>openAdminConsole());
 $('#settings-link').addEventListener('click',()=>openAdminConsole('usage'));
 $('#admin-back-front').addEventListener('click',closeAdminConsole);
@@ -395,6 +399,7 @@ function enter(value){
   resetAdminPasswordForm();
   resetProviderSettings();
   resetCDKView();
+  resetAdminApiCatalog();
   syncHeaderActions();
   // 未登录时隐藏左上角菜单按钮：导航抽屉是登录后的功能，登录页点了只会打开空的抽屉。
   // 用 visibility 而非 display，保留其在顶栏网格中的 40px 占位，避免品牌文字被顶位裁剪。
@@ -1617,12 +1622,14 @@ function openActionDialog({title,message,confirmText,danger,fields,initialFocus,
     const messageNode=$('#confirm-message'),fieldsNode=$('#confirm-fields'),iconNode=$('#confirm-icon');
     const opener=document.activeElement;
     const closeButtons=modal.querySelectorAll('[data-close]');
+    modal.classList.toggle('confirm-simple',!fields);
     $('#confirm-title').textContent=title||'确认操作';
     messageNode.textContent=message||'';
     messageNode.classList.toggle('hidden',!message);
     if(fields)fieldsNode.appendChild(fields);
-    iconNode.innerHTML=danger?icon('alert-triangle',18):'';
-    iconNode.classList.toggle('hidden',!danger);
+    iconNode.innerHTML=fields?'':icon(danger?'alert-triangle':'info',18);
+    iconNode.classList.toggle('hidden',!!fields);
+    iconNode.classList.toggle('confirm-icon-warning',!!danger);
     ok.textContent=confirmText||'确认';
     ok.className=danger?'btn-danger':'btn-primary';
     const close=value=>{

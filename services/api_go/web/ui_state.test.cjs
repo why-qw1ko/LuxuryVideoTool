@@ -74,6 +74,7 @@ function harness(code = listCode) {
     showView(name) { context.currentView = name; },
     renderDetail() { if (context.currentJob) details.push(context.currentJob); },
     show() {}, stopTaskMusic() {}, syncDetailMedia() {}, setSidebar() {}, closePreview() {}, resetCDKView() {}, resetCapturePermissions() {}, resetProviderSettings() {},
+    bindAdminApiCatalog() {}, resetAdminApiCatalog() {},
     asrProviderNames: {siliconflow: '硅基流动', aliyun: '阿里云', deepseek: 'DeepSeek'},
     refreshDailyUsage() {}, uuidv4() { return 'idempotency-key'; },
   });

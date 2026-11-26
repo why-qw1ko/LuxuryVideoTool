@@ -136,6 +136,10 @@ func clearRefreshCookie(w http.ResponseWriter, r *http.Request) {
 }
 
 func New(deps Dependencies) http.Handler {
+	return requestMiddleware(deps.Build.Version, newRouteMux(deps))
+}
+
+func newRouteMux(deps Dependencies) *http.ServeMux {
 	if deps.LoginRateLimit <= 0 {
 		deps.LoginRateLimit = 5
 	}
@@ -998,6 +1002,7 @@ func New(deps Dependencies) http.Handler {
 	registerUsageRoutes(mux, protected, deps)
 	registerProviderRoutes(mux, protected, deps)
 	if deps.Auth != nil {
+		mux.Handle("GET /api/v1/admin/api-catalog", requireAuth(deps.Auth, http.HandlerFunc(handleAPICatalog)))
 		mux.Handle("POST /api/v1/auth/logout", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/auth/sessions", requireAuth(deps.Auth, protected))
 		mux.Handle("DELETE /api/v1/auth/sessions/{id}", requireAuth(deps.Auth, protected))
@@ -1026,7 +1031,7 @@ func New(deps Dependencies) http.Handler {
 		mux.Handle("DELETE /api/v1/admin/jobs/{id}", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/admin/files/{id}", requireAuth(deps.Auth, protected))
 	}
-	return requestMiddleware(deps.Build.Version, mux)
+	return mux
 }
 
 func jobWorkID(job jobs.Job) string {

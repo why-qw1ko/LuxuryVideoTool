@@ -164,9 +164,10 @@
   .actions .btn,.actions button{width:100%;min-height:44px;padding:8px}
   .modal{padding:12px}
   .confirm-card{max-height:calc(100dvh - 24px)}
-  .confirm-head,.confirm-body,.confirm-actions{padding-inline:var(--space-4)}
-  .confirm-head .modal-close{width:var(--control-h);height:var(--control-h)}
-  .confirm-actions button{flex:1;min-height:44px}
+  .confirm-body,.confirm-actions{padding-inline:var(--space-4)}
+  .confirm-card>.modal-close{inset-block-start:var(--space-2);inset-inline-end:var(--space-3);width:var(--control-sm);height:var(--control-sm)}
+  .confirm-actions button{min-height:var(--control-h)}
+  .confirm-simple .confirm-card{padding:var(--space-6)}
   #preview-modal .modal-card{width:100%;min-width:0;max-height:calc(100dvh - 24px)}
   #preview-video,#preview-video[controls],.preview-image{width:100%;min-width:0;max-height:calc(100dvh - 96px);border-radius:0}
   .preview-nav{width:42px;height:42px}

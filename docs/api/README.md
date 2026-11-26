@@ -20,6 +20,8 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 
 ## 管理 API（仅管理员，普通用户一律 403）
 
+- 后台「接口文档」通过 `GET /api/v1/admin/api-catalog` 读取接口目录，仅管理员可访问。
+
 ### 使用设置
 
 - `GET /api/v1/admin/settings/usage` 返回 `{settings, requestId}`。设置包含 `dailyTaskLimit`、`allowInfo`、`allowDownload`、`allowTranscribe`。

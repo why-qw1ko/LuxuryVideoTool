@@ -14,6 +14,7 @@
   <link rel="stylesheet" href="/css/layout.css">
   <link rel="stylesheet" href="/css/admin.css">
   <link rel="stylesheet" href="/css/cdks.css">
+  <link rel="stylesheet" href="/css/api-catalog.css">
 </head>
 <body>
   <div id="toasts" class="toasts" aria-live="polite"></div>
@@ -62,9 +63,9 @@
         <details class="connection-settings">
           <summary>打开其他服务</summary>
           <form id="api-form" class="api-form">
-            <p id="api-address-hint" class="meta">跳转到另一套 Luxury Capture 服务的登录页。</p>
-            <label>服务地址<input id="api-url" type="url" placeholder="http://127.0.0.1:7788" aria-describedby="api-address-hint" required></label>
-            <button type="submit" class="ghost">打开服务</button>
+            <p id="api-address-hint" class="meta">输入另一套 Luxury Capture 的网页地址，在当前标签页打开它的登录页。</p>
+            <label>网页地址<input id="api-url" type="url" placeholder="http://127.0.0.1:7788" aria-describedby="api-address-hint" required></label>
+            <button type="submit" class="ghost">前往登录页</button>
           </form>
         </details>
       </div>
@@ -153,6 +154,7 @@
           <button type="button" data-admin-view="usage"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2" fill="var(--sidebar)"/><circle cx="15" cy="17" r="2" fill="var(--sidebar)"/></svg>使用设置</button>
           <button type="button" data-admin-view="providers"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 10v4m4-7v10m4-14v18m4-14v10m4-7v4"/></svg>转写服务</button>
           <button type="button" data-admin-view="password"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></svg>修改密码</button>
+          <button type="button" data-admin-view="api-catalog" aria-controls="admin-view-api-catalog"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2ZM8 7h8m-8 4h8"/></svg>接口文档</button>
         </nav>
         <div class="admin-sidebar-foot">
           <div class="admin-user"><span class="admin-user-avatar" id="admin-user-avatar" aria-hidden="true"></span><span class="admin-user-info"><strong id="admin-user-name"></strong><small id="admin-user-role"></small></span></div>
@@ -382,6 +384,19 @@
           </form>
         </section>
 
+        <section id="admin-view-api-catalog" class="admin-view panel hidden" aria-labelledby="api-catalog-heading">
+          <div class="admin-head"><h2 id="api-catalog-heading">接口文档</h2></div>
+          <div class="api-catalog-toolbar">
+            <dl class="api-catalog-base"><dt>服务基址</dt><dd><code id="api-catalog-base"></code></dd></dl>
+            <label for="api-catalog-search">搜索接口<input id="api-catalog-search" type="search" placeholder="方法、路径或说明" disabled></label>
+          </div>
+          <div class="api-catalog-feedback">
+            <p id="api-catalog-status" class="meta" role="status"></p>
+            <button id="api-catalog-retry" class="ghost hidden" type="button">重试</button>
+          </div>
+          <div id="api-catalog-list" aria-busy="false"></div>
+        </section>
+
         <section id="admin-view-password" class="admin-view panel hidden" aria-labelledby="admin-password-heading">
           <div class="admin-head">
             <div>
@@ -433,8 +448,8 @@
     <div class="modal-card confirm-card">
       <div class="confirm-head">
         <div class="confirm-heading"><span id="confirm-icon" class="hidden" aria-hidden="true"></span><h2 id="confirm-title">确认操作</h2></div>
-        <button type="button" class="modal-close" data-close aria-label="关闭"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
       </div>
+      <button type="button" class="modal-close" data-close aria-label="关闭"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
       <div class="confirm-body">
         <p id="confirm-message" class="hidden"></p>
         <div id="confirm-fields"></div>
@@ -448,6 +463,7 @@
 
   <button id="back-top" class="back-top hidden" type="button" aria-label="返回顶部" title="返回顶部"></button>
   <script src="/cdks.js" defer></script>
+  <script src="/api-catalog.js" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>
