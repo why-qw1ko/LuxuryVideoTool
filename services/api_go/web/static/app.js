@@ -946,16 +946,71 @@ async function loadJobDetail(id,polling=false){
     if(!polling)toast(err.message,'error');
   }finally{if(jobDetailPending===pending)jobDetailPending=null}
 }
-// 通用分页条：onPage 接收目标页码；单页时不渲染。
-function renderPager(el,page,totalPages,onPage){
+// 通用分页条：onPage 接收目标页码，配置每页条数后单页也保留控件。
+function renderPager(el,page,totalPages,onPage,{pageSize,pageSizes=[10,20,50,100],onPageSizeChange,label='分页'}={}){
   if(!el)return;
-  if(totalPages<=1){el.innerHTML='';return}
-  el.innerHTML=`<button type="button" class="ghost" data-pager="${page-1}" ${page<=1?'disabled':''}>上一页</button><span class="pager-info">${page} / ${totalPages}</span><button type="button" class="ghost" data-pager="${page+1}" ${page>=totalPages?'disabled':''}>下一页</button>`;
-  el.onclick=e=>{
-    const btn=e.target.closest('button[data-pager]');
-    if(!btn||btn.disabled)return;
-    onPage(Number(btn.dataset.pager));
+  const sizes=onPageSizeChange?[...new Set([pageSize,...pageSizes])]
+    .filter(size=>Number.isSafeInteger(size)&&size>0).sort((a,b)=>a-b):[];
+  if(totalPages<=1&&!sizes.length){
+    el.replaceChildren();
+    delete el.dataset.pagerFocus;
+    return;
+  }
+
+  const navigate=next=>{
+    if(!Number.isSafeInteger(next)||next<1||next>totalPages||next===page)return;
+    if(el.contains(document.activeElement))el.dataset.pagerFocus='page';
+    onPage(next);
   };
+  el.onclick=event=>{
+    const button=event.target.closest('button[data-pager]');
+    if(button&&!button.disabled)navigate(Number(button.dataset.pager));
+  };
+  el.onsubmit=event=>{
+    if(!event.target.matches('.pager-jump'))return;
+    event.preventDefault();
+    navigate(event.target.querySelector('[data-pager-jump]').valueAsNumber);
+  };
+  el.onchange=event=>{
+    if(!sizes.length||!event.target.matches('[data-pager-size]'))return;
+    const size=Number(event.target.value);
+    if(!sizes.includes(size)||size===pageSize)return;
+    if(el.contains(document.activeElement))el.dataset.pagerFocus='size';
+    // 在新页加载成功前，保持控件与仍在显示的每页条数一致。
+    event.target.value=String(pageSize);
+    onPageSizeChange(size);
+  };
+  el.setAttribute('role','navigation');
+  el.setAttribute('aria-label',label);
+
+  const signature=[page,totalPages,pageSize,...sizes].join(':');
+  if(signature===el.dataset.pagerRender&&el.firstElementChild)return;
+  const active=document.activeElement,pendingFocus=el.dataset.pagerFocus;
+  const restoreFocus=el.contains(active)||(pendingFocus&&active===document.body);
+  const focusOnSize=pendingFocus==='size'||active?.matches('[data-pager-size]');
+  delete el.dataset.pagerFocus;
+
+  const pageButton=num=>{
+    const edge=num===1||num===totalPages;
+    return `<button type="button" data-pager="${num}" aria-label="第 ${num} 页"${edge?'':' class="pager-neighbor"'}${num===page?' aria-current="page"':''}>${num}</button>`;
+  };
+  const arrow=(num,iconName,name,disabled)=>`<button type="button" data-pager="${num}" aria-label="${name}" title="${name}"${disabled?' disabled':''}>${icon(iconName,16)}</button>`;
+  const pages=[1];
+  const start=Math.max(2,Math.min(page-1,totalPages-4)),end=Math.min(totalPages-1,Math.max(page+1,5));
+  for(let num=start;num<=end;num++)pages.push(num);
+  if(totalPages>1)pages.push(totalPages);
+  const numbers=pages.map((num,index)=>{
+    const skipped=index?num-pages[index-1]-1:0;
+    const prefix=skipped===1?pageButton(num-1):skipped>1?'<span class="pager-ellipsis" aria-hidden="true">…</span>':'';
+    return prefix+pageButton(num);
+  }).join('');
+  const sizeOptions=sizes.map(size=>`<option value="${size}"${size===pageSize?' selected':''}>${size} 条/页</option>`).join('');
+  el.innerHTML=`<div class="pager-pages">${arrow(page-1,'chevron-left','上一页',page<=1)}${numbers}${arrow(page+1,'chevron-right','下一页',page>=totalPages)}</div>
+    ${sizeOptions?`<select data-pager-size aria-label="每页条数">${sizeOptions}</select>`:''}
+    ${totalPages>1?`<form class="pager-jump"><input type="number" data-pager-jump aria-label="跳转页码" placeholder="页码"
+      min="1" max="${totalPages}" step="1" inputmode="numeric" required><button type="submit">跳转</button></form>`:''}`;
+  el.dataset.pagerRender=signature;
+  if(restoreFocus)el.querySelector(focusOnSize?'[data-pager-size]':'[aria-current="page"]')?.focus({preventScroll:true});
 }
 
 /* ---------- 后台仪表盘 ---------- */
@@ -1137,11 +1192,11 @@ function syncAdminJobsSelection(){
   const list=$('#admin-jobs-list'),all=$('#admin-jobs-select-all');
   const ready=!!adminJobsListKey&&adminJobsListKey===adminJobsQuery();
   const locked=!ready||!!adminJobsMutation?.running;
-  show('#admin-jobs-batch',ready&&adminJobsCache.length>0);
   all.checked=adminJobsSelected.size>0&&adminJobsSelected.size===adminJobsCache.length;
   all.indeterminate=adminJobsSelected.size>0&&!all.checked;
   all.disabled=locked||!adminJobsCache.length;
-  $('#admin-jobs-selected').textContent=`已选 ${adminJobsSelected.size} 项`;
+  const count=$('#admin-jobs-selected'),selectionText=`已选 ${adminJobsSelected.size} 项`;
+  if(count.textContent!==selectionText)count.textContent=selectionText;
   const selected=adminJobsCache.filter(job=>adminJobsSelected.has(job.id));
   for(const button of document.querySelectorAll('#admin-jobs-batch [data-admin-job-batch]')){
     button.disabled=locked||!selected.some(job=>adminJobAllows(job,button.dataset.adminJobBatch));
@@ -1160,13 +1215,16 @@ function clearAdminJobsList(loading=false){
   const list=$('#admin-jobs-list');
   list.innerHTML=loading?skeletonRows(6):'';
   list.setAttribute('aria-busy',String(loading));
+  const viewport=$('#admin-jobs-scroll');
+  viewport.scrollTop=0;
+  viewport.scrollLeft=0;
   $('#admin-jobs-total').textContent='';
-  $('#admin-jobs-pager').replaceChildren();
   syncAdminJobsSelection();
 }
 function resetAdminJobManagement(){
   clearTimeout(adminJobsSearchTimer);
-  adminJobsSearchTimer=null;adminJobsMutation=null;adminJobsTotal=0;
+  adminJobsSearchTimer=null;adminJobsMutation=null;adminJobsTotal=0;adminJobsPageSize=20;
+  $('#admin-jobs-pager').replaceChildren();
   $('#admin-jobs-batch-status').textContent='';
   $('#admin-jobs-form').reset();
   clearAdminJobsList();
@@ -1216,14 +1274,41 @@ async function loadAdminJobs(polling=false){
     const visible=new Set(adminJobsCache.map(job=>job.id));
     for(const id of adminJobsSelected)if(!visible.has(id))adminJobsSelected.delete(id);
     root.setAttribute('aria-busy','false');
-    // 数据与筛选条件未变化时不重绘表格，避免轮询闪烁
-    const sig=JSON.stringify([key,adminJobsTotal,adminJobsCache.map(jobListSignature)]);
+    // 只比较表格实际展示的字段，任务进度等后台变化不打断浏览。
+    const sig=JSON.stringify([key,adminJobsCache.map(job=>[
+      job.id,job.createdAt,job.ownerDisplayName||job.ownerUsername,job.work?.title,job.work?.hashtags,
+      job.action,job.status,jobExpired(job)
+    ])]);
     if(sig!==lastAdminJobsSig){
       lastAdminJobsSig=sig;
+      const viewport=$('#admin-jobs-scroll'),{scrollTop,scrollLeft}=viewport;
+      const active=document.activeElement,row=active?.closest('tr[data-id],.admin-card[data-id]');
       renderAdminJobs(adminJobsCache);
-      $('#admin-jobs-total').textContent=`共 ${adminJobsTotal} 个任务`;
-      renderPager($('#admin-jobs-pager'),adminJobsPage,totalPages,p=>{adminJobsPage=p;void loadAdminJobs()});
+      if(row){
+        const replacement=[...root.querySelectorAll('[data-id]')]
+          .find(item=>item.tagName===row.tagName&&item.dataset.id===row.dataset.id);
+        const control=[...(replacement?.querySelectorAll('button[data-op]')||[])]
+          .find(button=>button.dataset.op===active.dataset.op);
+        (control||replacement?.querySelector('[data-admin-job-select]')||viewport).focus({preventScroll:true});
+      }
+      viewport.scrollTop=scrollTop;
+      viewport.scrollLeft=scrollLeft;
     }
+    const total=$('#admin-jobs-total'),totalText=`共 ${adminJobsTotal} 个任务`;
+    if(total.textContent!==totalText)total.textContent=totalText;
+    renderPager($('#admin-jobs-pager'),adminJobsPage,totalPages,p=>{
+      if(adminJobsSearchTimer!==null)return;
+      adminJobsPage=p;
+      void loadAdminJobs();
+    },{
+      label:'任务分页',
+      pageSize:adminJobsPageSize,
+      onPageSizeChange(size){
+        adminJobsPageSize=size;
+        adminJobsPage=1;
+        void loadAdminJobs();
+      }
+    });
     syncAdminJobsSelection();
   }catch(err){
     if(!current())return;

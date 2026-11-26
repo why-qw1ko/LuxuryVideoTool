@@ -587,6 +587,10 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 		if !adminAllowed(principal, w, r) {
 			return
 		}
+		if deps.Jobs == nil {
+			writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true)
+			return
+		}
 		jobID := r.PathValue("id")
 		job, err := deps.Jobs.GetAny(r.Context(), jobID)
 		if errors.Is(err, jobs.ErrNotFound) {
@@ -618,6 +622,10 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 		if !adminAllowed(principal, w, r) {
 			return
 		}
+		if deps.Jobs == nil {
+			writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true)
+			return
+		}
 		jobID := r.PathValue("id")
 		job, err := deps.Jobs.GetAny(r.Context(), jobID)
 		if errors.Is(err, jobs.ErrNotFound) {
@@ -647,6 +655,10 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 	protected.HandleFunc("DELETE /api/v1/admin/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		principal, _ := Principal(r.Context())
 		if !adminAllowed(principal, w, r) {
+			return
+		}
+		if deps.Jobs == nil {
+			writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true)
 			return
 		}
 		jobID := r.PathValue("id")

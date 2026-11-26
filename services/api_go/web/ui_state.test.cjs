@@ -282,6 +282,42 @@ test('后台任务请求乱序返回时，保留最新筛选结果', async () =>
   assert.equal(h.context.adminJobsTotal, 1);
 });
 
+test('后台任务轮询保留滚动和勾选，调整每页条数回到第一页', async () => {
+  const h = harness(adminListCode + adminJobActionsCode);
+  const viewport = h.node('#admin-jobs-scroll'), all = h.node('#admin-jobs-select-all');
+  let pagination;
+  h.context.renderPager = (_el, page, pages, go, options) => { pagination = {page, pages, go, options}; };
+  h.context.adminJobsPage = 2;
+  const initial = h.context.loadAdminJobs();
+  h.requests[0].resolve({jobs: [job('selected'), job('other')], total: 24});
+  await initial;
+  assert.equal(pagination.page, 2);
+  assert.equal(pagination.pages, 2);
+  all.checked = true;
+  all.listeners.change({target: all});
+  assert.equal(h.node('#admin-jobs-selected').textContent, '已选 2 项');
+  viewport.scrollTop = 80;
+
+  const poll = h.context.loadAdminJobs(true);
+  h.requests[1].resolve({jobs: [{...job('selected'), progress: 40}, job('other')], total: 24});
+  await poll;
+  assert.equal(h.rendered.length, 1);
+  assert.equal(viewport.scrollTop, 80);
+  assert.equal(all.checked, true);
+
+  pagination.options.onPageSizeChange(50);
+  const query = new URL(h.requests[2].url, 'http://example.test').searchParams;
+  assert.equal(query.get('limit'), '50');
+  assert.equal(query.get('offset'), '0');
+  assert.equal(viewport.scrollTop, 0);
+  assert.equal(h.node('#admin-jobs-selected').textContent, '已选 0 项');
+  h.requests[2].resolve({jobs: [job('selected'), job('other')], total: 24});
+  await tick();
+  assert.equal(pagination.page, 1);
+  assert.equal(pagination.options.pageSize, 50);
+  assert.equal(all.checked, false);
+});
+
 test('后台批量操作跳过不适用任务，搜索刷新后仍显示部分失败结果', async () => {
   const h = harness(adminListCode + adminJobActionsCode);
   h.context.adminOpen = true;

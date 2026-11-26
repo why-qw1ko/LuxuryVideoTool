@@ -76,6 +76,26 @@ select:disabled{color:var(--text-tertiary);background-color:var(--input);backgro
 .divider{display:flex;align-items:center;gap:12px;color:var(--text-tertiary);font-size:12px;margin:2px 0}
 .divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--border)}
 
+/* ================= 分页 ================= */
+.pager,.pager-pages,.pager-jump{display:flex;align-items:center;justify-content:center;gap:var(--space-1)}
+.pager,.pager-pages{flex-wrap:wrap;min-width:0}
+.pager{container:pagination / inline-size;gap:var(--space-2) var(--space-3);padding:var(--space-1) 0}
+.pager-pages{max-width:100%}
+.pager:empty{display:none}
+.pager button,.pager-ellipsis{display:inline-flex;align-items:center;justify-content:center;min-width:var(--control-sm);height:var(--control-sm);padding:0 var(--space-1);font-size:.875rem;font-variant-numeric:tabular-nums;line-height:1.25rem}
+.pager button{border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--text-secondary)}
+.pager button:hover:not(:disabled),.pager button[aria-current="page"]{border-color:var(--border-focus);background:var(--primary-light);color:var(--primary)}
+.pager button[aria-current="page"]{font-weight:600}
+.pager-ellipsis{min-width:var(--space-6);color:var(--text-tertiary)}
+.pager select,.pager input,#admin-console .pager select,#admin-console .pager .pager-jump input{height:var(--control-sm);font-size:.875rem;line-height:1.25rem}
+.pager select{width:auto}
+.pager .pager-jump input{width:4.5rem;padding:0 var(--space-2);text-align:center}
+.pager-jump button{padding:0 var(--space-2)}
+.master-list .pager-pages button{min-width:var(--space-6)}
+@container pagination (max-width:300px){
+  .pager-neighbor:not([aria-current="page"]),.pager-ellipsis{display:none}
+}
+
 /* ================= 面板 ================= */
 .panel{padding:28px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-card)}
 .narrow{max-width:448px;margin:64px auto}

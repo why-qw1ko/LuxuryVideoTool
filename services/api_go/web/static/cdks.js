@@ -41,7 +41,7 @@ function bindLoginForms(){
   }
 }
 
-const adminCDKPath='/api/v1/admin/cdks',adminCDKPageSize=25;
+const adminCDKPath='/api/v1/admin/cdks',adminCDKPageSizes=[10,25,50,100];
 const adminCDKStates={unused:['待使用','muted'],redeemed:['已登录','success'],revoked:['已吊销','danger']};
 const adminCDKConfirmations={
   reset:{
@@ -67,7 +67,7 @@ const adminCDKConfirmations={
     method:'DELETE',suffix:'/record',
   },
 };
-let adminCDKPage=1,adminCDKListID=0,adminCDKMutating=false,adminCDKItems=[];
+let adminCDKPage=1,adminCDKPageSize=25,adminCDKListID=0,adminCDKLoading=false,adminCDKMutating=false,adminCDKItems=[];
 const adminCDKSelected=new Set();
 let generatedCDKCodes=[];
 
@@ -85,24 +85,25 @@ function syncAdminCDKActions(){
   const selected=selectedAdminCDKs();
   $('#cdk-generate').disabled=adminCDKMutating||hasCodes;
   $('#admin-cdk-dismiss').disabled=adminCDKMutating;
-  $('#admin-cdk-refresh').disabled=adminCDKMutating;
-  show('#admin-cdk-batch',adminCDKItems.length>0);
-  $('#admin-cdk-selected').textContent=`已选 ${selected.length} 个`;
+  const locked=adminCDKLoading||adminCDKMutating;
+  $('#admin-cdk-refresh').disabled=locked;
+  const count=$('#admin-cdk-selected'),selectionText=`已选 ${selected.length} 个`;
+  if(count.textContent!==selectionText)count.textContent=selectionText;
   selectAll.checked=selected.length>0&&selected.length===adminCDKItems.length;
   selectAll.indeterminate=selected.length>0&&!selectAll.checked;
-  selectAll.disabled=adminCDKMutating||!adminCDKItems.length;
+  selectAll.disabled=locked||!adminCDKItems.length;
   for(const input of list.querySelectorAll('[data-cdk-select]')){
     input.checked=adminCDKSelected.has(input.dataset.cdkSelect);
-    input.disabled=adminCDKMutating;
+    input.disabled=locked;
   }
   for(const button of list.querySelectorAll('[data-cdk-action]')){
     const waitingForCopy=hasCodes&&button.dataset.cdkAction==='rotate';
-    button.disabled=adminCDKMutating||waitingForCopy;
+    button.disabled=locked||waitingForCopy;
     button.title=waitingForCopy?'请先保存并关闭当前显示的密钥':'';
   }
   for(const button of batch.querySelectorAll('[data-cdk-batch-action]')){
     const action=button.dataset.cdkBatchAction,waitingForCopy=hasCodes&&action==='rotate';
-    button.disabled=adminCDKMutating||waitingForCopy||!selected.some(item=>canManageCDK(item,action));
+    button.disabled=locked||waitingForCopy||!selected.some(item=>canManageCDK(item,action));
     button.title=waitingForCopy?'请先保存并关闭当前显示的密钥':'';
   }
 }
@@ -136,7 +137,9 @@ function appendGeneratedCDKs(items){
 
 function resetCDKView(){
   adminCDKPage=1;
+  adminCDKPageSize=25;
   adminCDKListID++;
+  adminCDKLoading=false;
   adminCDKMutating=false;
   adminCDKItems=[];
   adminCDKSelected.clear();
@@ -145,37 +148,50 @@ function resetCDKView(){
   $('#admin-cdk-status').textContent='';
   $('#admin-cdk-list').setAttribute('aria-busy','false');
   $('#admin-cdk-list').replaceChildren();
+  $('#admin-cdk-list').scrollTop=0;
   $('#admin-cdk-pager').replaceChildren();
   clearGeneratedCDKs();
 }
 
-async function loadAdminCDKs(page=adminCDKPage){
+async function loadAdminCDKs(page=adminCDKPage,pageSize=adminCDKPageSize){
   if(!adminOpen||session?.user?.role!=='admin')return;
-  if(page!==adminCDKPage)adminCDKSelected.clear();
-  adminCDKPage=page;
   const id=++adminCDKListID,epoch=sessionEpoch;
   const current=()=>id===adminCDKListID&&epoch===sessionEpoch;
   const status=$('#admin-cdk-status'),list=$('#admin-cdk-list'),pager=$('#admin-cdk-pager');
-  adminCDKItems=[];
+  adminCDKLoading=true;
   status.textContent='正在加载密钥…';
   list.setAttribute('aria-busy','true');
-  list.replaceChildren();
-  pager.replaceChildren();
   syncAdminCDKActions();
-  const query=new URLSearchParams({limit:adminCDKPageSize,offset:(page-1)*adminCDKPageSize});
+  const query=new URLSearchParams({limit:pageSize,offset:(page-1)*pageSize});
   try{
     const {items,total}=await api(`${adminCDKPath}?${query}`,{cache:'no-store'});
     if(!current())return;
-    const totalPages=Math.ceil(total/adminCDKPageSize);
-    if(page>1&&page>totalPages)return loadAdminCDKs(Math.max(1,totalPages));
+    const totalPages=Math.max(1,Math.ceil(total/pageSize));
+    if(page>totalPages)return loadAdminCDKs(totalPages,pageSize);
+    const pageChanged=page!==adminCDKPage||pageSize!==adminCDKPageSize;
+    if(pageChanged)adminCDKSelected.clear();
+    adminCDKPage=page;
+    adminCDKPageSize=pageSize;
     adminCDKItems=items||[];
     const visibleIDs=new Set(adminCDKItems.map(item=>item.id));
     for(const selected of adminCDKSelected)if(!visibleIDs.has(selected))adminCDKSelected.delete(selected);
     status.textContent=total?`共 ${total} 个密钥`:'暂无密钥';
+    const scrollTop=pageChanged?0:list.scrollTop;
     if(adminCDKItems.length)renderAdminCDKs(list,adminCDKItems);
-    renderPager(pager,page,totalPages,next=>{if(!adminCDKMutating)void loadAdminCDKs(next)});
+    else list.replaceChildren();
+    list.scrollTop=scrollTop;
+    renderPager(pager,page,totalPages,next=>{if(!adminCDKMutating)void loadAdminCDKs(next)},{
+      label:'CDK 分页',pageSize,pageSizes:adminCDKPageSizes,
+      onPageSizeChange(size){if(!adminCDKMutating)void loadAdminCDKs(1,size)}
+    });
   }catch(err){if(current())status.textContent=err.message}
-  finally{if(current())list.setAttribute('aria-busy','false')}
+  finally{
+    if(current()){
+      adminCDKLoading=false;
+      list.setAttribute('aria-busy','false');
+      syncAdminCDKActions();
+    }
+  }
 }
 
 function renderAdminCDKs(list,items){
@@ -206,14 +222,14 @@ function bindAdminCDKs(){
   const form=$('#admin-cdk-form'),generate=$('#cdk-generate');
   $('#admin-cdk-refresh').addEventListener('click',()=>void loadAdminCDKs());
   $('#admin-cdk-select-all').addEventListener('change',event=>{
-    if(adminCDKMutating)return;
+    if(adminCDKLoading||adminCDKMutating)return;
     adminCDKSelected.clear();
     if(event.target.checked)for(const item of adminCDKItems)adminCDKSelected.add(item.id);
     syncAdminCDKActions();
   });
   $('#admin-cdk-list').addEventListener('change',event=>{
     const id=event.target.dataset.cdkSelect;
-    if(adminCDKMutating||!adminCDKItems.some(item=>item.id===id))return;
+    if(adminCDKLoading||adminCDKMutating||!adminCDKItems.some(item=>item.id===id))return;
     if(event.target.checked)adminCDKSelected.add(id);
     else adminCDKSelected.delete(id);
     syncAdminCDKActions();
@@ -280,7 +296,7 @@ function bindAdminCDKs(){
   });
 
   async function manageCDKs(button,items,selectionSize){
-    if(!items.length||button.disabled||adminCDKMutating||!adminOpen||adminCurrentView!=='cdks'||session?.user?.role!=='admin')return;
+    if(!items.length||button.disabled||adminCDKLoading||adminCDKMutating||!adminOpen||adminCurrentView!=='cdks'||session?.user?.role!=='admin')return;
     const epoch=sessionEpoch,action=button.dataset.cdkBatchAction||button.dataset.cdkAction;
     const batch=selectionSize!==undefined;
     const skipped=batch?selectionSize-items.length:0;

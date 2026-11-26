@@ -252,6 +252,35 @@ test('批量修改额度只更新本页选中的未吊销密钥，分页后清�
   assert.equal(h.batchButtons.delete.disabled, true);
 });
 
+test('CDK 每页条数请求失败时保留当前页和选择，成功切换后清空选择', async () => {
+  const h = harness();
+  let pagination;
+  h.context.renderPager = (_el, page, pages, go, options) => { pagination = {page, pages, go, options}; };
+  h.context.readList = () => ({items: [card], total: 40});
+  await h.context.loadAdminCDKs(2);
+  h.selectPage(true);
+  h.list.scrollTop = 96;
+  assert.equal(pagination.page, 2);
+  assert.equal(pagination.options.pageSize, 25);
+
+  h.context.readList = () => { throw new Error('暂时无法读取列表'); };
+  pagination.options.onPageSizeChange(10);
+  await new Promise(setImmediate);
+  assert.match(h.requests.at(-1).url, /limit=10&offset=0$/);
+  assert.equal(pagination.page, 2);
+  assert.equal(h.selected.textContent, '已选 1 个');
+  assert.equal(h.list.scrollTop, 96);
+
+  h.context.readList = () => ({items: [card], total: 40});
+  pagination.options.onPageSizeChange(10);
+  await new Promise(setImmediate);
+  assert.equal(pagination.page, 1);
+  assert.equal(pagination.pages, 4);
+  assert.equal(pagination.options.pageSize, 10);
+  assert.equal(h.selected.textContent, '已选 0 个');
+  assert.equal(h.list.scrollTop, 0);
+});
+
 test('批量轮换部分失败后保留所有成功生成的密钥，并保留失败项的选择', async () => {
   const h = harness();
   const failed = {...card, id: 'no-update', prefix: 'CDK-FAILED'};

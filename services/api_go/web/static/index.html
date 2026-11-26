@@ -212,10 +212,10 @@
           </div>
         </section>
 
-        <section id="admin-view-jobs" class="admin-view panel hidden">
+        <section id="admin-view-jobs" class="admin-view admin-list-page panel hidden" aria-labelledby="admin-jobs-heading">
           <div class="admin-head">
             <div>
-              <h2>任务管理</h2>
+              <h2 id="admin-jobs-heading">任务管理</h2>
               <p class="meta">查看和管理所有用户的任务（跨用户操作会记录审计日志）。</p>
             </div>
             <span id="admin-jobs-total" class="meta"></span>
@@ -236,18 +236,22 @@
             </select>
             <select id="admin-jobs-user" aria-label="筛选所属用户"><option value="">全部用户</option></select>
           </form>
-          <div id="admin-jobs-batch" class="admin-batch hidden" role="group" aria-label="任务批量操作">
-            <label class="admin-batch-select"><input id="admin-jobs-select-all" type="checkbox">全选本页</label>
-            <span id="admin-jobs-selected" class="meta" role="status"></span>
+          <div id="admin-jobs-batch" class="admin-batch" role="group" aria-label="任务批量操作">
+            <div class="admin-batch-selection">
+              <label class="admin-batch-select"><input id="admin-jobs-select-all" type="checkbox" disabled>全选本页</label>
+              <span id="admin-jobs-selected" class="admin-selection-count" role="status">已选 0 项</span>
+            </div>
             <div class="admin-batch-actions">
-              <button type="button" class="ghost" data-admin-job-batch="cancel" disabled>批量取消</button>
-              <button type="button" class="ghost" data-admin-job-batch="retry" disabled>批量重试</button>
-              <button type="button" class="ghost danger" data-admin-job-batch="delete" disabled>批量删除</button>
+              <button type="button" class="ghost" data-admin-job-batch="cancel" aria-label="批量取消" disabled><span class="admin-batch-prefix" aria-hidden="true">批量</span>取消</button>
+              <button type="button" class="ghost" data-admin-job-batch="retry" aria-label="批量重试" disabled><span class="admin-batch-prefix" aria-hidden="true">批量</span>重试</button>
+              <button type="button" class="ghost danger" data-admin-job-batch="delete" aria-label="批量删除" disabled><span class="admin-batch-prefix" aria-hidden="true">批量</span>删除</button>
             </div>
           </div>
           <p id="admin-jobs-batch-status" class="admin-batch-status meta" role="status"></p>
-          <div id="admin-jobs-list" class="admin-list"></div>
-          <div id="admin-jobs-pager" class="pager"></div>
+          <div id="admin-jobs-scroll" class="admin-list-viewport" tabindex="0" role="region" aria-label="任务列表">
+            <div id="admin-jobs-list" class="admin-list"></div>
+          </div>
+          <nav id="admin-jobs-pager" class="pager" aria-label="任务分页"></nav>
         </section>
 
         <section id="admin-view-users" class="admin-view panel hidden" aria-labelledby="admin-users-heading">
@@ -281,7 +285,7 @@
           </template>
         </section>
 
-        <section id="admin-view-cdks" class="admin-view panel hidden" aria-labelledby="admin-cdk-heading">
+        <section id="admin-view-cdks" class="admin-view admin-list-page panel hidden" aria-labelledby="admin-cdk-heading">
           <div class="admin-head">
             <h2 id="admin-cdk-heading">CDK 管理</h2>
             <button id="admin-cdk-refresh" class="ghost" type="button">刷新列表</button>
@@ -302,19 +306,21 @@
             </div>
           </div>
           <p id="admin-cdk-status" class="meta" role="status"></p>
-          <div id="admin-cdk-batch" class="admin-batch hidden" role="group" aria-label="CDK 批量操作">
-            <label class="admin-batch-select"><input id="admin-cdk-select-all" type="checkbox">全选本页</label>
-            <span id="admin-cdk-selected" class="meta" role="status"></span>
+          <div id="admin-cdk-batch" class="admin-batch" role="group" aria-label="CDK 批量操作">
+            <div class="admin-batch-selection">
+              <label class="admin-batch-select"><input id="admin-cdk-select-all" type="checkbox" disabled>全选本页</label>
+              <span id="admin-cdk-selected" class="admin-selection-count" role="status">已选 0 个</span>
+            </div>
             <div class="admin-batch-actions">
-              <button type="button" class="ghost" data-cdk-batch-action="quota" disabled>批量修改次数</button>
-              <button type="button" class="ghost" data-cdk-batch-action="reset" disabled>批量重置</button>
-              <button type="button" class="ghost" data-cdk-batch-action="rotate" disabled>批量轮换</button>
-              <button type="button" class="ghost danger" data-cdk-batch-action="revoke" disabled>批量吊销</button>
-              <button type="button" class="ghost danger" data-cdk-batch-action="delete" disabled>批量删除</button>
+              <button type="button" class="ghost" data-cdk-batch-action="quota" aria-label="批量修改次数" disabled><span class="admin-batch-prefix" aria-hidden="true">批量</span>修改次数</button>
+              <button type="button" class="ghost" data-cdk-batch-action="reset" aria-label="批量重置" disabled><span class="admin-batch-prefix" aria-hidden="true">批量</span>重置</button>
+              <button type="button" class="ghost" data-cdk-batch-action="rotate" aria-label="批量轮换" disabled><span class="admin-batch-prefix" aria-hidden="true">批量</span>轮换</button>
+              <button type="button" class="ghost danger" data-cdk-batch-action="revoke" aria-label="批量吊销" disabled><span class="admin-batch-prefix" aria-hidden="true">批量</span>吊销</button>
+              <button type="button" class="ghost danger" data-cdk-batch-action="delete" aria-label="批量删除" disabled><span class="admin-batch-prefix" aria-hidden="true">批量</span>删除</button>
             </div>
           </div>
-          <div id="admin-cdk-list"></div>
-          <div id="admin-cdk-pager" class="pager"></div>
+          <div id="admin-cdk-list" class="admin-list-viewport" tabindex="0" role="region" aria-label="CDK 列表"></div>
+          <nav id="admin-cdk-pager" class="pager" aria-label="CDK 分页"></nav>
         </section>
 
         <section id="admin-view-usage" class="admin-view panel hidden" aria-labelledby="admin-usage-heading">

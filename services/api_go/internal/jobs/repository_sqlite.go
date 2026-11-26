@@ -114,72 +114,47 @@ func jobListFilter(input ListInput, withOwner bool) (string, []any) {
 	return strings.Join(where, " AND "), args
 }
 
-func (r *SQLiteRepository) countJobs(ctx context.Context, clause string, args []any) (int, error) {
+func countJobs(ctx context.Context, tx *sql.Tx, clause string, args []any) (int, error) {
 	var total int
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*)`+jobListFrom+` WHERE `+clause, args...).Scan(&total); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*)`+jobListFrom+` WHERE `+clause, args...).Scan(&total); err != nil {
 		return 0, fmt.Errorf("count jobs: %w", err)
 	}
 	return total, nil
 }
 
 func (r *SQLiteRepository) List(ctx context.Context, input ListInput) (JobPage, error) {
-	clause, args := jobListFilter(input, false)
-	total, err := r.countJobs(ctx, clause, args)
-	if err != nil {
-		return JobPage{}, err
-	}
-	query := jobSelect + ` WHERE ` + clause + ` ORDER BY j.created_at DESC, j.id DESC LIMIT ? OFFSET ?`
-	args = append(args, input.Limit, input.Offset)
-	rows, err := r.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return JobPage{}, fmt.Errorf("list jobs: %w", err)
-	}
-	defer rows.Close()
-	items := make([]Job, 0, input.Limit)
-	for rows.Next() {
-		job, scanErr := scanJob(rows)
-		if scanErr != nil {
-			return JobPage{}, scanErr
-		}
-		items = append(items, job)
-	}
-	if err := rows.Err(); err != nil {
-		return JobPage{}, err
-	}
-	for index := range items {
-		if items[index].Status != "completed" {
-			continue
-		}
-		files, filesErr := r.FindFiles(ctx, input.UserID, items[index].ID)
-		if filesErr != nil {
-			return JobPage{}, filesErr
-		}
-		if items[index].Result == nil {
-			items[index].Result = map[string]any{}
-		}
-		if result, ok := items[index].Result.(map[string]any); ok {
-			result["files"] = files
-		}
-	}
-	return JobPage{Items: items, Total: total, Limit: input.Limit, Offset: input.Offset}, nil
+	return r.listJobs(ctx, input, false)
 }
 
 func (r *SQLiteRepository) ListAll(ctx context.Context, input ListInput) (JobPage, error) {
-	clause, args := jobListFilter(input, true)
-	total, err := r.countJobs(ctx, clause, args)
+	return r.listJobs(ctx, input, true)
+}
+
+func (r *SQLiteRepository) listJobs(ctx context.Context, input ListInput, withOwner bool) (JobPage, error) {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return JobPage{}, err
 	}
-	query := jobSelectOwner + ` WHERE ` + clause + ` ORDER BY j.created_at DESC, j.id DESC LIMIT ? OFFSET ?`
-	args = append(args, input.Limit, input.Offset)
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	defer tx.Rollback()
+
+	clause, args := jobListFilter(input, withOwner)
+	total, err := countJobs(ctx, tx, clause, args)
+	if err != nil {
+		return JobPage{}, err
+	}
+	selectJobs, scan := jobSelect, scanJob
+	if withOwner {
+		selectJobs, scan = jobSelectOwner, scanJobOwner
+	}
+	query := selectJobs + ` WHERE ` + clause + ` ORDER BY j.created_at DESC, j.id DESC LIMIT ? OFFSET ?`
+	rows, err := tx.QueryContext(ctx, query, append(args, input.Limit, input.Offset)...)
 	if err != nil {
 		return JobPage{}, fmt.Errorf("list jobs: %w", err)
 	}
 	defer rows.Close()
 	items := make([]Job, 0, input.Limit)
 	for rows.Next() {
-		job, scanErr := scanJobOwner(rows)
+		job, scanErr := scan(rows)
 		if scanErr != nil {
 			return JobPage{}, scanErr
 		}
@@ -189,17 +164,18 @@ func (r *SQLiteRepository) ListAll(ctx context.Context, input ListInput) (JobPag
 		return JobPage{}, err
 	}
 	for index := range items {
-		if items[index].Status != "completed" {
+		job := &items[index]
+		if job.Status != "completed" {
 			continue
 		}
-		files, filesErr := r.FindFiles(ctx, items[index].UserID, items[index].ID)
+		files, filesErr := findJobFiles(ctx, tx, job.UserID, job.ID)
 		if filesErr != nil {
 			return JobPage{}, filesErr
 		}
-		if items[index].Result == nil {
-			items[index].Result = map[string]any{}
+		if job.Result == nil {
+			job.Result = map[string]any{}
 		}
-		if result, ok := items[index].Result.(map[string]any); ok {
+		if result, ok := job.Result.(map[string]any); ok {
 			result["files"] = files
 		}
 	}
@@ -207,8 +183,14 @@ func (r *SQLiteRepository) ListAll(ctx context.Context, input ListInput) (JobPag
 }
 
 func (r *SQLiteRepository) ListSummaries(ctx context.Context, input ListInput, withOwner bool) (JobSummaryPage, error) {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return JobSummaryPage{}, err
+	}
+	defer tx.Rollback()
+
 	clause, args := jobListFilter(input, withOwner)
-	total, err := r.countJobs(ctx, clause, args)
+	total, err := countJobs(ctx, tx, clause, args)
 	if err != nil {
 		return JobSummaryPage{}, err
 	}
@@ -230,7 +212,7 @@ func (r *SQLiteRepository) ListSummaries(ctx context.Context, input ListInput, w
 	SELECT j.id, j.action, j.status, j.progress, j.created_at, j.updated_at,
 		j.title, j.author_name, j.duration_ms, j.hashtags, j.username, j.display_name, ` + jobMediaExpiryColumn + `
 	FROM page j ORDER BY j.created_at DESC, j.id DESC`
-	rows, err := r.db.QueryContext(ctx, query, append(args, input.Limit, input.Offset)...)
+	rows, err := tx.QueryContext(ctx, query, append(args, input.Limit, input.Offset)...)
 	if err != nil {
 		return JobSummaryPage{}, fmt.Errorf("list job summaries: %w", err)
 	}
@@ -776,7 +758,15 @@ func (r *SQLiteRepository) FinishStep(ctx context.Context, stepID, status, code,
 }
 
 func (r *SQLiteRepository) FindFiles(ctx context.Context, userID, jobID string) ([]JobFile, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id, kind, original_name, mime_type, size_bytes, expires_at FROM files WHERE user_id = ? AND job_id = ? AND deleted_at IS NULL ORDER BY created_at`, userID, jobID)
+	return findJobFiles(ctx, r.db, userID, jobID)
+}
+
+type jobFileQuerier interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func findJobFiles(ctx context.Context, querier jobFileQuerier, userID, jobID string) ([]JobFile, error) {
+	rows, err := querier.QueryContext(ctx, `SELECT id, kind, original_name, mime_type, size_bytes, expires_at FROM files WHERE user_id = ? AND job_id = ? AND deleted_at IS NULL ORDER BY created_at`, userID, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("find job files: %w", err)
 	}

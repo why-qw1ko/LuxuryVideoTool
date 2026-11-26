@@ -201,6 +201,25 @@ func TestAdminUsersAndJobsFlow(t *testing.T) {
 	if stats.Code != http.StatusOK || !strings.Contains(stats.Body.String(), `"totalJobs":1`) || !strings.Contains(stats.Body.String(), `"todayJobs":1`) {
 		t.Fatalf("admin stats status = %d, body = %s", stats.Code, stats.Body.String())
 	}
+	for _, path := range []string{"/api/v1/admin/jobs?limit=100&offset=1", "/api/v1/admin/jobs?view=summary&limit=100&offset=1"} {
+		response := performJSON(handler, http.MethodGet, path, nil, pair.AccessToken)
+		var page struct {
+			Jobs   []jobs.JobSummary `json:"jobs"`
+			Total  int               `json:"total"`
+			Limit  int               `json:"limit"`
+			Offset int               `json:"offset"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil || response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, decode error = %v", path, response.Code, err)
+		}
+		if page.Total != 1 || page.Limit != 100 || page.Offset != 1 || page.Jobs == nil || len(page.Jobs) != 0 {
+			t.Fatalf("%s unexpected page: %+v", path, page)
+		}
+	}
+	invalidPage := performJSON(handler, http.MethodGet, "/api/v1/admin/jobs?view=summary&limit=101", nil, pair.AccessToken)
+	if invalidPage.Code != http.StatusBadRequest {
+		t.Fatalf("invalid admin page status = %d, want 400", invalidPage.Code)
+	}
 	detail := performJSON(handler, http.MethodGet, "/api/v1/admin/jobs/job-other", nil, pair.AccessToken)
 	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"id":"job-other"`) {
 		t.Fatalf("admin job detail status = %d, body = %s", detail.Code, detail.Body.String())
@@ -250,6 +269,40 @@ func TestAdminUsersAndJobsFlow(t *testing.T) {
 	}
 }
 
+func TestAdminJobEndpointsWithoutJobsService(t *testing.T) {
+	service, _, closeDB := testAuthService(t)
+	defer closeDB()
+	const username, password = "admin", "AdminPass!"
+	if _, err := service.CreateUser(context.Background(), username, "Admin", password, auth.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	pair, err := service.Login(context.Background(), auth.LoginInput{
+		Username: username, Password: password,
+		Device: auth.Device{ID: "pc", Name: "PC", Platform: "windows", AppVersion: "1.0.0"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler := New(Dependencies{Auth: service})
+	for _, route := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/admin/jobs/job-1/cancel"},
+		{http.MethodPost, "/api/v1/admin/jobs/job-1/retry"},
+		{http.MethodDelete, "/api/v1/admin/jobs/job-1"},
+	} {
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
+			response := performJSON(handler, route.method, route.path, nil, pair.AccessToken)
+			var envelope errorEnvelope
+			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil || response.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want 503; decode error = %v", response.Code, err)
+			}
+			if envelope.Error.Code != "SERVICE_NOT_READY" || !envelope.Error.Retryable || envelope.Error.RequestID == "" {
+				t.Fatalf("unexpected error: %+v", envelope.Error)
+			}
+		})
+	}
+}
+
 func TestJobsListPagination(t *testing.T) {
 	service, db, closeDB := testAuthService(t)
 	defer closeDB()
@@ -266,7 +319,7 @@ func TestJobsListPagination(t *testing.T) {
 			InputText: "https://www.douyin.com/video/" + fmt.Sprint(index), InputURL: "https://www.douyin.com/video/",
 			Action: "download", Status: "queued", StatusMessage: "等待处理",
 			IdempotencyKey: fmt.Sprintf("key-%02d", index), MaxAttempts: 3,
-			CreatedAt: now.Add(time.Duration(index) * time.Minute), UpdatedAt: now,
+			CreatedAt: now.Add(time.Duration(index/2) * time.Minute), UpdatedAt: now,
 		}
 		if err := jobRepository.CreateQueued(context.Background(), job); err != nil {
 			t.Fatal(err)
@@ -307,5 +360,10 @@ func TestJobsListPagination(t *testing.T) {
 	}
 	if len(secondPage.Jobs) != 5 {
 		t.Fatalf("second page item count = %d, want 5", len(secondPage.Jobs))
+	}
+	for index, job := range append(firstPage.Jobs, secondPage.Jobs...) {
+		if want := fmt.Sprintf("job-%02d", 24-index); job.ID != want {
+			t.Fatalf("job[%d] = %s, want %s", index, job.ID, want)
+		}
 	}
 }

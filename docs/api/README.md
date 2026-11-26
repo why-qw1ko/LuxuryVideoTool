@@ -52,7 +52,7 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 
 ### CDK 管理
 
-- `GET /api/v1/admin/cdks?limit=25&offset=0` 返回 `{items, total, requestId}`，每条记录包含 `id`、`prefix`、`taskLimit`、`taskCount`、`status` 和时间字段。完整密钥只随生成和轮换响应返回。
+- `GET /api/v1/admin/cdks?limit=25&offset=0` 返回 `{items, total, requestId}`，每条记录包含 `id`、`prefix`、`taskLimit`、`taskCount`、`status` 和时间字段。完整密钥只随生成和轮换响应返回。CDK 与后台任务列表均支持 `limit` 取 1 至 100（默认 50），`offset` 为从 0 开始的记录偏移（默认 0）。分页参数非法时返回 `400 INVALID_REQUEST`。
 - `POST /api/v1/admin/cdks` 接收 `{count, taskLimit}`。一次生成 1 至 100 个密钥，每个密钥可分配 1 至 100000 次累计新建任务额度。
 - `PATCH /api/v1/admin/cdks/{id}` 接收 `{taskLimit}`，修改该密钥的任务总额度，已用次数保留。
 - `POST /api/v1/admin/cdks/{id}/reset` 将累计已用次数清零，保留总额度、每日用量和任务历史，返回 `{item, requestId}`。
@@ -64,7 +64,7 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 ### 任务管理（跨用户）
 
 - `GET /api/v1/admin/users?includeDeletedJobOwners=1`：附带 `deletedJobOwners`，包含仍有任务的已删除账号的 ID、用户名和显示名。可用账号 ID 按 `userId` 筛选历史任务。
-- `GET /api/v1/admin/jobs`：跨用户任务列表，支持 `q/status/action/userId/limit/offset` 筛选分页；返回 `ownerUsername`/`ownerDisplayName`。
+- `GET /api/v1/admin/jobs` 支持使用 `q/status/action/userId` 筛选，使用 `limit/offset` 分页。返回 `{jobs, total, limit, offset, requestId}`，其中 `total` 是符合筛选条件的任务总数。每条任务含 `ownerUsername`、`ownerDisplayName`。指定 `view=summary` 时仅返回列表所需字段。
 - `GET /api/v1/admin/jobs/{id}`：管理员视角查看任意任务详情（含媒体文件）。
 - `POST /api/v1/admin/jobs/{id}/images/archive-download`：为任意用户已完成的图文任务获取配图 ZIP 短期下载地址。返回 `{downloadUrl, expiresAt}`，有效期 5 分钟。
 - `POST /api/v1/admin/jobs/{id}/cancel`、`POST /api/v1/admin/jobs/{id}/retry`、`DELETE /api/v1/admin/jobs/{id}`：管理员取消、重试、删除任意用户的任务。

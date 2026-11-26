@@ -1,5 +1,5 @@
 /* ================= 后台布局与导航 ================= */
-#admin-console{flex:1;min-height:0;min-width:0;width:100%;margin:0;display:grid;grid-template-columns:224px minmax(0,1fr)}
+#admin-console{flex:1;min-height:0;min-width:0;width:100%;margin:0;display:grid;grid-template-columns:224px minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 .admin-sidebar{display:flex;flex-direction:column;gap:24px;padding:24px 16px 16px;background:var(--sidebar);border-right:1px solid var(--border);min-height:0;overflow-y:auto}
 .admin-nav{display:flex;flex-direction:column;gap:6px}
 .admin-nav button{display:flex;align-items:center;gap:10px;min-height:40px;justify-content:flex-start;text-align:left;padding:10px 14px;border:0;border-radius:4px;background:transparent;color:var(--text-secondary);font-weight:400;transition:background .14s ease,color .14s ease}
@@ -53,12 +53,14 @@
 #admin-console input:not([type="checkbox"]):focus,#admin-console select:focus{border-color:var(--border-focus);box-shadow:0 0 0 2px var(--active)}
 .admin-form button,#admin-refresh-stats{min-height:40px;padding:0 16px;border-radius:4px;white-space:nowrap;box-shadow:none}
 .admin-batch{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--input)}
+.admin-batch-selection{display:flex;align-items:center;gap:12px;white-space:nowrap}
+.admin-selection-count{color:var(--text-secondary);font-size:13px;line-height:20px;font-variant-numeric:tabular-nums}
 .admin-batch-select,.admin-job-selection{display:inline-flex;align-items:center;gap:8px;min-height:32px;font-size:14px;line-height:20px;cursor:pointer}
 .admin-batch-select input,.admin-selection-checkbox{display:inline-block;flex-shrink:0;width:16px;height:16px;margin:0;padding:0;accent-color:var(--primary);vertical-align:middle;cursor:pointer}
 .admin-batch-select input:focus-visible,.admin-selection-checkbox:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
 .admin-batch-select input:disabled,.admin-selection-checkbox:disabled{cursor:not-allowed}
 .admin-batch-actions{display:flex;flex-wrap:wrap;gap:8px}
-.admin-batch-actions .ghost{min-height:32px;padding:4px 12px;background:var(--card);font-size:14px;line-height:20px}
+.admin-batch-actions .ghost{gap:0;min-height:32px;padding:4px 12px;background:var(--card);font-size:14px;line-height:20px}
 .admin-batch-actions .ghost:hover:not(:disabled){background:var(--hover)}
 .admin-batch-actions .danger{color:var(--danger)}
 .admin-batch-actions .danger:hover:not(:disabled){background:var(--danger-light);border-color:var(--danger)}
@@ -66,6 +68,13 @@
 .admin-batch-status:empty{display:none}
 .admin-list{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;gap:12px;overflow:hidden}
 .admin-table-wrap{flex:1;min-height:0;overflow:auto;border:1px solid var(--border);border-radius:4px}
+.admin-view.panel.admin-list-page{gap:12px;overflow:hidden}
+.admin-list-viewport{flex:1 1 0;min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.admin-list-viewport:focus-visible{outline-offset:-2px}
+.admin-list-viewport>.admin-list{display:block;overflow:visible}
+.admin-list-viewport .admin-table-wrap{overflow:visible;max-height:none}
+.admin-list-viewport :is(tr,.admin-card,.admin-cdk-row):has(.admin-selection-checkbox:checked){background:var(--primary-light)}
+.admin-list-page>.pager:empty{display:none}
 .admin-table{width:100%;min-width:880px;border-collapse:separate;border-spacing:0;font-size:13px}
 .admin-table th,.admin-table td{height:48px;padding:12px 16px;text-align:left;border-bottom:1px solid var(--border);vertical-align:middle}
 .admin-table th{position:sticky;top:0;z-index:1;background:var(--input);color:var(--text-secondary);font-weight:500;white-space:nowrap}
@@ -88,13 +97,10 @@
 .admin-job-status{display:flex;flex-direction:column;align-items:flex-start;gap:4px;white-space:nowrap}
 .admin-card-head .admin-job-status{align-items:flex-end;flex-shrink:0}
 .admin-ops-row,.admin-card-actions{display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap}
-.admin-ops button,.admin-card-actions button,.pager button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:4px 10px;border:1px solid var(--border);border-radius:4px;background:var(--card);color:var(--text-secondary);font-weight:400;font-size:12px;line-height:1.4;transition:background .14s ease,border-color .14s ease,color .14s ease}
-.admin-ops button:hover,.admin-card-actions button:hover,.pager button:not(:disabled):hover{background:var(--primary-light);color:var(--primary);border-color:var(--border-focus)}
+.admin-ops button,.admin-card-actions button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:4px 10px;border:1px solid var(--border);border-radius:4px;background:var(--card);color:var(--text-secondary);font-weight:400;font-size:12px;line-height:1.4;transition:background .14s ease,border-color .14s ease,color .14s ease}
+.admin-ops button:hover,.admin-card-actions button:hover{background:var(--primary-light);color:var(--primary);border-color:var(--border-focus)}
 .admin-ops button.danger,.admin-card-actions button.danger{color:var(--danger)}
 .admin-ops button.danger:hover,.admin-card-actions button.danger:hover{background:var(--danger-light);border-color:var(--danger);color:var(--danger)}
-.pager{display:flex;align-items:center;justify-content:center;gap:12px;padding:4px 0 0}
-.pager button{padding:4px 12px}
-.pager-info{font-size:12px;color:var(--text-secondary);white-space:nowrap}
 .admin-card-list{display:none}
 .admin-card{display:grid;gap:12px;padding:16px;background:var(--card);border:1px solid var(--border);border-radius:6px}
 .admin-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
@@ -196,12 +202,19 @@
   .chart-card{height:340px}
   .admin-form{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
   .admin-view.panel{gap:20px}
+  #admin-console:has(.admin-list-page:not(.hidden)){height:calc(100dvh - 65px)}
+  .admin-content:has(>.admin-list-page:not(.hidden)){height:100%;overflow:hidden}
   .admin-table-wrap{max-height:70dvh}
 }
 @media(max-width:620px){
   .admin-content{padding:24px 16px}
   .admin-view{gap:20px}
   .admin-view.panel{padding:18px}
+  #admin-console:has(.admin-list-page:not(.hidden)){height:calc(100dvh - 61px)}
+  .admin-content:has(>.admin-list-page:not(.hidden)){padding:8px 8px max(8px,env(safe-area-inset-bottom))}
+  .admin-view.panel.admin-list-page{padding:12px;gap:8px}
+  .admin-list-page .admin-filter{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .admin-list-page .admin-filter .search-wrap{grid-column:1/-1}
   .admin-filter,.admin-form{grid-template-columns:minmax(0,1fr)}
   .overview-details,.provider-policy{grid-template-columns:minmax(0,1fr)}
   .provider-card-actions button{min-height:40px}
@@ -210,7 +223,10 @@
   .stat-card strong{font-size:28px}
   .chart-card{height:320px;padding:0 16px 16px}
   .chart-head{padding:16px 0}
-  .admin-batch-actions .ghost{min-height:40px}
+  .admin-batch{padding:4px 8px;gap:4px 12px}
+  .admin-batch-actions{gap:4px}
+  .admin-batch-prefix{display:none}
+  .admin-batch-actions .ghost{min-height:32px;padding-inline:8px;font-size:12px}
   .admin-list{overflow:visible}
   .admin-table-wrap{display:none}
   .admin-card-list{display:grid;gap:12px}

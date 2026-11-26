@@ -3,8 +3,8 @@
 #cdk-login-form{gap:20px}
 #cdk-login-form>button{margin-top:4px;width:100%}
 
-#admin-view-cdks{--cdk-action-width:288px;overflow-y:auto}
-#admin-view-cdks>*{flex-shrink:0}
+#admin-view-cdks{--cdk-action-width:288px}
+#admin-view-cdks>.admin-cdk-form,#admin-view-cdks>#admin-cdk-hint,#admin-view-cdks>#admin-cdk-status{flex-shrink:0}
 .admin-cdk-form{display:grid;grid-template-columns:repeat(2,minmax(0,176px)) auto;align-items:end;justify-content:start;gap:var(--space-3)}
 .admin-cdk-form label{min-width:0}
 .admin-cdk-form button{min-height:var(--control-h)}
@@ -44,8 +44,11 @@
   .admin-cdk-row .admin-card-actions{grid-column:1/-1}
 }
 @media(max-width:620px){
-  .admin-cdk-form{grid-template-columns:repeat(2,minmax(0,1fr));justify-content:stretch}
-  .admin-cdk-form button{grid-column:1/-1;justify-self:start}
+  .admin-cdk-form{grid-template-columns:minmax(0,1fr) minmax(0,1.5fr) auto;justify-content:stretch;gap:8px}
+  .admin-cdk-form button{padding-inline:8px;white-space:nowrap}
+  #admin-view-cdks:has(>.admin-cdk-generated:not(.hidden))>:is(.admin-cdk-form,#admin-cdk-hint){display:none}
+  .admin-cdk-generated{max-height:24dvh;padding:8px;gap:4px;overflow-y:auto}
+  #admin-cdk-hint,#admin-cdk-save-hint{font-size:12px}
   .admin-cdk-row dl{grid-template-columns:repeat(2,minmax(0,1fr))}
   .admin-cdk-row .admin-card-actions{grid-template-columns:repeat(2,minmax(0,1fr));width:100%}
   .admin-cdk-row .admin-card-actions button{min-height:var(--control-h)}
