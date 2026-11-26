@@ -60,6 +60,7 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 
 - `GET /api/v1/admin/jobs`：跨用户任务列表，支持 `q/status/action/userId/limit/offset` 筛选分页；返回 `ownerUsername`/`ownerDisplayName`。
 - `GET /api/v1/admin/jobs/{id}`：管理员视角查看任意任务详情（含媒体文件）。
+- `POST /api/v1/admin/jobs/{id}/images/archive-download`：为任意用户已完成的图文任务获取配图 ZIP 短期下载地址。返回 `{downloadUrl, expiresAt}`，有效期 5 分钟。
 - `POST /api/v1/admin/jobs/{id}/cancel`、`POST /api/v1/admin/jobs/{id}/retry`、`DELETE /api/v1/admin/jobs/{id}`：管理员取消、重试、删除任意用户的任务。
 - `GET /api/v1/admin/files/{id}`：管理员下载任意用户的媒体文件。
 

@@ -194,20 +194,18 @@ func (r *SQLiteRepository) ListSummaries(ctx context.Context, input ListInput, w
 		displayName = `COALESCE(u.display_name, '')`
 		from += ` LEFT JOIN users u ON u.id = j.user_id`
 	}
-	// Aggregate expiry only for jobs on this page. The ordinary list and detail keep their full file results.
+	// Aggregate expiry only for jobs on this page.
 	query := `WITH page AS (
-		SELECT j.id, j.user_id, j.action, j.status, j.progress, j.created_at, j.updated_at,
+		SELECT j.id, j.user_id, j.action, j.status, j.progress, j.created_at, j.updated_at, j.completed_at,
 			w.title, w.author_name,
 			CASE WHEN json_valid(w.metadata_json) THEN CAST(json_extract(w.metadata_json, '$.durationMs') AS INTEGER) END AS duration_ms,
 			CASE WHEN json_valid(w.metadata_json) THEN json_extract(w.metadata_json, '$.hashtags') END AS hashtags,
 			` + username + ` AS username, ` + displayName + ` AS display_name
 		` + from + ` WHERE ` + clause + ` ORDER BY j.created_at DESC, j.id DESC LIMIT ? OFFSET ?
 	)
-	SELECT page.id, page.action, page.status, page.progress, page.created_at, page.updated_at,
-		page.title, page.author_name, page.duration_ms, page.hashtags, page.username, page.display_name, MIN(f.expires_at)
-	FROM page LEFT JOIN files f ON f.job_id = page.id AND f.user_id = page.user_id
-		AND f.deleted_at IS NULL AND page.status = 'completed'
-	GROUP BY page.id ORDER BY page.created_at DESC, page.id DESC`
+	SELECT j.id, j.action, j.status, j.progress, j.created_at, j.updated_at,
+		j.title, j.author_name, j.duration_ms, j.hashtags, j.username, j.display_name, ` + jobMediaExpiryColumn + `
+	FROM page j ORDER BY j.created_at DESC, j.id DESC`
 	rows, err := r.db.QueryContext(ctx, query, append(args, input.Limit, input.Offset)...)
 	if err != nil {
 		return JobSummaryPage{}, fmt.Errorf("list job summaries: %w", err)
@@ -392,11 +390,20 @@ func (r *SQLiteRepository) Fail(ctx context.Context, jobID, owner, code, message
 	return changed(result)
 }
 
+// A soft-deleted file still marks the task expired if it was cleaned up at or
+// after its deadline and was still present when the job completed.
+const jobMediaExpiryColumn = `CASE WHEN j.status = 'completed' THEN (
+	SELECT MIN(f.expires_at) FROM files f
+	WHERE f.job_id = j.id AND f.user_id = j.user_id AND f.kind IN ('video', 'image', 'animated', 'music')
+		AND (f.deleted_at IS NULL OR (f.deleted_at >= f.expires_at AND f.deleted_at >= COALESCE(j.completed_at, j.created_at)))
+) END`
+
 const jobSelectColumns = `SELECT j.id, j.user_id, j.input_text, j.input_url, j.action, j.status, j.progress,
 		j.status_message, j.idempotency_key, j.force_refresh, j.error_code, j.error_message,
 		j.created_at, j.updated_at, j.completed_at, j.attempt_count, j.max_attempts, j.lease_owner, j.result_json, j.options_json,
 		w.id, w.douyin_work_id, w.content_type, w.canonical_url, w.author_id, w.author_name,
-		w.title, w.description, w.cover_url, w.published_at, w.metadata_json, w.resolver_name, w.resolver_version, w.resolved_at
+		w.title, w.description, w.cover_url, w.published_at, w.metadata_json, w.resolver_name, w.resolver_version, w.resolved_at,
+		` + jobMediaExpiryColumn + `
 `
 const jobSelect = jobSelectColumns + `FROM jobs j LEFT JOIN works w ON w.id = j.work_id`
 const jobSelectOwner = jobSelectColumns + `, u.username_normalized, u.display_name
@@ -433,7 +440,7 @@ func scanJobFields(row scanner, withOwner bool) (Job, error) {
 	var force int
 	var errorCode, errorMessage sql.NullString
 	var created, updated int64
-	var completed sql.NullInt64
+	var completed, mediaExpiry sql.NullInt64
 	var leaseOwner sql.NullString
 	var resultJSON sql.NullString
 	var optionsJSON string
@@ -443,7 +450,7 @@ func scanJobFields(row scanner, withOwner bool) (Job, error) {
 		&job.StatusMessage, &job.IdempotencyKey, &force, &errorCode, &errorMessage, &created, &updated, &completed,
 		&job.AttemptCount, &job.MaxAttempts, &leaseOwner, &resultJSON, &optionsJSON,
 		&workID, &douyinID, &kind, &canonical, &authorID, &authorName, &title, &description, &cover, &published, &metadata,
-		&resolverName, &resolverVersion, &resolved}
+		&resolverName, &resolverVersion, &resolved, &mediaExpiry}
 	if withOwner {
 		dest = append(dest, &job.OwnerUsername, &job.OwnerDisplayName)
 	}
@@ -471,6 +478,10 @@ func scanJobFields(row scanner, withOwner bool) (Job, error) {
 		job.Error = &JobError{Code: errorCode.String, Message: errorMessage.String}
 	}
 	job.CreatedAt, job.UpdatedAt = time.UnixMilli(created).UTC(), time.UnixMilli(updated).UTC()
+	if mediaExpiry.Valid {
+		value := time.UnixMilli(mediaExpiry.Int64).UTC()
+		job.MediaExpiresAt = &value
+	}
 	if completed.Valid {
 		value := time.UnixMilli(completed.Int64).UTC()
 		job.CompletedAt = &value

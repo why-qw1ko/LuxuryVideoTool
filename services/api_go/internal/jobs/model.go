@@ -39,6 +39,7 @@ type Job struct {
 	ErrorCode      string         `json:"-"`
 	ErrorMessage   string         `json:"-"`
 	Result         any            `json:"result"`
+	MediaExpiresAt *time.Time     `json:"mediaExpiresAt,omitempty"`
 	Error          *JobError      `json:"error"`
 	CreatedAt      time.Time      `json:"createdAt"`
 	UpdatedAt      time.Time      `json:"updatedAt"`

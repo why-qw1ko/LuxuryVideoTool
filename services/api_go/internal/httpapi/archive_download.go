@@ -23,14 +23,17 @@ func archiveNoCache(w http.ResponseWriter) {
 	w.Header().Set("Pragma", "no-cache")
 }
 
-func handleArchiveDownloadLink(deps Dependencies, w http.ResponseWriter, r *http.Request) {
+func handleArchiveDownloadLink(deps Dependencies, w http.ResponseWriter, r *http.Request, admin bool) {
 	archiveNoCache(w)
+	principal, _ := Principal(r.Context())
+	if admin && !adminAllowed(principal, w, r) {
+		return
+	}
 	if deps.ASRSigner == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true)
 		return
 	}
-	principal, _ := Principal(r.Context())
-	_, media, ok := archiveMedia(deps, principal.UserID, r.PathValue("id"), w, r)
+	job, media, ok := archiveMedia(deps, principal.UserID, r.PathValue("id"), w, r, admin)
 	if !ok {
 		return
 	}
@@ -47,8 +50,11 @@ func handleArchiveDownloadLink(deps Dependencies, w http.ResponseWriter, r *http
 		_ = handle.Close()
 	}
 	expires := time.Now().UTC().Add(archiveDownloadTTL).Truncate(time.Second)
+	if admin {
+		recordAdminAudit(deps.Audit, r, principal.UserID, "admin.job.archive_download", "job", job.ID, nil)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"downloadUrl": deps.ASRSigner.ArchiveURL(principal.UserID, r.PathValue("id"), expires),
+		"downloadUrl": deps.ASRSigner.ArchiveURL(job.UserID, job.ID, expires),
 		"expiresAt":   expires,
 	})
 }
@@ -68,12 +74,18 @@ func handleSignedArchiveDownload(deps Dependencies, w http.ResponseWriter, r *ht
 	handleImageArchive(deps, userID, w, r)
 }
 
-func archiveMedia(deps Dependencies, userID, jobID string, w http.ResponseWriter, r *http.Request) (jobs.Job, []ownedfiles.File, bool) {
+func archiveMedia(deps Dependencies, userID, jobID string, w http.ResponseWriter, r *http.Request, admin bool) (jobs.Job, []ownedfiles.File, bool) {
 	if deps.Jobs == nil || deps.Files == nil || deps.Storage == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "SERVICE_NOT_READY", "服务尚未就绪", true)
 		return jobs.Job{}, nil, false
 	}
-	job, err := deps.Jobs.Get(r.Context(), userID, jobID)
+	var job jobs.Job
+	var err error
+	if admin {
+		job, err = deps.Jobs.GetAny(r.Context(), jobID)
+	} else {
+		job, err = deps.Jobs.Get(r.Context(), userID, jobID)
+	}
 	if errors.Is(err, jobs.ErrNotFound) {
 		writeError(w, r, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在", false)
 		return jobs.Job{}, nil, false
@@ -86,7 +98,7 @@ func archiveMedia(deps Dependencies, userID, jobID string, w http.ResponseWriter
 		writeError(w, r, http.StatusConflict, "JOB_NOT_READY", "任务尚未完成，暂不能打包配图", false)
 		return jobs.Job{}, nil, false
 	}
-	owned, err := deps.Files.ListByJob(r.Context(), userID, jobID)
+	owned, err := deps.Files.ListByJob(r.Context(), job.UserID, job.ID)
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取媒体文件", true)
 		return jobs.Job{}, nil, false
@@ -125,7 +137,7 @@ func archiveMedia(deps Dependencies, userID, jobID string, w http.ResponseWriter
 
 func handleImageArchive(deps Dependencies, userID string, w http.ResponseWriter, r *http.Request) {
 	archiveNoCache(w)
-	job, media, ok := archiveMedia(deps, userID, r.PathValue("id"), w, r)
+	job, media, ok := archiveMedia(deps, userID, r.PathValue("id"), w, r, false)
 	if !ok {
 		return
 	}

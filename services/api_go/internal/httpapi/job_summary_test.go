@@ -20,8 +20,14 @@ func TestJobSummaryListsPreservePermissionsAndFullDetails(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	earlier, later := now.Add(time.Hour), now.Add(2*time.Hour)
-	fixture.addFile(t, "job-1", fixture.ownerID, "image", "earliest.jpg", []byte("early"), &earlier)
+	earliestFile := fixture.addFile(t, "job-1", fixture.ownerID, "image", "earliest.jpg", []byte("early"), &earlier)
 	fixture.addFile(t, "job-1", fixture.ownerID, "image", "later.jpg", []byte("later"), &later)
+	temporaryExpiry := now.Add(30 * time.Minute)
+	fixture.addFile(t, "job-1", fixture.ownerID, "asr_source", "source.mp3", []byte("source"), &temporaryExpiry)
+	removedEarly := fixture.addFile(t, "job-1", fixture.ownerID, "image", "removed.jpg", []byte("removed"), &temporaryExpiry)
+	if err := fixture.deps.Files.MarkDeleted(ctx, removedEarly.ID, now); err != nil {
+		t.Fatal(err)
+	}
 	work, err := resolver.NewSQLiteCache(fixture.db).Save(ctx, resolver.Work{
 		DouyinWorkID: "123", Type: "note", CanonicalURL: "https://www.douyin.com/note/123",
 		Title: "Gallery summary", AuthorName: "Artist", DurationMS: 1200, Hashtags: []string{"gallery"},
@@ -110,5 +116,37 @@ func TestJobSummaryListsPreservePermissionsAndFullDetails(t *testing.T) {
 	}
 	if page.Total != 1 || len(page.Jobs) != 1 || page.Jobs[0].ID != "other-job" || page.Jobs[0].OwnerDisplayName != "Other" {
 		t.Fatalf("admin owner filter: %+v", page)
+	}
+
+	// Retention cleanup leaves a soft-deleted file. Both detail and list
+	// responses must still report the earliest media deadline.
+	if err := fixture.deps.Files.MarkDeleted(ctx, earliestFile.ID, earlier); err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []struct{ path, token string }{
+		{"/api/v1/jobs/job-1", fixture.ownerToken},
+		{"/api/v1/jobs?q=Gallery", fixture.ownerToken},
+		{frontPath, fixture.ownerToken},
+		{"/api/v1/admin/jobs/job-1", credentials.AccessToken},
+		{"/api/v1/admin/jobs?userId=" + url.QueryEscape(fixture.ownerID), credentials.AccessToken},
+		{"/api/v1/admin/jobs?view=summary&userId=" + url.QueryEscape(fixture.ownerID), credentials.AccessToken},
+	} {
+		response := performJSON(fixture.handler, http.MethodGet, check.path, nil, check.token)
+		var payload struct {
+			Job  jobs.JobSummary   `json:"job"`
+			Jobs []jobs.JobSummary `json:"jobs"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil || response.Code != http.StatusOK {
+			t.Fatalf("%s: status %d, decode error %v", check.path, response.Code, err)
+		}
+		if len(payload.Jobs) == 1 {
+			payload.Job = payload.Jobs[0]
+		}
+		if payload.Job.ID != "job-1" || payload.Job.MediaExpiresAt == nil || !payload.Job.MediaExpiresAt.Equal(earlier) {
+			t.Fatalf("%s: expiry did not survive cleanup: %+v", check.path, payload.Job)
+		}
+		if strings.Contains(response.Body.String(), earliestFile.ID) {
+			t.Fatalf("%s: soft-deleted file should not be offered", check.path)
+		}
 	}
 }

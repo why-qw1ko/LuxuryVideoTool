@@ -11,7 +11,11 @@
 #admin-cdk-hint,#admin-cdk-status,#admin-cdk-save-hint{margin:0}
 #admin-cdk-status:empty,#admin-cdk-pager:empty{display:none}
 .admin-cdk-generated{display:grid;gap:var(--space-3);max-width:704px;padding:var(--space-4);border:1px solid var(--border);border-radius:var(--radius);background:var(--input)}
-#admin-cdk-codes{resize:vertical;background:var(--card);font-family:ui-monospace,monospace;overflow-wrap:anywhere}
+#admin-cdk-codes{max-height:16rem;overflow:auto;margin:0;padding:0;list-style:none;border:1px solid var(--border);border-radius:var(--radius);background:var(--card)}
+#admin-cdk-codes li{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-3)}
+#admin-cdk-codes li+li{border-top:1px solid var(--border)}
+#admin-cdk-codes code{font-family:ui-monospace,monospace;overflow-wrap:anywhere}
+#admin-cdk-codes button{white-space:nowrap}
 .admin-cdk-actions{display:flex;flex-wrap:wrap;gap:var(--space-2)}
 .admin-cdk-items{display:grid;gap:var(--space-2);margin:0;padding:0;list-style:none}
 .admin-cdk-row{

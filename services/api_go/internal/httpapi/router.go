@@ -983,7 +983,10 @@ func New(deps Dependencies) http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{"job": job, "requestId": RequestID(r.Context())})
 	})
 	protected.HandleFunc("POST /api/v1/jobs/{id}/images/archive-download", func(w http.ResponseWriter, r *http.Request) {
-		handleArchiveDownloadLink(deps, w, r)
+		handleArchiveDownloadLink(deps, w, r, false)
+	})
+	protected.HandleFunc("POST /api/v1/admin/jobs/{id}/images/archive-download", func(w http.ResponseWriter, r *http.Request) {
+		handleArchiveDownloadLink(deps, w, r, true)
 	})
 	mux.HandleFunc("GET /api/v1/archive-download/{id}", func(w http.ResponseWriter, r *http.Request) {
 		handleSignedArchiveDownload(deps, w, r)
@@ -1017,6 +1020,7 @@ func New(deps Dependencies) http.Handler {
 		mux.Handle("GET /api/v1/admin/users/{id}/sessions", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/admin/jobs", requireAuth(deps.Auth, protected))
 		mux.Handle("GET /api/v1/admin/jobs/{id}", requireAuth(deps.Auth, protected))
+		mux.Handle("POST /api/v1/admin/jobs/{id}/images/archive-download", requireAuth(deps.Auth, protected))
 		mux.Handle("POST /api/v1/admin/jobs/{id}/cancel", requireAuth(deps.Auth, protected))
 		mux.Handle("POST /api/v1/admin/jobs/{id}/retry", requireAuth(deps.Auth, protected))
 		mux.Handle("DELETE /api/v1/admin/jobs/{id}", requireAuth(deps.Auth, protected))

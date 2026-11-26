@@ -28,6 +28,7 @@ function harness(code = listCode) {
     if (!nodes.has(selector)) nodes.set(selector, {
       value: '', checked: false, disabled: false, children: [], attributes: {}, listeners: {},
       classList: {toggle() {}, add() {}, remove() {}, contains() { return false; }},
+      querySelector() { return null; },
       setAttribute(name, value) { this.attributes[name] = value; },
       getAttribute(name) { return this.attributes[name]; },
       addEventListener(name, callback) { this.listeners[name] = callback; },
@@ -46,7 +47,7 @@ function harness(code = listCode) {
     adminJobsPage: 1, adminJobsPageSize: 20, adminJobsTotal: 0, adminJobsCache: [],
     adminUsers: [], lastAdminJobsSig: '', adminDetailLoadId: 0, adminDetailSig: '', adminMode: false,
     selectedId: null, currentJob: null, currentView: 'new', detailSig: '',
-    taskMusic: {jobId: null}, adminOpen: false, videoPreviewURLs: new Map(),
+    taskMusic: {jobId: null}, adminOpen: false, videoPreviewURLs: new Map(), videoPreviewFailure: null,
     AbortController, URLSearchParams, setTimeout, clearTimeout, $: node,
     document: {
       hidden: false, listeners: {},
@@ -72,7 +73,7 @@ function harness(code = listCode) {
     enter(value) { context.sessionEpoch++; context.session = value; },
     showView(name) { context.currentView = name; },
     renderDetail() { if (context.currentJob) details.push(context.currentJob); },
-    show() {}, stopTaskMusic() {}, setSidebar() {}, closePreview() {}, resetCDKView() {}, resetCapturePermissions() {}, resetProviderSettings() {},
+    show() {}, stopTaskMusic() {}, syncDetailMedia() {}, setSidebar() {}, closePreview() {}, resetCDKView() {}, resetCapturePermissions() {}, resetProviderSettings() {},
     asrProviderNames: {siliconflow: '硅基流动', aliyun: '阿里云', deepseek: 'DeepSeek'},
     refreshDailyUsage() {}, uuidv4() { return 'idempotency-key'; },
   });
@@ -787,6 +788,47 @@ test('签名刷新期间切换预览，旧请求不会覆盖当前视频', async
   assert.equal(h.notices.length, 0);
 });
 
+test('详情在签名刷新时重绘，播放失败后仍在当前详情补充提示', async () => {
+  const h = videoPreviewHarness();
+  const modal = h.node('#preview-modal'), close = h.node('.modal-close'), detail = h.node('#detail');
+  let notice = h.node('old-notice');
+  detail.querySelector = () => ({dataset: {job: 'job/id'}, querySelector: () => notice});
+  modal.querySelector = () => close;
+  const trigger = h.node('button[aria-label="播放视频"]');
+  trigger.isConnected = true;
+
+  await h.context.openPreview('job/id', 'file/id', 'example.mp4', signedVideo('old'), trigger);
+  assert.equal(close.focused, true);
+  const retry = h.video.onerror();
+  notice = h.node('new-notice');
+  notice.dataset = {videoNotice: 'file/id'};
+  const changed = [];
+  notice.classList.toggle = (...args) => changed.push(args);
+  h.requests[0].reject(new Error('无法读取任务'));
+  await retry;
+  assert.equal(trigger.focused, true);
+  assert.deepEqual(changed, [['hidden', false]]);
+  assert.equal(h.notices[0].type, 'error');
+  await h.context.openPreview('job/id', 'file/id', 'example.mp4', signedVideo('new'), trigger);
+  assert.deepEqual(changed, [['hidden', false], ['hidden', true]]);
+});
+
+test('续签发现内容已过期时更新提示，原有预览继续播放', async () => {
+  const h = videoPreviewHarness();
+  const expiry = '2000-01-01T00:00:00Z';
+  h.context.jobExpired = job => job?.mediaExpiresAt === expiry;
+  const original = {...videoJob().job, result: {text: '原有文案'}};
+  h.context.currentJob = original;
+  const pending = h.context.openPreview('job/id', 'file/id', 'example.mp4', signedVideo('expired', -1));
+  const fresh = signedVideo('fresh');
+  h.requests[0].resolve({job: {...videoJob(fresh).job, mediaExpiresAt: expiry}});
+  await pending;
+  assert.equal(h.details[0].mediaExpiresAt, expiry);
+  assert.equal(h.details[0].result, original.result);
+  assert.equal(h.video.src, fresh);
+  assert.equal(h.notices.length, 0);
+});
+
 
 test('任务列表慢请求跨过 5 秒轮询后仍能渲染，完成后恢复下一轮请求', async () => {
   const h = harness(pollCode + listCode);
@@ -940,6 +982,15 @@ test('画廊只加载静态缩略图，原图和动图保留给点击预览', ()
   assert.equal(h.context.jobSignature(data), h.context.jobSignature(refreshed));
   assert.notEqual(h.context.jobSignature(data), h.context.jobSignature(unavailable));
   assert.doesNotMatch(h.context.jobDetailHTML(unavailable), /<img|<video/);
+
+  const afterCleanup = h.context.jobDetailHTML({...data, mediaExpiresAt: '2000-01-01T00:00:00Z',
+    result: {text: '原有图文配文', files: [{id: 'text', kind: 'result_text', name: 'result.txt'}]},
+  });
+  assert.match(afterCleanup, /内容已过期/);
+  assert.match(afterCleanup, /原有图文配文/);
+  assert.match(afterCleanup, /data-file="text"/);
+  assert.match(afterCleanup, /class="note-gallery"/);
+  assert.match(afterCleanup, /data-fallback="https:\/\/cdn\.example\.test\/live\.mp4"/);
 });
 
 test('视频解析使用同源签名封面，已下载视频优先使用本地缩略图', () => {
@@ -958,17 +1009,41 @@ test('视频解析使用同源签名封面，已下载视频优先使用本地�
 
   data.result.files.push({id: 'file', kind: 'video', name: 'video.mp4', thumbnailUrl});
   assert.ok(h.context.jobDetailHTML(data).includes(`class="detail-cover" src="${thumbnailUrl}" data-cover-fallback="${coverPreviewUrl}"`));
+  assert.doesNotMatch(h.context.jobDetailHTML(data), /data-op="preview"/);
+  data.action = 'download';
+  const playable = h.context.jobDetailHTML(data);
+  assert.match(playable, /<button[^>]+class="detail-cover-button"[^>]+data-fid="file"[^>]+aria-label="播放视频"><img[^>]+><span class="detail-cover-play">play/);
+  assert.match(playable, /预览视频/);
+  assert.match(playable, /class="detail-notice hidden" data-video-notice="file"/);
+  h.context.videoPreviewFailure = {jobId: data.id, fileId: 'file'};
+  assert.match(h.context.jobDetailHTML(data), /class="detail-notice" data-video-notice="file"/);
+
+  data.mediaExpiresAt = '2000-01-01T00:00:00Z';
+  data.result.text = '原有视频文案';
+  const expired = h.context.jobDetailHTML(data);
+  assert.match(expired, /内容已过期/);
+  assert.match(expired, /detail-cover/);
+  assert.match(expired, /data-op="preview"/);
+  assert.match(expired, /data-file="file"/);
+  assert.match(expired, /原有视频文案/);
+  assert.match(expired, /删除/);
+  assert.doesNotMatch(expired, /detail-cover-button|detail-cover-play/);
+
   const layoutClasses = new Set();
-  const image = {
-    src: thumbnailUrl, parentElement: {classList: layoutClasses}, dataset: {coverFallback: coverPreviewUrl, coverSource: coverUrl},
+  const button = {
+    classList: {contains: name => name === 'detail-cover-button'},
+    parentElement: {classList: layoutClasses},
     remove() { this.removed = true; },
+  };
+  const image = {
+    src: thumbnailUrl, parentElement: button, dataset: {coverFallback: coverPreviewUrl, coverSource: coverUrl},
   };
   h.context.retryVideoCover(image);
   assert.equal(image.src, coverPreviewUrl);
   h.context.retryVideoCover(image);
   assert.equal(image.src, coverUrl);
   h.context.retryVideoCover(image);
-  assert.equal(image.removed, true);
+  assert.equal(button.removed, true);
   assert.equal(layoutClasses.has('no-cover'), true);
 });
 

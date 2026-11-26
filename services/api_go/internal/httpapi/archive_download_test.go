@@ -241,6 +241,54 @@ func TestArchiveDownloadSignedHTTP(t *testing.T) {
 	assertArchiveTempEmpty(t, temporary)
 }
 
+func TestArchiveDownloadAdminCanPackageAnotherUsersJob(t *testing.T) {
+	f := newArchiveDownloadFixture(t)
+	ctx := context.Background()
+	const password = "AdminPass!"
+	if _, err := f.deps.Auth.CreateUser(ctx, "admin", "Admin", password, auth.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	admin, err := f.deps.Auth.Login(ctx, auth.LoginInput{
+		Username: "admin", Password: password,
+		Device: auth.Device{ID: "admin-device", Name: "PC", Platform: "windows", AppVersion: "1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const adminPath = "/api/v1/admin/jobs/job-1/images/archive-download"
+	for _, tc := range []struct {
+		path, token string
+		status      int
+	}{
+		{adminPath, "", http.StatusUnauthorized},
+		{adminPath, f.otherToken, http.StatusForbidden},
+		{"/api/v1/jobs/job-1/images/archive-download", admin.AccessToken, http.StatusNotFound},
+		{"/api/v1/admin/jobs/missing-job/images/archive-download", admin.AccessToken, http.StatusNotFound},
+	} {
+		response := performJSON(f.handler, http.MethodPost, tc.path, nil, tc.token)
+		if response.Code != tc.status {
+			t.Fatalf("%s: got %d, want %d", tc.path, response.Code, tc.status)
+		}
+	}
+
+	response := performJSON(f.handler, http.MethodPost, adminPath, nil, admin.AccessToken)
+	if response.Code != http.StatusOK {
+		t.Fatalf("create admin archive URL: %d %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		DownloadURL string `json:"downloadUrl"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	download, err := url.Parse(payload.DownloadURL)
+	if err != nil || download.Query().Get("user") != f.ownerID {
+		t.Fatalf("archive URL must identify the job owner: %q, error=%v", payload.DownloadURL, err)
+	}
+	assertArchiveBody(t, performJSON(f.handler, http.MethodGet, payload.DownloadURL, nil, ""))
+}
+
 func TestArchiveDownloadAuthorizationAndSignatures(t *testing.T) {
 	f := newArchiveDownloadFixture(t)
 	downloadURL, _ := archiveDownloadLink(t, f)

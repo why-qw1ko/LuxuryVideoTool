@@ -5,6 +5,7 @@ let adminMode=false,currentView='new',adminOpen=false,adminCurrentView='dashboar
 let jobsPage=1,jobsPageSize=20,jobsTotal=0;
 let adminJobsPage=1,adminJobsPageSize=20,adminJobsTotal=0;
 let taskMusic={jobId:null,source:'',url:'',playing:false};
+let videoPreviewFailure=null;
 let statusChart=null,trendChart=null;
 let lastStatsSig='',lastAdminJobsSig='';
 let sessionEpoch=0,jobsLoadId=0,jobDetailLoadId=0,adminJobsLoadId=0,adminUsersLoadId=0,adminDetailLoadId=0;
@@ -17,7 +18,7 @@ const THEMES=['light','dark'];
 let theme=localStorage.getItem('dc_theme');
 if(THEMES.indexOf(theme)<0)theme=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';
 
-const actionLabels={info:'仅解析',download:'下载媒体',transcribe:'提取文案',full:'提取内容'};
+const actionLabels={info:'仅解析基本信息',download:'下载媒体',transcribe:'提取文案',full:'提取内容'};
 const statusLabels={queued:'排队中',resolving:'解析信息',downloading:'下载中',extracting:'提取音频',transcribing:'识别中',postprocessing:'生成结果',completed:'已完成',failed:'失败',retry_wait:'等待重试',cancelled:'已取消'};
 const statusTone={queued:'muted',resolving:'active',downloading:'active',extracting:'active',transcribing:'active',postprocessing:'active',retry_wait:'warning',completed:'success',failed:'danger',cancelled:'danger'};
 
@@ -313,7 +314,6 @@ $('#admin-password-form').addEventListener('submit',async e=>{
 const ACTIVE_POLL_MS=5000,IDLE_POLL_MS=30000;
 function jobIsActive(status){return !['completed','failed','cancelled'].includes(status)}
 function jobHasExpiredPreview(job,now=Date.now()){
-  if(jobExpired(job))return false;
   const urls=[job?.work?.coverPreviewUrl,...(job?.result?.files||[]).flatMap(file=>[file.previewUrl,file.thumbnailUrl])];
   return urls.some(url=>{
     const expires=previewExpiry(url);
@@ -322,6 +322,10 @@ function jobHasExpiredPreview(job,now=Date.now()){
 }
 function pollVisibleJobs(force=false){
   if(!session||document.hidden)return;
+  if(currentJob&&jobExpired(currentJob)){
+    if(adminOpen&&adminCurrentView==='detail')renderAdminDetail(currentJob);
+    else if(!adminOpen&&currentJob.id===selectedId)renderDetail();
+  }
   const now=Date.now();
   const due=(key,active)=>force||active||now-(pollRequestedAt[key]??0)>=IDLE_POLL_MS;
   if(adminOpen){
@@ -372,6 +376,7 @@ function enter(value){
   adminStatsPending=null;
   archiveDownloads.clear();
   videoPreviewURLs.clear();
+  videoPreviewFailure=null;
   if(!$('#preview-modal').classList.contains('hidden')){
     previewMusicSuspended=false;
     closePreview();
@@ -1197,19 +1202,22 @@ async function viewAdminJob(id,refresh=false,polling=false){
     if(requestId!==adminDetailLoadId||epoch!==sessionEpoch||!session||!adminOpen)return;
     if(refresh&&(adminCurrentView!=='detail'||currentJob?.id!==id))return;
     const renewedExpiredPreview=refresh&&jobHasExpiredPreview(currentJob)&&!jobHasExpiredPreview(data.job);
-    adminMode=true;currentJob=data.job;
-    const sig=id+'|'+jobSignature(data.job);
-    if(sig!==adminDetailSig||renewedExpiredPreview){
-      adminDetailSig=sig;
-      $('#admin-detail').innerHTML=jobDetailHTML(data.job);
-    }
-    syncTaskMusicWithJob(data.job);updateTaskMusicUI();
+    renderAdminDetail(data.job,renewedExpiredPreview);
     if(!refresh){
       adminShowView('detail');
       if(matchMedia('(max-width:960px)').matches)setSidebar(false);
     }
   }catch(err){if(requestId===adminDetailLoadId&&epoch===sessionEpoch&&adminOpen)toast(err.message,'error')}
   finally{if(adminDetailPending===pending)adminDetailPending=null}
+}
+function renderAdminDetail(job,renewedExpiredPreview=false){
+  adminMode=true;currentJob=job;
+  const sig=job.id+'|'+jobSignature(job);
+  if(sig!==adminDetailSig||renewedExpiredPreview){
+    adminDetailSig=sig;
+    $('#admin-detail').innerHTML=jobDetailHTML(job);
+  }
+  syncDetailMedia(job);
 }
 async function operateAdminJob(id,op){
   if(op==='delete'&&!(await confirmDialog({title:'删除任务',message:'确认删除该任务及其文件？此操作不可撤销。',confirmText:'删除'})))return;
@@ -1387,11 +1395,11 @@ function fileLabel(f){
   if(f.kind==='video'||(f.mimeType||'').startsWith('video/'))return'下载无水印视频';
   return`下载 ${f.name}`;
 }
-// 任务媒体保留期：取所有带 expiresAt 文件的最早到期时间；过期后媒体已清理，列表与详情按“已过期”展示。
+// 服务端保留到期时间，清理文件后仍能识别已过期的任务。
 function jobMediaExpiry(job){
   if(job?.mediaExpiresAt)return job.mediaExpiresAt;
   const files=job?.result?.files||[];
-  return files.filter(f=>f.expiresAt).reduce((e,f)=>!e||f.expiresAt<e?f.expiresAt:e,null);
+  return files.filter(f=>f.expiresAt&&f.kind!=='asr_source').reduce((e,f)=>!e||f.expiresAt<e?f.expiresAt:e,null);
 }
 function jobExpired(job){const expiry=jobMediaExpiry(job);return !!expiry&&new Date(expiry).getTime()<=Date.now()}
 function jobListSignature(job){return JSON.stringify([job,jobExpired(job)])}
@@ -1466,14 +1474,8 @@ function jobDetailHTML(job){
   if(w.type==='note')badges.push(`<span class="badge badge-note">${noteImgs.length>0&&noteImgs.every(img=>img.animatedUrl)?'动图作品':noteImgs.some(img=>img.animatedUrl)?'含动图':'图文作品'}</span>`);
 
   const mediaExpiry=jobMediaExpiry(job);
-  // 保留期已过：媒体已自动清理，详情页只保留标题与删除入口，不再展示媒体与文案内容。
-  if(jobExpired(job)){
-    return `<article class="job-detail" data-job="${esc(job.id)}">
-    <div class="detail-head"><div><h2>${esc(title)}</h2><div class="badges">${badges.join('')}</div></div><span class="job-time" title="${esc(new Date(job.createdAt).toLocaleString())}">${fmtDate(job.createdAt)}</span></div>
-    <div class="expired-box">${icon('info',14)}<div><strong>任务已过期</strong><p>内容与媒体文件已过保留期并自动清理，无法查看。</p></div></div>
-    <div class="actions"><div class="action-group"><button type="button" data-op="delete" class="danger">${icon('trash',14)} 删除</button></div></div>
-  </article>`;
-  }
+  const expired=jobExpired(job);
+  const expiredNotice=expired?`<div class="detail-notice expired-box" role="status">${icon('alert-circle',16)}<span>内容已过期</span></div>`:'';
 
   const metas=[];
   // 作者/分辨率仅在解析完成后显示；为空显示 "-"（未解析的任务不显示这些行）。
@@ -1486,7 +1488,10 @@ function jobDetailHTML(job){
   const tags=(w.hashtags||[]).map(t=>`<span class="tag">#${esc(t)}</span>`).join('');
   const signedCovers=[videoFile?.thumbnailUrl,w.coverPreviewUrl].filter(previewUsable);
   const coverSources=[...new Set(w.coverUrl?[...signedCovers,w.coverUrl]:signedCovers)];
-  const cover=coverSources.length?`<img class="detail-cover" src="${esc(coverSources[0])}" data-cover-fallback="${esc(coverSources[1])}" data-cover-source="${esc(coverSources[2])}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="retryVideoCover(this)">`:'';
+  const coverImage=coverSources.length?`<img class="detail-cover" src="${esc(coverSources[0])}" data-cover-fallback="${esc(coverSources[1])}" data-cover-source="${esc(coverSources[2])}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="retryVideoCover(this)">`:'';
+  const previewAttrs=videoFile&&job.action!=='info'?`data-op="preview" aria-haspopup="dialog" data-fid="${esc(videoFile.id)}" data-name="${esc(videoFile.name)}" data-preview="${esc(videoFile.previewUrl||'')}"`:'';
+  const previewFailed=previewAttrs&&videoPreviewFailure?.jobId===job.id&&videoPreviewFailure.fileId===videoFile.id;
+  const cover=coverImage&&previewAttrs&&!expired?`<button type="button" class="detail-cover-button" ${previewAttrs} aria-label="播放视频">${coverImage}<span class="detail-cover-play">${icon('play',24)}</span></button>`:coverImage;
 
   const error=job.error?`<div class="error-box">${icon('alert-circle',14)}<div><strong>${esc(job.error.code)}</strong><p>${esc(job.error.message)}</p></div></div>`:'';
   const progressPct=Math.max(0,Math.min(100,Math.round(Number(job.progress)||0)));
@@ -1499,7 +1504,7 @@ function jobDetailHTML(job){
   // data-preview 携带同源签名流式地址：视频/配图下载直接用 <a download> 流式落盘，不再 fetch 整文件缓冲。
   const fileLinks=linkFiles.map(f=>`<a class="btn download" href="${fileHref(f)}" data-file="${esc(f.id)}" data-name="${esc(f.name)}" data-preview="${esc(f.previewUrl||'')}">${icon('download',14)} ${esc(fileLabel(f))}</a>`);
   const viewOps=[],taskOps=[];
-  if(videoFile)viewOps.push(`<button type="button" class="btn preview-btn" data-op="preview" data-fid="${esc(videoFile.id)}" data-name="${esc(videoFile.name)}" data-preview="${esc(videoFile.previewUrl||'')}">${icon('play',14)} 预览视频</button>`);
+  if(previewAttrs)viewOps.push(`<button type="button" class="btn preview-btn" ${previewAttrs}>${icon('play',14)} 预览视频</button>`);
   if(!terminal)taskOps.push(`<button type="button" data-op="cancel">${icon('circle-slash',14)} 取消</button>`);
   if(job.status==='failed'||job.status==='cancelled')taskOps.push(`<button type="button" data-op="retry">${icon('rotate-ccw',14)} 重试</button>`);
   if(terminal)taskOps.push(`<button type="button" data-op="delete" class="danger">${icon('trash',14)} 删除</button>`);
@@ -1530,8 +1535,7 @@ function jobDetailHTML(job){
     return `<figure class="gallery-item" data-file-id="${esc(file?.id)}" data-preview="${esc(viewerSrc)}" data-fallback="${esc(cdnSrc)}" data-poster="${esc(thumbnail||img.url)}" data-animated="${animated?'1':'0'}" data-title="${esc((stripHashtags(w.title,w.hashtags)||'预览').slice(0,40))}"><button type="button" class="gallery-media" aria-haspopup="dialog" aria-label="${animated?'播放动图':'查看原图'} ${i+1}">${indicator}${thumb}</button><div class="gallery-foot">${badge}${dl}</div></figure>`;
   }).join('');
   const noteGallery=isNote&&noteImages.length?`<div class="note-gallery">${galleryItems}</div>`:'';
-  // 管理员详情里打包下载走用户自己的接口会因所有权校验失败，故仅在普通用户视图展示。
-  const zipLink=(!adminMode&&isNote&&mediaFiles.length&&job.status==='completed')?archiveDownloadHTML(job.id,`${(job.work&&job.work.douyinWorkId)||job.id}_images.zip`,savedMediaCount<noteImages.length?`打包下载已保存的 ${savedMediaCount} 项`:'打包下载全部'):'';
+  const zipLink=(isNote&&mediaFiles.length&&job.status==='completed')?archiveDownloadHTML(job.id,`${w.douyinWorkId||job.id}_images.zip`,savedMediaCount<noteImages.length?`打包下载已保存的 ${savedMediaCount} 项`:'打包下载全部'):'';
 
   const musicFile=files.find(f=>f.kind==='music');
   const musicPlayUrl=musicFile&&musicFile.previewUrl&&previewUsable(musicFile.previewUrl)?musicFile.previewUrl:w.musicUrl;
@@ -1541,13 +1545,15 @@ function jobDetailHTML(job){
     ?(noteGallery||zipLink||musicRow?`<div class="detail-media no-cover">${noteGallery}${mediaSummary}${musicRow}${metas.length?`<div class="detail-meta">${metas.join('')}</div>`:''}${canonical}${zipLink}</div>`:'')
     :(hasMedia?`<div class="detail-media${cover?'':' no-cover'}">${cover}<div class="detail-side">${metas.length?`<div class="detail-meta">${metas.join('')}</div>`:''}${canonical}</div></div>`:'');
 
-  const retentionNote=mediaExpiry?`<p class="retention-note">${icon('info',13)} 媒体文件保留至 ${fmtDate(mediaExpiry)}，届时自动清理；删除本任务会同时删除媒体</p>`:'';
+  const retentionNote=mediaExpiry?`<p class="retention-note">${icon('info',13)} 媒体文件保留至 ${fmtDate(mediaExpiry)}，到期后自动清理。删除任务也会删除媒体文件。</p>`:'';
 
   return `<article class="job-detail" data-job="${esc(job.id)}">
     <div class="detail-head"><div><h2>${esc(title)}</h2><div class="badges">${badges.join('')}</div></div><span class="job-time" title="${esc(new Date(job.createdAt).toLocaleString())}">${fmtDate(job.createdAt)}</span></div>
+    ${expiredNotice}
     ${mediaBlock}
     ${tags?`<div class="tags">${tags}</div>`:''}
     ${actionGroups?`<div class="actions">${actionGroups}</div>`:''}
+    ${previewAttrs?`<div class="detail-notice${previewFailed?'':' hidden'}" data-video-notice="${esc(videoFile.id)}" role="status">${icon('info',16)}<span>视频暂时无法播放，可稍后重试。</span></div>`:''}
     ${retentionNote}
     ${error}
     ${progressBlock}
@@ -1564,8 +1570,9 @@ function retryVideoCover(image){
     image.src=next;
     return;
   }
-  image.parentElement?.classList.add('no-cover');
-  image.remove();
+  const cover=image.parentElement?.classList.contains('detail-cover-button')?image.parentElement:image;
+  cover.parentElement?.classList.add('no-cover');
+  cover.remove();
 }
 
 function renderDetail(){
@@ -1575,12 +1582,11 @@ function renderDetail(){
     detailSig=sig;
     $('#detail').innerHTML=jobDetailHTML(currentJob);
   }
-  // 过期任务不再展示内容，其背景音乐也一并停止，避免继续播放已清理的音频地址。
-  if(jobExpired(currentJob)){
-    if(taskMusic.jobId===currentJob.id&&taskMusic.playing)stopTaskMusic();
-    return;
-  }
-  syncTaskMusicWithJob(currentJob);
+  syncDetailMedia(currentJob);
+}
+
+function syncDetailMedia(job){
+  syncTaskMusicWithJob(job);
   updateTaskMusicUI();
 }
 
@@ -1592,8 +1598,13 @@ function handleContentClick(e){
   const btn=e.target.closest('[data-op],a[data-file],[data-copy]');
   if(!btn)return;
   if(btn.dataset.op==='music'){e.preventDefault();e.stopPropagation();toggleTaskMusic(btn.closest('[data-job]')?.dataset.job,btn.dataset.music,btn.dataset.playUrl||btn.dataset.music,btn.dataset.fallback||'');return}
-  if(btn.dataset.op==='preview'){e.preventDefault();openPreview(btn.closest('[data-job]')?.dataset.job,btn.dataset.fid,btn.dataset.name,btn.dataset.preview);return}
-  if(btn.dataset.op==='archive'){e.preventDefault();downloadArchive(btn.closest('[data-archive-download]').dataset.archiveDownload,btn.dataset.name);return}
+  if(btn.dataset.op==='preview'){
+    e.preventDefault();
+    const detail=btn.closest('[data-job]');
+    openPreview(detail?.dataset.job,btn.dataset.fid,btn.dataset.name,btn.dataset.preview,btn);
+    return;
+  }
+  if(btn.dataset.op==='archive'){e.preventDefault();downloadArchive(btn.closest('[data-archive-download]').dataset.archiveDownload,btn.dataset.name,adminMode);return}
   if(btn.hasAttribute('data-file')){e.preventDefault();download(btn);return}
   if(btn.hasAttribute('data-copy')){e.preventDefault();e.stopPropagation();copyText(btn);return}
   if(btn.dataset.op){const job=btn.closest('[data-job]');if(job)operate(job.dataset.job,btn.dataset.op)}
@@ -1742,7 +1753,7 @@ function archiveDownloadSessionCurrent(key,state,userId){
   if(!session){enter(null);toast('登录已过期，请重新登录','error')}
   return false;
 }
-async function downloadArchive(jobId,name){
+async function downloadArchive(jobId,name,inAdmin=false){
   if(archiveDownloadView(jobId).locked)return;
   const userId=session?.user?.id;
   if(!userId){toast('登录已过期，请重新登录','error');return}
@@ -1754,7 +1765,8 @@ async function downloadArchive(jobId,name){
   // 续期请求由 api 共享，不能只依赖单个 fetch 的 signal 限时。
   const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new Error('准备下载超时'))},30000)});
   try{
-    const result=await Promise.race([api(`/api/v1/jobs/${encodeURIComponent(jobId)}/images/archive-download`,{method:'POST',signal:controller.signal}),timeout]);
+    const path=`/api/v1/${inAdmin?'admin/':''}jobs/${encodeURIComponent(jobId)}/images/archive-download`;
+    const result=await Promise.race([api(path,{method:'POST',signal:controller.signal}),timeout]);
     // 准备期间退出或切换账号时，不再触发原账号的下载。
     if(!archiveDownloadSessionCurrent(key,state,userId))return;
     if(typeof result.downloadUrl!=='string')throw new Error('未能取得下载地址，请重试');
@@ -1781,11 +1793,31 @@ async function download(link){
   }
   try{const response=await fetch(link.href,{headers:{Authorization:`Bearer ${session.accessToken}`}});if(!response.ok)throw new Error('下载失败');const blob=await response.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=link.dataset.name;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000)}catch(err){toast(err.message,'error')}
 }
+async function writeClipboardText(text){
+  try{
+    await navigator.clipboard.writeText(text);
+  }catch{
+    // 兼容 Clipboard API 不可用的 HTTP 页面。
+    const focused=document.activeElement,field=document.createElement('textarea');
+    field.value=text;
+    field.readOnly=true;
+    field.tabIndex=-1;
+    field.style.cssText='position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+    document.body.appendChild(field);
+    try{
+      field.select();
+      if(!document.execCommand('copy'))throw new Error('复制失败');
+    }finally{
+      field.remove();
+      focused?.focus({preventScroll:true});
+    }
+  }
+}
 async function copyText(btn){
   const section=btn.closest('.detail-section')||btn.closest('.result-details');
   const text=(section&&section.querySelector('.result')||{}).textContent||'';
-  try{await navigator.clipboard.writeText(text)}
-  catch{const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove()}
+  try{await writeClipboardText(text)}
+  catch{toast('复制失败，请检查浏览器的剪贴板权限','error');return}
   btn.innerHTML=icon('check',13)+' 已复制';btn.classList.add('copied');
   setTimeout(()=>{btn.innerHTML=icon('copy',13)+' 复制';btn.classList.remove('copied')},1400);
 }
@@ -1887,6 +1919,7 @@ async function toggleTaskMusic(jobId,source,playUrl,fallbackUrl){
 /* ---------- 视频预览 / 图文查看 ---------- */
 const videoPreviewURLs=new Map();
 let videoPreviewRequest=0,galleryPreview={items:[],index:0,touchX:null};
+let previewReturnFocus=null;
 let previewMusicSuspended=false;
 let previewSoundOn=false;
 let previewGestureHandler=null;
@@ -1906,9 +1939,10 @@ function resetPreviewMedia(){
   img.classList.add('hidden');img.removeAttribute('src');
 }
 function openGalleryPreview(item){
+  const jobId=item.closest('[data-job]')?.dataset.job;
   const nodes=[...item.closest('.note-gallery').querySelectorAll('.gallery-item')];
   // 轮询更新的数据比卡片上的旧签名更新，预览时优先复用。
-  const files=currentJob&&currentJob.id===item.closest('[data-job]')?.dataset.job?currentJob.result?.files||[]:[];
+  const files=currentJob&&currentJob.id===jobId?currentJob.result?.files||[]:[];
   const items=nodes.map(el=>{
     const file=files.find(f=>f.id===el.dataset.fileId);
     return {
@@ -2014,8 +2048,10 @@ function togglePreviewSound(){
   }
 }
 $('#preview-sound-toggle').addEventListener('click',e=>{e.preventDefault();e.stopPropagation();togglePreviewSound()});
-async function openPreview(jobId,fileId,name,previewUrl){
+async function openPreview(jobId,fileId,name,previewUrl,trigger){
   if(!session)return;
+  setVideoPreviewFailure(jobId,fileId,false);
+  previewReturnFocus=trigger;
   const modal=$('#preview-modal'),video=$('#preview-video');
   if(taskMusic.playing)stopTaskMusic();
   galleryPreview={items:[],index:0,touchX:null};
@@ -2027,6 +2063,7 @@ async function openPreview(jobId,fileId,name,previewUrl){
   $('#preview-title').textContent=name||'视频预览';
   modal.classList.remove('hidden');
   document.body.classList.add('modal-open');
+  if(trigger)modal.querySelector('.modal-close').focus();
   resetPreviewMedia();
   video.classList.remove('hidden');
   video.controls=true;video.muted=false;video.loop=false;video.playsInline=true;
@@ -2040,6 +2077,7 @@ async function openPreview(jobId,fileId,name,previewUrl){
   function fail(message='视频加载失败，请稍后重试'){
     if(!active())return;
     if(!session)enter(null);else closePreview();
+    if(session)setVideoPreviewFailure(jobId,fileId,true);
     toast(message,'error');
   }
 
@@ -2079,6 +2117,11 @@ async function openPreview(jobId,fileId,name,previewUrl){
       const data=await api(jobPath,{cache:'no-store'});
       if(!active())return;
       if(!session)throw new Error('登录已过期，请重新登录');
+      if(jobExpired(data.job)&&currentJob?.id===jobId){
+        const job={...currentJob,mediaExpiresAt:jobMediaExpiry(data.job)};
+        if(adminMode)renderAdminDetail(job);
+        else{currentJob=job;renderDetail()}
+      }
       const url=data.job?.result?.files?.find(file=>file.id===fileId)?.previewUrl;
       if(previewExpiry(url)===null)throw new Error('视频预览已不可用');
       loadSignedVideo(url,position,autoplay);
@@ -2090,6 +2133,13 @@ async function openPreview(jobId,fileId,name,previewUrl){
   const url=[videoPreviewURLs.get(key),previewUrl,latestUrl].find(value=>previewExpiry(value)>Date.now());
   if(url)loadSignedVideo(url);
   else await refreshSignedVideo();
+}
+function setVideoPreviewFailure(jobId,fileId,failed){
+  if(!failed&&(!videoPreviewFailure||videoPreviewFailure.jobId!==jobId||videoPreviewFailure.fileId!==fileId))return;
+  videoPreviewFailure=failed?{jobId,fileId}:null;
+  const detail=$(adminMode?'#admin-detail':'#detail').querySelector('[data-job]');
+  const notice=detail?.dataset.job===jobId?detail.querySelector('[data-video-notice]'):null;
+  if(notice?.dataset.videoNotice===fileId)notice.classList.toggle('hidden',!failed);
 }
 // 画廊点击查看：图片/动图点击即播放；「原声」按钮切换动图原声。
 function openMediaPreview(src,animated,title,fallback,poster){
@@ -2105,6 +2155,8 @@ function closePreview(){
   previewSoundOn=false;
   $('#preview-sound-toggle').classList.add('hidden');
   if(previewMusicSuspended){previewMusicSuspended=false;resumeTaskMusic()}
+  if(previewReturnFocus?.isConnected)previewReturnFocus.focus({preventScroll:true});
+  previewReturnFocus=null;
 }
 document.querySelectorAll('[data-preview-nav]').forEach(btn=>{
   btn.innerHTML=icon(btn.dataset.previewNav==='-1'?'chevron-left':'chevron-right',22);

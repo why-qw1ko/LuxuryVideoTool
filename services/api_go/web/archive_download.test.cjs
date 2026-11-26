@@ -101,6 +101,14 @@ test('点击立即显示准备状态，重复点击与重新渲染均不会重�
   assert.equal(h.calls.length, 2);
 });
 
+test('后台任务使用管理员接口签发下载地址', async () => {
+  const h = harness();
+  await h.context.downloadArchive('job-1', 'work_images.zip', true);
+  assert.equal(h.calls[0].url, '/api/v1/admin/jobs/job-1/images/archive-download');
+  assert.equal(h.calls[0].options.method, 'POST');
+  assert.equal(h.downloads.length, 1);
+});
+
 test('准备接口失败显示原因并允许重试，不触发下载', async () => {
   const h = harness();
   h.setRequest(async () => { throw new Error('该任务没有可打包的配图'); });
@@ -223,6 +231,9 @@ test('图集按类型与序号核对保存数量，缺失动图不会被历史�
   assert.match(html, /已保存 2\/2 项媒体/);
   assert.doesNotMatch(html, /动图 · 未保存/);
   assert.match(html, />[^<>]*打包下载全部<\/button>/);
+  h.context.adminMode = true;
+  assert.match(h.context.jobDetailHTML(job), />[^<>]*打包下载全部<\/button>/);
+  h.context.adminMode = false;
   job.action = 'info';
   job.result.files = [];
   html = h.context.jobDetailHTML(job);

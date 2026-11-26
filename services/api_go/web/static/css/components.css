@@ -94,6 +94,10 @@ select:disabled{color:var(--text-tertiary);background-color:var(--input);backgro
 .detail-media{display:grid;grid-template-columns:160px minmax(0,1fr);gap:24px;align-items:start;margin-bottom:16px}
 .detail-media.no-cover{grid-template-columns:minmax(0,1fr)}
 .detail-cover{width:100%;aspect-ratio:9/16;object-fit:cover;border-radius:var(--radius);border:1px solid var(--border);background:var(--input);box-shadow:var(--shadow)}
+.detail-cover-button{display:grid;place-items:center;width:100%;min-width:0;padding:0;border:0;border-radius:var(--radius);background:transparent;cursor:pointer}
+.detail-cover-button .detail-cover,.detail-cover-play{grid-area:1/1}
+.detail-cover-play{display:grid;place-items:center;width:48px;height:48px;border-radius:50%;background:rgba(0,0,0,.56);color:#fff}
+.detail-cover-button:hover .detail-cover-play,.detail-cover-button:focus-visible .detail-cover-play{background:rgba(0,0,0,.76)}
 .detail-side{flex:1;min-width:0}
 .detail-meta{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--text-secondary)}
 .note-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px;margin-bottom:16px}
@@ -123,10 +127,10 @@ select:disabled{color:var(--text-tertiary);background-color:var(--input);backgro
 .error-box>svg{color:var(--danger);margin-top:2px}
 .error-box strong{color:var(--danger);font-size:12px;letter-spacing:.5px}
 .error-box p{margin:4px 0 0;color:var(--text-secondary);font-size:13px}
-.expired-box{display:flex;gap:10px;align-items:flex-start;margin:10px 0;padding:12px 14px;border-left:3px solid var(--border);border-radius:var(--radius);background:var(--input)}
-.expired-box>svg{color:var(--text-tertiary);margin-top:2px}
-.expired-box strong{color:var(--text-secondary);font-size:12px;letter-spacing:.5px}
-.expired-box p{margin:4px 0 0;color:var(--text-secondary);font-size:13px}
+.detail-notice{display:flex;align-items:flex-start;gap:8px;margin:12px 0;padding:8px 12px;border-radius:var(--radius);background:var(--primary-light);color:var(--text);font-size:14px;line-height:22px}
+.detail-notice>svg{margin-top:3px;color:var(--primary)}
+.detail-notice.expired-box{background:var(--warning-light)}
+.expired-box>svg{color:var(--warning)}
 
 /* ================= 文案与复制 ================= */
 .detail-section{margin-top:18px}

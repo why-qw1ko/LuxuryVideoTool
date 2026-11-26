@@ -49,7 +49,7 @@ const adminCDKConfirmations={
     message:item=>`将 ${item.prefix}… 的累计已用次数清零，恢复 ${item.taskLimit} 次可用额度。`,
   },
   rotate:{
-    title:'轮换密钥',confirmText:'轮换',success:'密钥已轮换，请复制保存新密钥',
+    title:'轮换密钥',confirmText:'轮换',success:'密钥已轮换',
     message:item=>`轮换 ${item.prefix}… 会立即使原密钥和登录会话失效。新密钥沿用当前额度，仅在本次操作后显示。`,
   },
   revoke:{
@@ -58,9 +58,10 @@ const adminCDKConfirmations={
   },
 };
 let adminCDKPage=1,adminCDKListID=0,adminCDKMutating=false,adminCDKItems=[];
+let generatedCDKCodes=[];
 
 function syncAdminCDKActions(){
-  const hasCodes=!!$('#admin-cdk-codes').value;
+  const hasCodes=generatedCDKCodes.length>0;
   $('#cdk-generate').disabled=adminCDKMutating||hasCodes;
   for(const button of $('#admin-cdk-list').querySelectorAll('[data-cdk-action]')){
     const waitingForCopy=hasCodes&&button.dataset.cdkAction==='rotate';
@@ -70,16 +71,25 @@ function syncAdminCDKActions(){
 }
 
 function clearGeneratedCDKs(){
-  $('#admin-cdk-codes').value='';
+  generatedCDKCodes=[];
+  $('#admin-cdk-codes').replaceChildren();
   show('#admin-cdk-generated',false);
   syncAdminCDKActions();
 }
 
 function showGeneratedCDKs(codes){
-  const field=$('#admin-cdk-codes');
-  field.value=codes.join('\n');
+  generatedCDKCodes=codes;
+  const list=$('#admin-cdk-codes');
+  list.innerHTML=codes.map((code,index)=>`<li>
+    <code>${esc(code)}</code>
+    <button type="button" class="ghost" data-copy-cdk="${index}" aria-label="复制第 ${index+1} 个密钥">复制</button>
+  </li>`).join('');
+  show('#admin-cdk-copy',codes.length>1);
   show('#admin-cdk-generated',true);
-  if(adminOpen&&adminCurrentView==='cdks')field.focus();
+  if(adminOpen&&adminCurrentView==='cdks'){
+    const firstAction=codes.length>1?$('#admin-cdk-copy'):list.querySelector('button');
+    firstAction?.focus();
+  }
 }
 
 function resetCDKView(){
@@ -140,19 +150,27 @@ function renderAdminCDKs(list,items){
 }
 
 function bindAdminCDKs(){
-  const form=$('#admin-cdk-form'),generate=$('#cdk-generate'),codes=$('#admin-cdk-codes');
+  const form=$('#admin-cdk-form'),generate=$('#cdk-generate');
   $('#admin-cdk-refresh').addEventListener('click',()=>void loadAdminCDKs());
   $('#admin-cdk-dismiss').addEventListener('click',()=>{clearGeneratedCDKs();generate.focus()});
-  $('#admin-cdk-copy').addEventListener('click',async()=>{
-    if(!codes.value)return;
-    const epoch=sessionEpoch;
-    try{await navigator.clipboard.writeText(codes.value);if(epoch===sessionEpoch)toast('已复制密钥','success')}
-    catch{
-      if(epoch!==sessionEpoch||adminCurrentView!=='cdks')return;
-      codes.select();
-      toast('已选中密钥，请手动复制','info');
-    }
+  $('#admin-cdk-copy').addEventListener('click',()=>copyGeneratedCDKs(generatedCDKCodes.join('\n')));
+  $('#admin-cdk-codes').addEventListener('click',event=>{
+    const button=event.target.closest('button[data-copy-cdk]');
+    if(button)return copyGeneratedCDKs(generatedCDKCodes[Number(button.dataset.copyCdk)]);
   });
+
+  async function copyGeneratedCDKs(text){
+    if(!text||!adminOpen||adminCurrentView!=='cdks'||session?.user?.role!=='admin')return;
+    const epoch=sessionEpoch;
+    const isCurrent=()=>epoch===sessionEpoch&&adminOpen&&adminCurrentView==='cdks';
+    try{
+      await writeClipboardText(text);
+      if(isCurrent())toast('已复制密钥','success');
+    }catch{
+      if(isCurrent())toast('复制失败，请检查浏览器的剪贴板权限','error');
+    }
+  }
+
   form.addEventListener('submit',async event=>{
     event.preventDefault();
     if(generate.disabled||adminCDKMutating||!adminOpen||adminCurrentView!=='cdks'||session?.user?.role!=='admin')return;

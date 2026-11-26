@@ -114,7 +114,7 @@
                 <textarea id="share-text" rows="7" maxlength="4096" placeholder="粘贴作品链接或完整的分享文本" aria-describedby="share-help" required></textarea>
                 <p id="share-help" class="field-hint">支持视频、图文和动图作品。</p>
                 <div id="capture-options" class="capture-options hidden" role="group" aria-label="提取选项">
-                  <label class="check capture-option" id="info-only-wrap"><input id="info-only" type="checkbox"><span>仅解析信息<small>不下载媒体文件</small></span></label>
+                  <label class="check capture-option" id="info-only-wrap"><input id="info-only" type="checkbox"><span>仅解析基本信息<small>不解析视频/图文内容</small></span></label>
                   <label class="check capture-option" id="with-transcribe-wrap"><input id="with-transcribe" type="checkbox"><span>转写视频文案<small>下载媒体并识别视频口播，耗时较长</small></span></label>
                   <label id="capture-asr-provider-wrap" class="hidden">转写服务商
                     <select id="capture-asr-provider"></select>
@@ -255,11 +255,12 @@
           </form>
           <p id="admin-cdk-hint" class="meta">额度用完前可重复登录。每批最多生成 100 个，任务额度按累计创建次数计算。</p>
           <div id="admin-cdk-generated" class="admin-cdk-generated hidden">
-            <label>完整密钥<textarea id="admin-cdk-codes" rows="3" readonly spellcheck="false" autocomplete="off" aria-describedby="admin-cdk-save-hint"></textarea></label>
-            <p id="admin-cdk-save-hint" class="meta">完整密钥只在生成或轮换后显示。请复制保存后再关闭。</p>
+            <strong id="admin-cdk-codes-title">完整密钥</strong>
+            <p id="admin-cdk-save-hint" class="meta">密钥仅在生成或轮换后显示，请复制保存。</p>
+            <ul id="admin-cdk-codes" aria-labelledby="admin-cdk-codes-title" aria-describedby="admin-cdk-save-hint"></ul>
             <div class="admin-cdk-actions">
-              <button id="admin-cdk-copy" class="ghost" type="button">复制全部</button>
-              <button id="admin-cdk-dismiss" class="ghost" type="button">关闭密钥显示</button>
+              <button id="admin-cdk-copy" class="ghost hidden" type="button">复制全部</button>
+              <button id="admin-cdk-dismiss" class="ghost" type="button">关闭</button>
             </div>
           </div>
           <p id="admin-cdk-status" class="meta" role="status"></p>
@@ -284,7 +285,7 @@
               <fieldset class="admin-usage-group">
                 <legend>新建任务权限</legend>
                 <div class="admin-usage-switches">
-                  <label class="admin-usage-switch">仅解析信息<input name="allowInfo" type="checkbox" role="switch"></label>
+                  <label class="admin-usage-switch">仅解析基本信息<input name="allowInfo" type="checkbox" role="switch"></label>
                   <label class="admin-usage-switch">独立下载媒体<input name="allowDownload" type="checkbox" role="switch"></label>
                   <label class="admin-usage-switch">下载并转写<input name="allowTranscribe" type="checkbox" role="switch"></label>
                 </div>
