@@ -149,6 +149,64 @@ test('当前强制策略独立保存，不丢同一草稿尚未保存的编辑',
   assert.equal(h.node('#admin-release-changelog').value, '未保存说明');
   assert.equal(h.node('#admin-release-force').checked, true);
   assert.equal(h.node('#admin-release-publish').disabled, true);
+  assert.equal(h.node('#admin-release-policy').checked, true);
+  assert.equal(h.node('#admin-release-policy-label').textContent, '当前已开启强制更新');
+  assert.equal(h.node('#admin-release-policy-save').disabled, true);
+});
+
+test('线上强制开关显示待保存状态，改回原值不提交也不允许重复保存', () => {
+  const h = harness();
+  assert.equal(h.node('#admin-release-policy-label').textContent, '当前未开启强制更新');
+  assert.equal(h.node('#admin-release-policy-save').disabled, true);
+  h.node('#admin-release-policy').checked = true;
+  h.node('#admin-release-policy').listeners.change();
+  assert.equal(h.node('#admin-release-policy-label').textContent, '开启强制更新（待保存）');
+  assert.equal(h.node('#admin-release-policy-save').disabled, false);
+  assert.equal(h.requests.length, 0);
+  h.node('#admin-release-policy').checked = false;
+  h.node('#admin-release-policy').listeners.change();
+  assert.equal(h.node('#admin-release-policy-label').textContent, '当前未开启强制更新');
+  assert.equal(h.node('#admin-release-policy-save').disabled, true);
+  h.context.renderAdminReleases({draft, release: {...release, forceUpdate: true}});
+  h.node('#admin-release-policy').checked = false;
+  h.node('#admin-release-policy').listeners.change();
+  assert.equal(h.node('#admin-release-policy-label').textContent, '关闭强制更新（待保存）');
+  assert.equal(h.node('#admin-release-policy-save').disabled, false);
+});
+
+test('开关保存失败恢复最后确认的线上状态并保留草稿编辑', async () => {
+  for (const originalForce of [false, true]) {
+    const h = harness({draft, release: {...release, forceUpdate: originalForce}});
+    h.edit('保留未保存说明', true);
+    h.node('#admin-release-policy').checked = !originalForce;
+    h.node('#admin-release-policy').listeners.change();
+    const saving = h.context.saveAdminReleasePolicy();
+    await tick();
+    assert.equal(h.node('#admin-release-policy-save').disabled, true);
+    h.requests[0].reject(new Error('策略保存失败，请重新加载'));
+    await saving;
+    assert.equal(h.node('#admin-release-policy').checked, originalForce);
+    assert.equal(h.node('#admin-release-policy-label').textContent, originalForce ? '当前已开启强制更新' : '当前未开启强制更新');
+    assert.equal(h.node('#admin-release-policy-save').disabled, true);
+    assert.equal(h.node('#admin-release-changelog').value, '保留未保存说明');
+    assert.equal(h.node('#admin-release-force').checked, true);
+    assert.match(h.node('#admin-release-status').textContent, /策略保存失败/);
+  }
+});
+
+test('旧页面策略请求失败不能回滚新页面的开关', async () => {
+  const h = harness();
+  h.node('#admin-release-policy').checked = true;
+  const saving = h.context.saveAdminReleasePolicy();
+  await tick();
+  h.context.resetAdminReleases();
+  h.context.sessionEpoch++;
+  h.context.renderAdminReleases({draft, release: {...release, id: 'new-release', forceUpdate: true}});
+  h.requests[0].reject(new Error('旧页面请求取消'));
+  await saving;
+  assert.equal(h.node('#admin-release-policy').checked, true);
+  assert.equal(h.node('#admin-release-policy-label').textContent, '当前已开启强制更新');
+  assert.equal(h.node('#admin-release-status').textContent, '');
 });
 
 test('另一管理员替换草稿时不会把旧包的未保存说明套到新包', async () => {
@@ -171,10 +229,15 @@ test('关闭强制更新无需重复确认，取消开启不会调用政策接�
   assert.equal(h.confirmations.length, 0);
   h.requests[0].resolve({draft, release});
   await disabling;
+  assert.equal(h.node('#admin-release-policy').checked, false);
+  assert.equal(h.node('#admin-release-policy-label').textContent, '当前未开启强制更新');
   h.context.confirmed = false;
   h.node('#admin-release-policy').checked = true;
   await h.context.saveAdminReleasePolicy();
   assert.equal(h.requests.length, 1);
+  assert.equal(h.node('#admin-release-policy').checked, false);
+  assert.equal(h.node('#admin-release-policy-label').textContent, '当前未开启强制更新');
+  assert.equal(h.node('#admin-release-policy-save').disabled, true);
 });
 
 test('APK 使用 multipart 上传及真实进度，不添加 JSON Content-Type', async () => {

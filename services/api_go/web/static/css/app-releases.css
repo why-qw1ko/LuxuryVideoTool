@@ -15,7 +15,6 @@
 .release-form textarea{width:100%;min-height:150px;resize:vertical;line-height:1.6}
 .release-form label{display:flex;flex-direction:column;gap:8px;font-size:13px}
 .release-form .release-switch{display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:12px}
-.release-switch input{flex-shrink:0;width:18px;height:18px;accent-color:var(--primary)}
 .release-actions{display:flex;flex-wrap:wrap;gap:10px}
 #admin-console .release-form input[type="file"]{height:auto;min-height:40px;padding:8px;line-height:1.5;max-width:100%}
 .release-upload-progress{display:flex;flex-direction:column;gap:8px;font-size:12px;color:var(--text-secondary)}

@@ -16,6 +16,22 @@ Kotlin 与 Jetpack Compose 原生客户端，最低支持 Android 11（API 30）
 
 调试 APK 输出到 `app/build/outputs/apk/debug/app-debug.apk`。
 
+## 正式 APK
+
+本机已配置 release 自动签名。使用 JDK 21，在本目录执行：
+
+```powershell
+.\gradlew.bat :app:assembleRelease
+```
+
+正式安装包输出到 `app/build/outputs/apk/release/app-release.apk`。Android Studio 中也可使用 Gradle JDK 21 运行 `:app:assembleRelease`。
+
+签名配置来自本机的 `android/key.properties`，密钥文件是仓库根目录下的 `secrets/android/luxuryvideo-release.jks`，别名为 `luxuryvideo-release`。这两个文件均由 Git 忽略，需要一起私下备份；更换构建电脑时恢复它们，不要创建新签名替代。配置或密钥缺失时，release 构建会报错，调试构建不受影响。
+
+每次发新版先递增 `app/build.gradle.kts` 中的 `versionCode`，按需修改 `versionName`，并持续使用同一把正式签名。若手机原来安装的是调试签名版本，首次迁移需要手动卸载旧包后安装正式包；卸载会清除本机应用数据，后续正式版本可覆盖升级。
+
+网页“安卓发版”只上传生成的 APK，不上传密钥或 `key.properties`。完整流程见[安卓发版说明](../docs/operations/安卓发版说明.md)。
+
 ## 使用
 
 1. 启动现有 Go 服务端，在客户端填写设备能够访问的服务器地址。

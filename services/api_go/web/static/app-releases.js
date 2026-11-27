@@ -14,6 +14,8 @@ function adminReleaseStatus(message,failed=false){
 
 function syncAdminReleaseControls(){
   const busy=!!adminReleaseOperation;
+  const published=adminReleaseData.release,forceUpdate=$('#admin-release-policy').checked;
+  const policyChanged=!!published&&forceUpdate!==!!published.forceUpdate;
   $('#admin-view-releases').setAttribute('aria-busy',String(busy));
   $('#admin-release-refresh').disabled=busy;
   $('#admin-release-apk').disabled=busy;
@@ -21,6 +23,13 @@ function syncAdminReleaseControls(){
   $('#admin-release-draft-fields').disabled=busy||!adminReleaseData.draft;
   $('#admin-release-publish').disabled=busy||!adminReleaseData.draft||adminReleaseDirty;
   $('#admin-release-policy-fields').disabled=busy||!adminReleaseData.release;
+  $('#admin-release-policy-save').disabled=busy||!policyChanged;
+  $('#admin-release-policy-label').textContent=!published?'尚未发布安卓版本':policyChanged?`${forceUpdate?'开启':'关闭'}强制更新（待保存）`:published.forceUpdate?'当前已开启强制更新':'当前未开启强制更新';
+}
+
+function restoreAdminReleasePolicy(){
+  $('#admin-release-policy').checked=!!adminReleaseData.release?.forceUpdate;
+  syncAdminReleaseControls();
 }
 
 function releaseSize(bytes){
@@ -40,7 +49,6 @@ function renderAdminReleases(data){
   $('#admin-release-published').innerHTML=published?releaseMetadataHTML(published):'<p class="meta">尚未发布安卓版本。</p>';
   $('#admin-release-published-notes').textContent=published?.changelog||'';
   $('#admin-release-policy').checked=!!published?.forceUpdate;
-  $('#admin-release-policy-label').textContent=published?.forceUpdate?'当前已开启强制更新':'当前未开启强制更新';
   const download=$('#admin-release-download');
   const path=published?.downloadUrl||'';
   const downloadable=/^\/api\/v1\/app\/android\/releases\/[a-zA-Z0-9_-]+\/apk$/.test(path);
@@ -191,19 +199,24 @@ async function saveAdminReleasePolicy(){
   const release=adminReleaseData.release,forceUpdate=$('#admin-release-policy').checked;
   if(!release||forceUpdate===!!release.forceUpdate)return;
   return runAdminReleaseOperation('正在更新发布策略…',async operation=>{
-    if(forceUpdate){
-      const accepted=await confirmDialog({title:'开启强制更新',message:`旧于 ${release.versionName}（${release.versionCode}）的客户端需要更新后才能继续使用。确认开启？`,confirmText:'开启',danger:true});
-      if(!accepted||!operation.current()){
-        if(operation.current())adminReleaseStatus('已取消修改发布策略。');return;
+    try{
+      if(forceUpdate){
+        const accepted=await confirmDialog({title:'开启强制更新',message:`旧于 ${release.versionName}（${release.versionCode}）的客户端需要更新后才能继续使用。确认开启？`,confirmText:'开启',danger:true});
+        if(!accepted||!operation.current()){
+          if(operation.current()){restoreAdminReleasePolicy();adminReleaseStatus('已取消修改发布策略。')}return;
+        }
       }
+      const data=await api(`${androidReleaseBase}/policy`,{method:'PUT',body:JSON.stringify({releaseId:release.id,forceUpdate}),signal:operation.controller.signal});
+      if(!operation.current())return;
+      // 修改现行策略时保留尚未保存的草稿编辑。
+      const dirty=adminReleaseDirty,draftId=adminReleaseData.draft?.id,notes=$('#admin-release-changelog').value,draftForce=$('#admin-release-force').checked;
+      renderAdminReleases(data);
+      if(dirty&&data.draft?.id===draftId){adminReleaseDirty=true;$('#admin-release-changelog').value=notes;$('#admin-release-force').checked=draftForce}
+      adminReleaseStatus(data.release?.forceUpdate?'已开启当前版本的强制更新。':'已关闭当前版本的强制更新。');
+    }catch(error){
+      if(operation.current())restoreAdminReleasePolicy();
+      throw error;
     }
-    const data=await api(`${androidReleaseBase}/policy`,{method:'PUT',body:JSON.stringify({releaseId:release.id,forceUpdate}),signal:operation.controller.signal});
-    if(!operation.current())return;
-    // 修改现行策略时保留尚未保存的草稿编辑。
-    const dirty=adminReleaseDirty,draftId=adminReleaseData.draft?.id,notes=$('#admin-release-changelog').value,draftForce=$('#admin-release-force').checked;
-    renderAdminReleases(data);
-    if(dirty&&data.draft?.id===draftId){adminReleaseDirty=true;$('#admin-release-changelog').value=notes;$('#admin-release-force').checked=draftForce}
-    adminReleaseStatus(forceUpdate?'已开启当前版本的强制更新。':'已关闭当前版本的强制更新。');
   });
 }
 
@@ -219,6 +232,7 @@ function bindAdminReleases(){
   $('#admin-release-draft-form').addEventListener('submit',event=>{event.preventDefault();void saveAdminReleaseDraft()});
   $('#admin-release-publish').addEventListener('click',()=>void publishAdminRelease());
   $('#admin-release-policy-form').addEventListener('submit',event=>{event.preventDefault();void saveAdminReleasePolicy()});
+  $('#admin-release-policy').addEventListener('change',syncAdminReleaseControls);
   const edit=()=>{
     if(!adminReleaseData.draft||adminReleaseOperation)return;
     adminReleaseDirty=true;

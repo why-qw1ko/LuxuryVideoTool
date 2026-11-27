@@ -446,9 +446,10 @@
               <a id="admin-release-download" class="ghost hidden" download>下载安装包</a>
               <form id="admin-release-policy-form" class="release-form">
                 <fieldset id="admin-release-policy-fields" disabled>
-                  <label class="release-switch"><span id="admin-release-policy-label">当前未开启强制更新</span><input id="admin-release-policy" type="checkbox" role="switch"></label>
-                  <p class="meta">开启后，旧版本用户需要更新才能继续使用。关闭可立即解除此要求，客户端下次检查时生效。</p>
-                  <div class="release-actions"><button class="ghost" type="submit">保存当前更新策略</button></div>
+                  <label class="release-switch">强制更新<input id="admin-release-policy" type="checkbox" role="switch" aria-describedby="admin-release-policy-label"></label>
+                  <p id="admin-release-policy-label" class="meta" aria-live="polite">尚未发布安卓版本</p>
+                  <p class="meta">调整开关后点击“保存当前更新策略”。开启后旧版本用户须更新才能继续使用，关闭后可取消更新；客户端下次启动或手动检查时生效。</p>
+                  <div class="release-actions"><button id="admin-release-policy-save" class="ghost" type="submit" disabled>保存当前更新策略</button></div>
                 </fieldset>
               </form>
             </section>
@@ -465,7 +466,7 @@
                 <fieldset id="admin-release-draft-fields" disabled>
                   <label for="admin-release-changelog">更新说明<textarea id="admin-release-changelog" maxlength="10000" rows="6" placeholder="说明此版本的功能变化和问题修复"></textarea></label>
                   <label class="release-switch">发布后要求旧版本更新<input id="admin-release-force" type="checkbox" role="switch"></label>
-                  <p class="meta">草稿设置在发布后生效。覆盖升级须使用相同包名和兼容的签名，新安装包的版本编号应递增。</p>
+                  <p class="meta">发布时会采用此设置，覆盖当前线上强制更新策略。覆盖升级须使用相同包名和兼容的签名，新安装包的版本编号应递增。</p>
                   <div class="release-actions"><button id="admin-release-save" class="ghost" type="submit">保存草稿</button><button id="admin-release-publish" class="btn-primary" type="button" disabled>发布此版本</button></div>
                 </fieldset>
               </form>
