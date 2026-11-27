@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="capture_splash_background">#000000</color>
+    <color name="capture_splash_accent">#6AA1FF</color>
+    <color name="capture_splash_track">#142A4F</color>
+</resources>

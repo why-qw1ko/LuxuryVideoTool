@@ -77,7 +77,7 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 - `POST /api/v1/jobs`：Bearer 鉴权，必须携带 `Idempotency-Key`；当前接受 `info`、`download`、`transcribe` 与 `full`。
 - `GET /api/v1/jobs/{id}`：只返回当前用户拥有的任务及结构化作品信息。
 - `GET /api/v1/jobs`：当前用户的历史任务，支持 `q/status/action/limit/offset` 搜索、筛选与分页。
-- 两个任务列表接口均支持 `view=summary`。摘要只包含列表展示字段，文案、文件和签名通过任务详情接口读取。现有客户端省略 `view` 时继续获取完整列表。
+- 两个任务列表接口均支持 `view=summary`。摘要只包含列表展示字段、作品类型和封面预览签名，完整文案、文件和音乐通过任务详情接口读取。现有客户端省略 `view` 时继续获取完整列表。
 - `GET /api/v1/jobs/usage` 返回当前账号的每日用量 `usage.{used, limit, resetAt}` 和新建权限 `usage.{allowInfo, allowDownload, allowTranscribe}`。`limit` 为 `0` 时代表不限。每账号在北京时间零点重置，每个新建任务计 1 次，重试、幂等重放和删除均不会增加或退回次数。
 - `usage.asr` 包含生效的 `defaultProvider`、`allowUserSelection` 和已启用且已配置的服务 `providers`（每项含 `id`）。创建 `transcribe/full` 任务时可通过 `options.asrProvider` 明确选择供应商。省略时使用默认服务。所选服务不可用或管理员关闭自主选择时返回 `403 ASR_PROVIDER_UNAVAILABLE`。
 - 创建任务达到额度时返回 `429 DAILY_TASK_LIMIT` 和 `Retry-After`。任务类型暂停新建时返回 `403 TASK_ACTION_DISABLED`。
@@ -88,7 +88,7 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 - `GET /api/v1/jobs/{id}/images/archive`：鉴权后将该任务仍有效的配图/动图打包为 ZIP 返回，兼容原有客户端（无此类文件返回 404）。
 - `POST /api/v1/jobs/{id}/images/archive-download`：Bearer 鉴权并校验任务归属、完成状态和源文件，返回 `{downloadUrl, expiresAt}`；同源下载地址有效期 5 分钟，只授权指定用户的指定任务下载 ZIP。
 - `GET /api/v1/archive-download/{id}?user=&expires=&signature=`：凭上述短期签名下载，无需 Authorization 头；重新校验归属、任务状态和媒体有效期。与预览、ASR 的签名用途隔离，响应禁止缓存；完整 ZIP 成包后才返回，提供 Content-Length，支持 HEAD、Range。网页通过原生下载交给浏览器显示进度，不再先把整个 ZIP 接收到 JS 内存。
-- `GET /api/v1/media-preview/{id}?expires=&signature=`：同源签名的媒体预览地址（HMAC 签名，约 24 小时有效），供 `<img>`/`<video>` 直接加载，无需 Authorization 头；仅限 image/animated/video 类型。
+- `GET /api/v1/media-preview/{id}?expires=&signature=`：同源签名的媒体预览地址（HMAC 签名，最长约 24 小时且不超过文件有效期），供 `<img>`/`<video>` 直接加载，无需 Authorization 头；仅限 image/animated/video/music 类型。
 - `GET /api/v1/media-preview/{id}/thumbnail?expires=&signature=`：同源签名缩略图。已下载的视频优先使用服务端抽帧生成的 WebP。
 - `GET /api/v1/job-cover/{id}?expires=&signature=`：同源签名的视频封面地址，由任务详情的 `work.coverPreviewUrl` 提供。服务端从允许的媒体域名获取封面图片，可用于尚未下载视频的解析结果。
 
@@ -118,6 +118,8 @@ M1 提供健康检查与认证 API。所有 JSON 响应使用 UTF-8，错误遵�
 
 Access Token 默认 15 分钟有效；Refresh Token 默认 30 天有效且数据库只保存 SHA-256 哈希。登录按“来源 IP + 规范化用户名”限制为默认每分钟 5 次。
 
+同一账号支持 Web、安卓和其他设备同时登录，每次登录拥有独立会话。重复使用已轮换的 Refresh Token 时，仅撤销该次登录的后续轮换链，不影响其他独立设备；修改密码、禁用账号以及轮换或吊销 CDK 等主动撤销操作仍按各自规则使相关全部会话失效。
+
 存活探针响应示例：
 
 ```json
@@ -130,3 +132,34 @@ Access Token 默认 15 分钟有效；Refresh Token 默认 30 天有效且数据
   }
 }
 ```
+
+## 媒体接口与列表优化（2026-11-27）
+
+- 普通和管理员任务列表使用 `view=summary&limit=10&offset=0`，摘要响应额外返回 `summaryVersion: 2`。`work` 包含 `type`、`coverUrl` 和可用时的 `coverPreviewUrl`；不会返回图片数组、音乐或完整文件结果。封面优先使用该任务所属用户的未删除、未过期图片/动图/视频缩略图，已完成视频可回退到封面代理。省略 `view` 的完整列表仍兼容，文件查询按页批量读取。
+- 任务详情和创建响应可包含 `job.music`：`source` 为 `server`、`original` 或 `unavailable`，可用时含 `url`；另有可选 `fallbackUrl`、`fileId`、`expiresAt`、`title`、`artist`。优先选择有效服务器音乐，过期后允许使用作品原站地址。来源字段供客户端内部选址，Web 和安卓不显示来源标签。
+- `POST /api/v1/jobs/{id}/music/refresh` 和管理员的 `POST /api/v1/admin/jobs/{id}/music/refresh` 请求体须为空，成功返回 `{job, requestId}`。仅强制重新解析既有已完成任务对应的作品，不创建任务、不增加额度、不下载媒体；地址成功刷新后保存到作品信息。无可用新音乐时保留旧地址并返回错误。客户端仅在播放失败或明确重试时调用，兼容旧服务时可回退一次详情 GET。
+- 音乐刷新按作品合并并发请求，单进程最多 2 个实际解析、128 条限流状态；同作品从解析开始起冷却 60 秒，失败同样冷却。单轮最多 25 秒。限流返回 `429 MUSIC_REFRESH_RATE_LIMITED` 和 `Retry-After`，未完成返回 `409 JOB_NOT_READY`，服务未配置返回 `503 SERVICE_NOT_READY`，解析失败/超时为 `502 MUSIC_REFRESH_FAILED` / `504 MUSIC_REFRESH_TIMEOUT`。详情 GET 仍仅读取已保存数据。
+- 普通和管理员文件下载、签名预览及缩略图均检查文件保留期，物理清理尚未运行也不能读取过期文件。鉴权下载返回 `410 FILE_EXPIRED`，签名预览/缩略图返回 404；错误响应禁止缓存。此限制只约束服务器保存的文件，不禁止原站外链音乐。
+- 媒体预览支持 `HEAD`、`Range`（206/416）、`ETag`、`If-None-Match`（304）和 `If-Range`。预览私有缓存最多 1 小时，同时受签名和文件剩余有效期限制；鉴权下载使用 `private, no-cache` 并支持条件校验。签名在到期瞬间失效，缩略图不会延长原文件保留期。
+- 封面代理保留域名白名单和重定向校验，响应含内容 ETag、支持 HEAD/304，浏览器私有缓存最多 5 分钟且不超过签名有效期。进程内成功响应缓存 5 分钟，最多 64 项、32 MiB；相同候选地址的并发请求共享一次回源，实际回源最多 8 个，调用者取消互相独立。失败不缓存。
+- 缩略图继续使用既有 WebP 和单路编码，生成失败后短暂退避 10 秒，最多保留 128 条失败记录；源文件大小或修改时间变化可立即重试，取消和超时不计入失败退避。
+
+## 安卓应用版本发布
+
+| 方法 | 路径 | 权限 | 用途 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/app/android/version` | 公开 | 获取当前已发布版本，未发布时 `release` 为 `null` |
+| GET / HEAD | `/api/v1/app/android/releases/{id}/apk` | 公开 | 下载曾经发布的不可变 APK，支持 Range；草稿不能下载 |
+| GET | `/api/v1/admin/app/android/release` | 管理员 | 读取草稿和当前发布版本 |
+| POST | `/api/v1/admin/app/android/apk` | 管理员 | multipart/form-data 上传，文件字段为 `apk`，最大 256 MiB |
+| PUT | `/api/v1/admin/app/android/release` | 管理员 | 保存草稿说明和发布时的强制更新策略 |
+| POST | `/api/v1/admin/app/android/publish` | 管理员 | 发布指定草稿 |
+| PUT | `/api/v1/admin/app/android/policy` | 管理员 | 立即开关当前发布版本的强制更新策略 |
+
+版本对象包含 `id`、`versionCode`、`versionName`、`packageName`、`changelog`、`forceUpdate`、`size`、`sha256`、`downloadUrl` 和 `publishedAt`。公开清单返回 `{release, requestId}`；管理员响应返回 `{draft, release, requestId}`。清单禁止缓存，APK 与任务文件生命周期分开。
+
+上传从 APK 读取真实版本和包名，限定 `com.buleng.luxuryvideo`。保存草稿请求为 `{draftId, versionCode, versionName, changelog, forceUpdate}`，其中版本信息必须与包内一致。发布请求为 `{draftId}`；修改线上强制开关请求为 `{releaseId, forceUpdate}`。草稿或当前发布 ID 已被其他管理员替换时返回冲突，刷新后重新核对。
+
+新 APK 的版本编号必须递增；已发布的相同 APK 可以编辑说明后重新发布，不能相同编号换包或降级。`forceUpdate` 开启时，仅实际版本编号低于当前发布版本的客户端必须更新；开关在下次检查生效。安装前客户端核对文件摘要、大小、应用身份和签名兼容性。发布操作与普通任务额度无关，不会扣除 CDK 或每日次数。
+
+操作步骤见 [安卓版本发布说明](../operations/安卓发版说明.md)。

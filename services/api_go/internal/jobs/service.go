@@ -15,6 +15,7 @@ type Service struct {
 	resolver *resolver.Service
 	now func() time.Time
 	forceCancel func(string) bool
+	musicRefresh musicRefreshState
 }
 
 func NewService(repo Repository, resolverService *resolver.Service) *Service { return &Service{repo: repo, resolver: resolverService, now: time.Now} }

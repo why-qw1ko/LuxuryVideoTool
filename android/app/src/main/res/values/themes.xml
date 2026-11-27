@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.LuxuryVideoApp" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:colorAccent">#165DFF</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowBackground">@color/capture_splash_background</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>

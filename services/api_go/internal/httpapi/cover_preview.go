@@ -1,9 +1,13 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/media"
@@ -31,6 +35,7 @@ func addCoverPreview(deps Dependencies, work *resolver.Work, jobID string, expir
 }
 
 func handleCoverPreview(deps Dependencies, w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "private, no-store")
 	id, query := r.PathValue("id"), r.URL.Query()
 	if deps.Jobs == nil || deps.Covers == nil || deps.ASRSigner == nil ||
 		!deps.ASRSigner.ValidateCoverPreview(id, query.Get("expires"), query.Get("signature"), time.Now()) {
@@ -49,6 +54,11 @@ func handleCoverPreview(deps Dependencies, w http.ResponseWriter, r *http.Reques
 	}
 	w.Header().Set("Content-Type", mime)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Cache-Control", "private, max-age=300")
-	_, _ = w.Write(body)
+	maxAge := int64(300)
+	if signedExpiry, err := strconv.ParseInt(query.Get("expires"), 10, 64); err == nil {
+		maxAge = max(0, min(maxAge, int64(time.Until(time.Unix(signedExpiry, 0))/time.Second)))
+	}
+	w.Header().Set("Cache-Control", fmt.Sprintf("private, max-age=%d, must-revalidate", maxAge))
+	w.Header().Set("ETag", fmt.Sprintf(`"%x"`, sha256.Sum256(body)))
+	http.ServeContent(w, r, "cover", time.Time{}, bytes.NewReader(body))
 }

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -84,5 +85,31 @@ func TestInfoJobServesSignedVideoCover(t *testing.T) {
 	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "image/webp" ||
 		response.Header().Get("X-Content-Type-Options") != "nosniff" || !bytes.Equal(response.Body.Bytes(), image) || fetchCalls != 1 {
 		t.Fatalf("cover status = %d, headers = %v, calls = %d, body = %q", response.Code, response.Header(), fetchCalls, response.Body.Bytes())
+	}
+	etag := response.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("cover response must have an ETag")
+	}
+	shortURL := f.deps.ASRSigner.CoverPreviewURL(result.Job.ID, time.Now().Add(30*time.Second))
+	call := func(method string, headers map[string]string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(method, shortURL, nil)
+		for name, value := range headers {
+			r.Header.Set(name, value)
+		}
+		w := httptest.NewRecorder()
+		f.handler.ServeHTTP(w, r)
+		return w
+	}
+	head := call(http.MethodHead, nil)
+	if head.Code != http.StatusOK || head.Body.Len() != 0 || head.Header().Get("Content-Length") != strconv.Itoa(len(image)) || head.Header().Get("ETag") != etag {
+		t.Fatalf("cover HEAD status=%d headers=%v body=%q", head.Code, head.Header(), head.Body.String())
+	}
+	maxAge, err := strconv.Atoi(strings.Split(strings.TrimPrefix(head.Header().Get("Cache-Control"), "private, max-age="), ",")[0])
+	if err != nil || maxAge < 0 || maxAge > 30 {
+		t.Fatalf("cover cache outlives signature: %q", head.Header().Get("Cache-Control"))
+	}
+	if cached := call(http.MethodGet, map[string]string{"If-None-Match": etag}); cached.Code != http.StatusNotModified || cached.Body.Len() != 0 {
+		t.Fatalf("cover conditional status=%d body=%q", cached.Code, cached.Body.String())
 	}
 }

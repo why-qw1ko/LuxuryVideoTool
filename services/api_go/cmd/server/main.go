@@ -21,6 +21,7 @@ import (
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/httpapi"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/jobs"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/media"
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/releases"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/resolver"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/settings"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/version"
@@ -66,6 +67,10 @@ func run() error {
 	jobService := jobs.NewService(jobRepository, resolverService)
 	fileRepository := ownedfiles.NewRepository(db)
 	storage, err := ownedfiles.NewStorage(cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	androidReleases, err := releases.New(db, cfg.DataDir)
 	if err != nil {
 		return err
 	}
@@ -136,7 +141,7 @@ func run() error {
 		Addr: cfg.HTTPAddr,
 		Handler: httpapi.New(httpapi.Dependencies{
 			Build: version.Current(), Auth: authService, Jobs: jobService, Files: fileRepository, Storage: storage, Thumbnails: thumbnails, Covers: media.NewCoverFetcher(), ASRSigner: signer, Audit: audit.New(db, signingKey),
-			Ready: readiness, LoginRateLimit: cfg.LoginRateLimit, Settings: runtimeSettings, AliyunAvailable: aliyunAvailable,
+			AndroidReleases: androidReleases, Ready: readiness, LoginRateLimit: cfg.LoginRateLimit, Settings: runtimeSettings, AliyunAvailable: aliyunAvailable,
 			ASRProviderFactory: providerFactory, AllowInsecureProviderSettings: cfg.AllowInsecureProviderSettings,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,

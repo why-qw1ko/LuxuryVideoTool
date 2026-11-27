@@ -302,11 +302,19 @@ func revokeAllUserSessions(ctx context.Context, db execer, userID string, now ti
 }
 
 func (r *SQLiteRepository) RevokeSessionsAfterRefreshReplay(ctx context.Context, session Session, now time.Time) error {
-	// A concurrent CDK rotation can invalidate the old digest after the refresh looked it up.
-	_, err := r.db.ExecContext(ctx, `UPDATE refresh_tokens SET revoked_at = ?, last_used_at = ?
-		WHERE user_id = ? AND revoked_at IS NULL AND EXISTS (
-			SELECT 1 FROM refresh_tokens WHERE id = ? AND user_id = ? AND token_hash = ? AND revoked_at IS NOT NULL
-		)`, millis(now), millis(now), session.UserID, session.ID, session.UserID, session.TokenHash)
+	// Revoke only this login's replacement chain; independent device logins stay active.
+	// The digest guard prevents a stale lookup before CDK rotation from matching after it.
+	_, err := r.db.ExecContext(ctx, `WITH RECURSIVE replay_chain(id) AS (
+		SELECT id FROM refresh_tokens
+		WHERE id = ? AND user_id = ? AND token_hash = ? AND revoked_at IS NOT NULL
+		UNION
+		SELECT next.id FROM refresh_tokens current
+		JOIN replay_chain chain ON current.id = chain.id
+		JOIN refresh_tokens next ON next.id = current.replaced_by AND next.user_id = ?
+	)
+	UPDATE refresh_tokens SET revoked_at = ?, last_used_at = ?
+	WHERE user_id = ? AND revoked_at IS NULL AND id IN (SELECT id FROM replay_chain)`,
+		session.ID, session.UserID, session.TokenHash, session.UserID, millis(now), millis(now), session.UserID)
 	if err != nil {
 		return fmt.Errorf("revoke sessions after refresh replay: %w", err)
 	}

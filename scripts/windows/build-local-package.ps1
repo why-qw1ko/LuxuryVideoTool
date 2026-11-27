@@ -1,13 +1,10 @@
 param(
-    [string]$FFmpegBin,
-    [switch]$IncludeWindowsClient,
-    [switch]$IncludeAndroidAPK
+    [string]$FFmpegBin
 )
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $apiRoot = Join-Path $repositoryRoot 'services\api_go'
-$clientRoot = Join-Path $repositoryRoot 'apps\client_flutter'
 $version = (Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'VERSION')).Trim()
 $outputRoot = Join-Path $repositoryRoot ("dist\douyin-capture-windows-{0}" -f $version)
 
@@ -32,16 +29,6 @@ if ($FFmpegBin) {
     $tools = Join-Path $outputRoot 'tools'; New-Item -ItemType Directory -Path $tools -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $resolvedFFmpeg 'ffmpeg.exe') -Destination $tools -Force
     Copy-Item -LiteralPath (Join-Path $resolvedFFmpeg 'ffprobe.exe') -Destination $tools -Force
-}
-
-if ($IncludeWindowsClient -or $IncludeAndroidAPK) {
-    if (-not (Get-Command flutter -ErrorAction SilentlyContinue)) { throw 'Flutter was requested but was not found.' }
-    Push-Location $clientRoot
-    try {
-        flutter pub get
-        if ($IncludeWindowsClient) { flutter build windows --release --dart-define="APP_VERSION=$version"; Copy-Item -Path (Join-Path $clientRoot 'build\windows\x64\runner\Release\*') -Destination (Join-Path $outputRoot 'windows-client') -Recurse -Force }
-        if ($IncludeAndroidAPK) { flutter build apk --release --dart-define="APP_VERSION=$version"; New-Item -ItemType Directory -Path (Join-Path $outputRoot 'android') -Force | Out-Null; Copy-Item -LiteralPath (Join-Path $clientRoot 'build\app\outputs\flutter-apk\app-release.apk') -Destination (Join-Path $outputRoot 'android\douyin-capture.apk') -Force }
-    } finally { Pop-Location }
 }
 
 Write-Host "Local package created: $outputRoot"

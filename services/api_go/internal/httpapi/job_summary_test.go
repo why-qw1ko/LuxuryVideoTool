@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/auth"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/jobs"
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/media"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/resolver"
 )
 
@@ -103,7 +105,8 @@ func TestJobSummaryListsPreservePermissionsAndFullDetails(t *testing.T) {
 	work, err := resolver.NewSQLiteCache(fixture.db).Save(ctx, resolver.Work{
 		DouyinWorkID: "123", Type: "note", CanonicalURL: "https://www.douyin.com/note/123",
 		Title: "Gallery summary", AuthorName: "Artist", DurationMS: 1200, Hashtags: []string{"gallery"},
-		Images: []resolver.Image{{URL: "https://example.com/original.jpg"}}, ResolvedAt: now,
+		CoverURL: "https://example.com/summary-cover.jpg",
+		Images:   []resolver.Image{{URL: "https://example.com/original.jpg"}}, ResolvedAt: now,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -136,7 +139,8 @@ func TestJobSummaryListsPreservePermissionsAndFullDetails(t *testing.T) {
 	if summary.ID != "job-1" || summary.OwnerUsername != "" || summary.MediaExpiresAt == nil || !summary.MediaExpiresAt.Equal(earlier) {
 		t.Fatalf("unexpected job: %+v", summary)
 	}
-	if summary.Work == nil || summary.Work.Title != "Gallery summary" || summary.Work.AuthorName != "Artist" || summary.Work.DurationMS != 1200 || !slices.Equal(summary.Work.Hashtags, []string{"gallery"}) {
+	if summary.Work == nil || summary.Work.Title != "Gallery summary" || summary.Work.AuthorName != "Artist" || summary.Work.DurationMS != 1200 || !slices.Equal(summary.Work.Hashtags, []string{"gallery"}) ||
+		summary.Work.Type != "note" || summary.Work.CoverURL != work.CoverURL {
 		t.Fatalf("unexpected work: %+v", summary.Work)
 	}
 	for _, field := range []string{`"result"`, `"files"`, `"previewUrl"`, `"images"`, `"ownerDisplayName"`} {
@@ -220,5 +224,80 @@ func TestJobSummaryListsPreservePermissionsAndFullDetails(t *testing.T) {
 		if strings.Contains(response.Body.String(), earliestFile.ID) {
 			t.Fatalf("%s: soft-deleted file should not be offered", check.path)
 		}
+	}
+}
+
+func TestJobSummaryCoverUsesOwnedUnexpiredMedia(t *testing.T) {
+	fixture := newArchiveDownloadFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	for _, file := range fixture.media {
+		if err := fixture.deps.Files.MarkDeleted(ctx, file.ID, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixture.addFile(t, "job-1", fixture.otherID, "image", "wrong-owner.jpg", []byte("private"), nil)
+	expired := now.Add(-time.Minute)
+	fixture.addFile(t, "job-1", fixture.ownerID, "image", "expired.jpg", []byte("expired"), &expired)
+	removed := fixture.addFile(t, "job-1", fixture.ownerID, "image", "deleted.jpg", []byte("deleted"), nil)
+	if err := fixture.deps.Files.MarkDeleted(ctx, removed.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	deadline := now.Add(time.Hour)
+	cover := fixture.addFile(t, "job-1", fixture.ownerID, "animated", "current.mp4", []byte("current"), &deadline)
+	fixture.addFile(t, "job-1", fixture.ownerID, "image", "later.jpg", []byte("later"), nil)
+	work, err := resolver.NewSQLiteCache(fixture.db).Save(ctx, resolver.Work{
+		DouyinWorkID: "summary-cover", Type: "note", CanonicalURL: "https://www.douyin.com/note/123",
+		Title: "Summary cover", CoverURL: "https://example.test/cover.jpg", ResolvedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.db.ExecContext(ctx, `UPDATE jobs SET work_id = ? WHERE id = ?`, work.ID, "job-1"); err != nil {
+		t.Fatal(err)
+	}
+	page, err := fixture.repo.ListSummaries(ctx, jobs.ListInput{UserID: fixture.ownerID, Query: "Summary cover", Limit: 10}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Work == nil {
+		t.Fatalf("summary page = %+v", page)
+	}
+	summary := page.Items[0].Work
+	if summary.Type != "note" || summary.CoverURL != work.CoverURL || summary.CoverFileID != cover.ID ||
+		summary.CoverExpiresAt == nil || !summary.CoverExpiresAt.Equal(deadline) {
+		t.Fatalf("summary cover = %+v", summary)
+	}
+
+	fixture.deps.Thumbnails = media.NewThumbnailer(filepath.Join(t.TempDir(), "unused-ffmpeg"))
+	fixture.handler = New(fixture.deps)
+	response := performJSON(fixture.handler, http.MethodGet, "/api/v1/jobs?view=summary&q=Summary+cover", nil, fixture.ownerToken)
+	var payload struct {
+		Jobs           []jobs.JobSummary `json:"jobs"`
+		SummaryVersion int               `json:"summaryVersion"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil || response.Code != http.StatusOK || len(payload.Jobs) != 1 {
+		t.Fatalf("summary response: status=%d error=%v body=%s", response.Code, err, response.Body.String())
+	}
+	if payload.SummaryVersion != 2 || payload.Jobs[0].Work == nil {
+		t.Fatalf("summary capabilities = %+v", payload)
+	}
+	preview, err := url.Parse(payload.Jobs[0].Work.CoverPreviewURL)
+	if err != nil || preview.Path != "/api/v1/media-preview/"+cover.ID+"/thumbnail" ||
+		!fixture.deps.ASRSigner.ValidateThumbnail(cover.ID, preview.Query().Get("expires"), preview.Query().Get("signature"), now) {
+		t.Fatalf("summary cover preview = %q, error=%v", payload.Jobs[0].Work.CoverPreviewURL, err)
+	}
+	for _, field := range []string{`"coverFileId"`, `"coverExpiresAt"`, `"result"`, `"files"`, `"images"`} {
+		if strings.Contains(response.Body.String(), field) {
+			t.Fatalf("summary exposes internal or full-detail field %s", field)
+		}
+	}
+
+	if _, err := fixture.db.ExecContext(ctx, `UPDATE jobs SET status = 'queued' WHERE id = ?`, "job-1"); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := fixture.repo.ListSummaries(ctx, jobs.ListInput{UserID: fixture.ownerID, Query: "Summary cover", Limit: 10}, false)
+	if err != nil || len(queued.Items) != 1 || queued.Items[0].Work.CoverFileID != "" {
+		t.Fatalf("unfinished task must not expose stale cover file: page=%+v err=%v", queued, err)
 	}
 }

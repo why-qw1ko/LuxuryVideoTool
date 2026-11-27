@@ -163,20 +163,23 @@ func (r *SQLiteRepository) listJobs(ctx context.Context, input ListInput, withOw
 	if err := rows.Err(); err != nil {
 		return JobPage{}, err
 	}
+	if err := rows.Close(); err != nil {
+		return JobPage{}, err
+	}
+	filesByJob, err := findPageJobFiles(ctx, tx, items)
+	if err != nil {
+		return JobPage{}, err
+	}
 	for index := range items {
 		job := &items[index]
 		if job.Status != "completed" {
 			continue
 		}
-		files, filesErr := findJobFiles(ctx, tx, job.UserID, job.ID)
-		if filesErr != nil {
-			return JobPage{}, filesErr
-		}
 		if job.Result == nil {
 			job.Result = map[string]any{}
 		}
 		if result, ok := job.Result.(map[string]any); ok {
-			result["files"] = files
+			result["files"] = filesByJob[job.ID]
 		}
 	}
 	return JobPage{Items: items, Total: total, Limit: input.Limit, Offset: input.Offset}, nil
@@ -203,16 +206,23 @@ func (r *SQLiteRepository) ListSummaries(ctx context.Context, input ListInput, w
 	// Aggregate expiry only for jobs on this page.
 	query := `WITH page AS (
 		SELECT j.id, j.user_id, j.action, j.status, j.progress, j.created_at, j.updated_at, j.completed_at,
-			w.title, w.author_name,
+			w.title, w.author_name, w.content_type, w.cover_url,
 			CASE WHEN json_valid(w.metadata_json) THEN CAST(json_extract(w.metadata_json, '$.durationMs') AS INTEGER) END AS duration_ms,
 			CASE WHEN json_valid(w.metadata_json) THEN json_extract(w.metadata_json, '$.hashtags') END AS hashtags,
 			` + username + ` AS username, ` + displayName + ` AS display_name
 		` + from + ` WHERE ` + clause + ` ORDER BY j.created_at DESC, j.id DESC LIMIT ? OFFSET ?
 	)
 	SELECT j.id, j.action, j.status, j.progress, j.created_at, j.updated_at,
-		j.title, j.author_name, j.duration_ms, j.hashtags, j.username, j.display_name, ` + jobMediaExpiryColumn + `
-	FROM page j ORDER BY j.created_at DESC, j.id DESC`
-	rows, err := tx.QueryContext(ctx, query, append(args, input.Limit, input.Offset)...)
+		j.title, j.author_name, j.content_type, j.cover_url, j.duration_ms, j.hashtags, j.username, j.display_name,
+		` + jobMediaExpiryColumn + `, cover.id, cover.expires_at
+	FROM page j LEFT JOIN files cover ON cover.id = (
+		SELECT f.id FROM files f
+		WHERE f.job_id = j.id AND f.user_id = j.user_id AND j.status = 'completed'
+			AND f.kind IN ('image', 'animated', 'video') AND f.deleted_at IS NULL
+			AND (f.expires_at IS NULL OR f.expires_at > ?)
+		ORDER BY f.created_at, f.id LIMIT 1
+	) ORDER BY j.created_at DESC, j.id DESC`
+	rows, err := tx.QueryContext(ctx, query, append(args, input.Limit, input.Offset, time.Now().UTC().UnixMilli())...)
 	if err != nil {
 		return JobSummaryPage{}, fmt.Errorf("list job summaries: %w", err)
 	}
@@ -221,16 +231,24 @@ func (r *SQLiteRepository) ListSummaries(ctx context.Context, input ListInput, w
 	for rows.Next() {
 		var item JobSummary
 		var created, updated int64
-		var title, author, hashtags sql.NullString
-		var duration, expiry sql.NullInt64
+		var title, author, workType, coverURL, hashtags, coverID sql.NullString
+		var duration, expiry, coverExpiry sql.NullInt64
 		if err := rows.Scan(&item.ID, &item.Action, &item.Status, &item.Progress, &created, &updated,
-			&title, &author, &duration, &hashtags, &item.OwnerUsername, &item.OwnerDisplayName, &expiry); err != nil {
+			&title, &author, &workType, &coverURL, &duration, &hashtags, &item.OwnerUsername, &item.OwnerDisplayName,
+			&expiry, &coverID, &coverExpiry); err != nil {
 			return JobSummaryPage{}, fmt.Errorf("scan job summary: %w", err)
 		}
 		item.CreatedAt, item.UpdatedAt = time.UnixMilli(created).UTC(), time.UnixMilli(updated).UTC()
 		if title.Valid {
-			work := WorkSummary{Title: title.String, AuthorName: author.String, DurationMS: duration.Int64}
+			work := WorkSummary{
+				Type: workType.String, Title: title.String, AuthorName: author.String, DurationMS: duration.Int64,
+				CoverURL: coverURL.String, CoverFileID: coverID.String,
+			}
 			_ = json.Unmarshal([]byte(hashtags.String), &work.Hashtags)
+			if coverExpiry.Valid {
+				value := time.UnixMilli(coverExpiry.Int64).UTC()
+				work.CoverExpiresAt = &value
+			}
 			item.Work = &work
 		}
 		if expiry.Valid {
@@ -765,6 +783,41 @@ type jobFileQuerier interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
+func findPageJobFiles(ctx context.Context, querier jobFileQuerier, jobs []Job) (map[string][]JobFile, error) {
+	filesByJob := make(map[string][]JobFile)
+	var conditions []string
+	var args []any
+	for _, job := range jobs {
+		if job.Status == "completed" {
+			conditions = append(conditions, "(job_id = ? AND user_id = ?)")
+			args = append(args, job.ID, job.UserID)
+		}
+	}
+	if len(conditions) == 0 {
+		return filesByJob, nil
+	}
+	rows, err := querier.QueryContext(ctx, `SELECT job_id, id, kind, original_name, mime_type, size_bytes, expires_at
+		FROM files WHERE deleted_at IS NULL AND (`+strings.Join(conditions, " OR ")+`) ORDER BY created_at`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("find page job files: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var jobID string
+		var item JobFile
+		var expires sql.NullInt64
+		if err := rows.Scan(&jobID, &item.ID, &item.Kind, &item.Name, &item.MIMEType, &item.SizeBytes, &expires); err != nil {
+			return nil, err
+		}
+		if expires.Valid {
+			value := time.UnixMilli(expires.Int64).UTC()
+			item.ExpiresAt = &value
+		}
+		filesByJob[jobID] = append(filesByJob[jobID], item)
+	}
+	return filesByJob, rows.Err()
+}
+
 func findJobFiles(ctx context.Context, querier jobFileQuerier, userID, jobID string) ([]JobFile, error) {
 	rows, err := querier.QueryContext(ctx, `SELECT id, kind, original_name, mime_type, size_bytes, expires_at FROM files WHERE user_id = ? AND job_id = ? AND deleted_at IS NULL ORDER BY created_at`, userID, jobID)
 	if err != nil {
@@ -791,6 +844,7 @@ func (r *SQLiteRepository) DeleteFileRecord(ctx context.Context, fileID string) 
 	_, err := r.db.ExecContext(ctx, `DELETE FROM files WHERE id = ?`, fileID)
 	return err
 }
+
 // DeleteFilesByJob 批量删除任务的全部文件索引记录（物理文件由调用方 best-effort 清理）。
 // 用于重试前的过期副本清理：单条 SQL 替代逐条 DeleteFileRecord，避免大量顺序往返。
 func (r *SQLiteRepository) DeleteFilesByJob(ctx context.Context, userID, jobID string) error {

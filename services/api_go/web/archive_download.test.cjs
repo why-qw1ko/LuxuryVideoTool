@@ -213,7 +213,9 @@ test('图集按类型与序号核对保存数量，缺失动图不会被历史�
   const detailStart = source.indexOf('function jobDetailHTML(job){');
   const detailEnd = source.indexOf('function renderDetail(){', detailStart);
   assert.ok(detailStart >= 0 && detailEnd > detailStart);
-  vm.runInContext(source.slice(detailStart, detailEnd), h.context);
+  const expiryCode = source.slice(source.indexOf('function jobMediaExpiry('), source.indexOf('function jobListSignature('));
+  const musicCode = source.slice(source.indexOf('function taskMusicSource('), source.indexOf('function syncTaskMusicWithJob('));
+  vm.runInContext(expiryCode + musicCode + source.slice(detailStart, detailEnd), h.context);
   const job = {
     id: 'job-1', status: 'completed', action: 'download',
     work: {type: 'note', title: '混合图集', images: [

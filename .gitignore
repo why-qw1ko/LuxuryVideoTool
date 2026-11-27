@@ -20,9 +20,6 @@ services/api_go/coverage.out
 .packages
 build/
 coverage/
-apps/client_flutter/android/.gradle/
-apps/client_flutter/android/local.properties
-apps/client_flutter/windows/flutter/ephemeral/
 
 # Editors and operating systems
 .idea/

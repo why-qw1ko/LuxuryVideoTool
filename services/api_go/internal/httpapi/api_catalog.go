@@ -24,6 +24,7 @@ const (
 	curlDownloadZIP = "download-zip"
 	curlSignedZIP   = "signed-zip"
 
+	groupReleases   = "安卓发版"
 	groupHealth     = "健康检查"
 	groupAuth       = "登录与会话"
 	groupJobs       = "用户任务"
@@ -37,6 +38,21 @@ const (
 )
 
 var apiCatalog = []apiOperation{
+	{Method: http.MethodGet, Path: "/api/v1/app/android/version", Group: groupReleases, Auth: apiAuthPublic,
+		Summary: "检查安卓最新版本", Details: "公开读取已发布版本及强制更新开关，不包含草稿。"},
+	{Method: http.MethodGet, Path: "/api/v1/app/android/releases/{id}/apk", Group: groupReleases, Auth: apiAuthPublic,
+		Summary: "下载已发布安卓安装包", Details: "公开下载曾发布的不可变 APK，支持 Range 和 HEAD。"},
+	{Method: http.MethodGet, Path: "/api/v1/admin/app/android/release", Group: groupReleases, Auth: apiAuthAdmin,
+		Summary: "读取安卓发布草稿和当前版本"},
+	{Method: http.MethodPost, Path: "/api/v1/admin/app/android/apk", Group: groupReleases, Auth: apiAuthAdmin,
+		Summary: "上传安卓安装包", Details: "multipart 字段 apk，最大 256 MiB；从 APK 读取包名和版本，上传仅创建草稿。"},
+	{Method: http.MethodPut, Path: "/api/v1/admin/app/android/release", Group: groupReleases, Auth: apiAuthAdmin,
+		Summary: "编辑安卓发布草稿", Details: "提交 draftId、原 APK 的 versionCode/versionName、changelog 和 forceUpdate。"},
+	{Method: http.MethodPost, Path: "/api/v1/admin/app/android/publish", Group: groupReleases, Auth: apiAuthAdmin,
+		Summary: "发布安卓新版本", Details: "提交 draftId；版本编号必须递增，同一 APK 可以重新发布说明。"},
+	{Method: http.MethodPut, Path: "/api/v1/admin/app/android/policy", Group: groupReleases, Auth: apiAuthAdmin,
+		Summary: "切换安卓强制更新", Details: "提交 releaseId 和 forceUpdate，立即修改当前发布策略。"},
+
 	{Method: http.MethodGet, Path: "/health/live", Group: groupHealth, Auth: apiAuthPublic,
 		Summary: "检查进程存活", Details: "返回当前服务版本。"},
 	{Method: http.MethodGet, Path: "/health/ready", Group: groupHealth, Auth: apiAuthPublic,
@@ -66,6 +82,8 @@ var apiCatalog = []apiOperation{
 		Summary: "查看任务配额和创建权限", Details: "返回每日配额和可用任务类型。CDK 会话还返回累计额度。"},
 	{Method: http.MethodGet, Path: "/api/v1/jobs/{id}", Group: groupJobs, Auth: apiAuthBearer,
 		Summary: "查看自己的任务详情", Details: "id 为创建任务时返回的 job.id。", CurlExample: curlRequest},
+	{Method: http.MethodPost, Path: "/api/v1/jobs/{id}/music/refresh", Group: groupJobs, Auth: apiAuthBearer,
+		Summary: "刷新任务音乐地址", Details: "仅重新解析已完成任务中的作品，不创建任务、不扣额度、不下载媒体。请求体须为空；同作品每分钟最多一次。返回完整 job。"},
 	{Method: http.MethodPost, Path: "/api/v1/jobs/{id}/cancel", Group: groupJobs, Auth: apiAuthBearer,
 		Summary: "取消自己的任务", Details: "id 为任务 ID。"},
 	{Method: http.MethodPost, Path: "/api/v1/jobs/{id}/retry", Group: groupJobs, Auth: apiAuthBearer,
@@ -131,6 +149,8 @@ var apiCatalog = []apiOperation{
 		Summary: "查看所有用户的任务", Details: "支持 q、status、action、userId、limit、offset 和 view=summary。"},
 	{Method: http.MethodGet, Path: "/api/v1/admin/jobs/{id}", Group: groupAdminJobs, Auth: apiAuthAdmin,
 		Summary: "查看任意任务的详情", Details: "id 为任务 ID。"},
+	{Method: http.MethodPost, Path: "/api/v1/admin/jobs/{id}/music/refresh", Group: groupAdminJobs, Auth: apiAuthAdmin,
+		Summary: "刷新任务音乐地址", Details: "仅重新解析已完成任务中的作品，不创建任务、不扣额度、不下载媒体。请求体须为空；同作品每分钟最多一次。返回完整 job。"},
 	{Method: http.MethodPost, Path: "/api/v1/admin/jobs/{id}/cancel", Group: groupAdminJobs, Auth: apiAuthAdmin,
 		Summary: "取消任意用户的任务", Details: "id 为任务 ID。"},
 	{Method: http.MethodPost, Path: "/api/v1/admin/jobs/{id}/retry", Group: groupAdminJobs, Auth: apiAuthAdmin,

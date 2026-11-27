@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt">
+    <aapt:attr name="android:drawable">
+        <vector android:width="96dp" android:height="96dp"
+            android:viewportWidth="96" android:viewportHeight="96">
+            <path android:pathData="M48,22 A26,26 0,1 1,48,74 A26,26 0,1 1,48,22"
+                android:fillColor="@android:color/transparent"
+                android:strokeColor="@color/capture_splash_track" android:strokeWidth="3" />
+            <group android:name="loading_ring" android:pivotX="48" android:pivotY="48">
+                <path android:pathData="M48,22 A26,26 0,1 1,22,48"
+                    android:fillColor="@android:color/transparent"
+                    android:strokeColor="@color/capture_splash_accent" android:strokeWidth="3"
+                    android:strokeLineCap="round" />
+            </group>
+        </vector>
+    </aapt:attr>
+    <target android:name="loading_ring">
+        <aapt:attr name="android:animation">
+            <objectAnimator android:propertyName="rotation" android:valueFrom="0" android:valueTo="360"
+                android:duration="1100" android:repeatCount="infinite" android:valueType="floatType"
+                android:interpolator="@android:interpolator/linear" />
+        </aapt:attr>
+    </target>
+</animated-vector>

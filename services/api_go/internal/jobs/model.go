@@ -40,6 +40,7 @@ type Job struct {
 	ErrorMessage   string         `json:"-"`
 	Result         any            `json:"result"`
 	MediaExpiresAt *time.Time     `json:"mediaExpiresAt,omitempty"`
+	Music          *JobMusic      `json:"music,omitempty"`
 	Error          *JobError      `json:"error"`
 	CreatedAt      time.Time      `json:"createdAt"`
 	UpdatedAt      time.Time      `json:"updatedAt"`
@@ -50,6 +51,16 @@ type Job struct {
 	KeepVideo      bool           `json:"-"`
 	LanguageHints  []string       `json:"-"`
 	Hotwords       []string       `json:"-"`
+}
+
+type JobMusic struct {
+	Source      string     `json:"source"`
+	URL         string     `json:"url,omitempty"`
+	FallbackURL string     `json:"fallbackUrl,omitempty"`
+	FileID      string     `json:"fileId,omitempty"`
+	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
+	Title       string     `json:"title,omitempty"`
+	Artist      string     `json:"artist,omitempty"`
 }
 
 type JobError struct {
@@ -106,10 +117,15 @@ type JobSummary struct {
 }
 
 type WorkSummary struct {
-	Title      string   `json:"title"`
-	AuthorName string   `json:"authorName,omitempty"`
-	DurationMS int64    `json:"durationMs,omitempty"`
-	Hashtags   []string `json:"hashtags,omitempty"`
+	Type            string     `json:"type"`
+	Title           string     `json:"title"`
+	AuthorName      string     `json:"authorName,omitempty"`
+	DurationMS      int64      `json:"durationMs,omitempty"`
+	Hashtags        []string   `json:"hashtags,omitempty"`
+	CoverURL        string     `json:"coverUrl,omitempty"`
+	CoverPreviewURL string     `json:"coverPreviewUrl,omitempty"`
+	CoverFileID     string     `json:"-"`
+	CoverExpiresAt  *time.Time `json:"-"`
 }
 
 type JobSummaryPage struct {

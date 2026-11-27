@@ -22,6 +22,7 @@ import (
 	ownedfiles "github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/files"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/jobs"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/media"
+	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/releases"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/resolver"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/settings"
 	"github.com/why-qw1ko/LuxuryVideoTool/services/api_go/internal/version"
@@ -35,19 +36,20 @@ const webAppVersionPrefix = "web-"
 type Readiness func() error
 
 type Dependencies struct {
-	Build           version.Info
-	Auth            *auth.Service
-	Jobs            *jobs.Service
-	Files           *ownedfiles.Repository
-	Storage         *ownedfiles.Storage
-	Thumbnails      *media.Thumbnailer
-	Covers          coverFetcher
-	ASRSigner       *ownedfiles.Signer
-	Audit           *audit.Recorder
-	Ready           Readiness
-	LoginRateLimit  int
-	Settings        *settings.Service
-	AliyunAvailable bool
+	AndroidReleases    *releases.Service
+	Build              version.Info
+	Auth               *auth.Service
+	Jobs               *jobs.Service
+	Files              *ownedfiles.Repository
+	Storage            *ownedfiles.Storage
+	Thumbnails         *media.Thumbnailer
+	Covers             coverFetcher
+	ASRSigner          *ownedfiles.Signer
+	Audit              *audit.Recorder
+	Ready              Readiness
+	LoginRateLimit     int
+	Settings           *settings.Service
+	AliyunAvailable    bool
 	ASRProviderFactory func(settings.ProviderConfig) asr.Provider
 	// AllowInsecureProviderSettings 允许在纯 HTTP（无 TLS）下配置 API Key。
 	// 仅用于自托管的内网/私有部署；公网必须保持默认的 HTTPS 校验。
@@ -148,6 +150,7 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 	mux := http.NewServeMux()
 	limiter := newLoginLimiter(deps.LoginRateLimit)
 	registerCDKRoutes(mux, deps, limiter)
+	registerAndroidReleaseRoutes(mux, deps)
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, healthResponse{Status: "ok", Version: deps.Build})
 	})
@@ -352,15 +355,15 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 			}
 		}
 		type item struct {
-			ID          string     `json:"id"`
-			Username    string     `json:"username"`
-			DisplayName string     `json:"displayName"`
-			Role        auth.Role  `json:"role"`
-			IsActive    bool       `json:"isActive"`
-			CreatedAt   time.Time  `json:"createdAt"`
-			UpdatedAt   time.Time  `json:"updatedAt"`
-			LastLoginAt *time.Time `json:"lastLoginAt,omitempty"`
-			DailyTaskLimitOverride *int `json:"dailyTaskLimitOverride"`
+			ID                     string     `json:"id"`
+			Username               string     `json:"username"`
+			DisplayName            string     `json:"displayName"`
+			Role                   auth.Role  `json:"role"`
+			IsActive               bool       `json:"isActive"`
+			CreatedAt              time.Time  `json:"createdAt"`
+			UpdatedAt              time.Time  `json:"updatedAt"`
+			LastLoginAt            *time.Time `json:"lastLoginAt,omitempty"`
+			DailyTaskLimitOverride *int       `json:"dailyTaskLimitOverride"`
 		}
 		items := make([]item, 0, len(users))
 		for _, user := range users {
@@ -550,7 +553,7 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 		}
 		input := jobs.ListInput{UserID: userID, Query: r.URL.Query().Get("q"), Status: status, Action: action, Limit: limit, Offset: offset}
 		if r.URL.Query().Get("view") == "summary" {
-			writeJobSummaries(w, r, deps.Jobs, input, true)
+			writeJobSummaries(w, r, deps, input, true)
 			return
 		}
 		page, err := deps.Jobs.ListAll(r.Context(), input)
@@ -579,7 +582,7 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务", true)
 			return
 		}
-		withMediaPreviews([]jobs.Job{job}, deps, time.Now())
+		job = withMediaPreviews([]jobs.Job{job}, deps, time.Now())[0]
 		writeJSON(w, http.StatusOK, map[string]any{"job": job, "requestId": RequestID(r.Context())})
 	})
 	protected.HandleFunc("POST /api/v1/admin/jobs/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
@@ -846,7 +849,7 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 			}
 			job = fresh
 		}
-			withMediaPreviews([]jobs.Job{job}, deps, time.Now())
+		job = withMediaPreviews([]jobs.Job{job}, deps, time.Now())[0]
 		writeJSON(w, http.StatusAccepted, map[string]any{"job": job, "reused": reused, "requestId": RequestID(r.Context())})
 	})
 	protected.HandleFunc("GET /api/v1/jobs", func(w http.ResponseWriter, r *http.Request) {
@@ -864,7 +867,7 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 		}
 		input := jobs.ListInput{UserID: principal.UserID, Query: r.URL.Query().Get("q"), Status: status, Action: action, Limit: limit, Offset: offset}
 		if r.URL.Query().Get("view") == "summary" {
-			writeJobSummaries(w, r, deps.Jobs, input, false)
+			writeJobSummaries(w, r, deps, input, false)
 			return
 		}
 		page, err := deps.Jobs.List(r.Context(), input)
@@ -995,6 +998,7 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 	// 媒体预览：同源签名地址，供 <img>/<video> 直接加载（无需 Authorization 头），
 	// 避免外部 CDN 防盗链/区域受限导致预览图加载失败。
 	mux.HandleFunc("GET /api/v1/media-preview/{id}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "private, no-store")
 		if deps.Files == nil || deps.Storage == nil || deps.ASRSigner == nil || !deps.ASRSigner.Validate(r.PathValue("id"), r.URL.Query().Get("expires"), r.URL.Query().Get("signature"), time.Now()) {
 			http.NotFound(w, r)
 			return
@@ -1007,6 +1011,7 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 		handleInlinePreview(deps.Storage, file, w, r)
 	})
 	mux.HandleFunc("GET /api/v1/media-preview/{id}/thumbnail", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "private, no-store")
 		if deps.Files == nil || deps.Storage == nil || deps.Thumbnails == nil || deps.ASRSigner == nil {
 			http.NotFound(w, r)
 			return
@@ -1026,6 +1031,7 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 			http.NotFound(w, r)
 			return
 		}
+		thumbnail.ExpiresAt = file.ExpiresAt
 		handleInlinePreview(deps.Storage, thumbnail, w, r)
 	})
 	mux.HandleFunc("GET /api/v1/job-cover/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -1046,7 +1052,7 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务", true)
 			return
 		}
-		withMediaPreviews([]jobs.Job{job}, deps, time.Now())
+		job = withMediaPreviews([]jobs.Job{job}, deps, time.Now())[0]
 		writeJSON(w, http.StatusOK, map[string]any{"job": job, "requestId": RequestID(r.Context())})
 	})
 	protected.HandleFunc("POST /api/v1/jobs/{id}/images/archive-download", func(w http.ResponseWriter, r *http.Request) {
@@ -1064,6 +1070,7 @@ func newRouteMux(deps Dependencies) *http.ServeMux {
 	})
 	registerUsageRoutes(mux, protected, deps)
 	registerProviderRoutes(mux, protected, deps)
+	registerMusicRoutes(mux, protected, deps)
 	if deps.Auth != nil {
 		mux.Handle("GET /api/v1/admin/api-catalog", requireAuth(deps.Auth, http.HandlerFunc(handleAPICatalog)))
 		mux.Handle("POST /api/v1/auth/logout", requireAuth(deps.Auth, protected))
@@ -1105,14 +1112,15 @@ func jobWorkID(job jobs.Job) string {
 	return job.ID
 }
 
-func writeJobSummaries(w http.ResponseWriter, r *http.Request, service *jobs.Service, input jobs.ListInput, withOwner bool) {
-	page, err := service.ListSummaries(r.Context(), input, withOwner)
+func writeJobSummaries(w http.ResponseWriter, r *http.Request, deps Dependencies, input jobs.ListInput, withOwner bool) {
+	page, err := deps.Jobs.ListSummaries(r.Context(), input, withOwner)
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "无法读取任务列表", true)
 		return
 	}
+	withSummaryPreviews(page.Items, deps, time.Now())
 	w.Header().Set("Cache-Control", "private, no-store")
-	writeJSON(w, http.StatusOK, map[string]any{"jobs": page.Items, "total": page.Total, "limit": page.Limit, "offset": page.Offset, "requestId": RequestID(r.Context())})
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": page.Items, "total": page.Total, "limit": page.Limit, "offset": page.Offset, "summaryVersion": 2, "requestId": RequestID(r.Context())})
 }
 
 func queryInt(r *http.Request, name string, fallback int) (int, error) {
@@ -1130,6 +1138,11 @@ func validJobFilter(status, action string) bool {
 }
 
 func handleFileDownload(storage *ownedfiles.Storage, file ownedfiles.File, w http.ResponseWriter, r *http.Request) {
+	if mediaFileExpired(file.ExpiresAt, time.Now()) {
+		w.Header().Set("Cache-Control", "private, no-store")
+		writeError(w, r, http.StatusGone, "FILE_EXPIRED", "服务器文件已过期", false)
+		return
+	}
 	handle, err := storage.Open(file)
 	if err != nil {
 		writeError(w, r, http.StatusNotFound, "FILE_NOT_FOUND", "文件不存在", false)
@@ -1144,10 +1157,17 @@ func handleFileDownload(storage *ownedfiles.Storage, file ownedfiles.File, w htt
 	w.Header().Set("Content-Type", file.MIMEType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(file.OriginalName))
+	setMediaCacheHeaders(w, r, file, stat, time.Now())
+	w.Header().Set("Cache-Control", "private, no-cache")
 	http.ServeContent(w, r, file.OriginalName, stat.ModTime(), handle)
 }
 
 func handleInlinePreview(storage *ownedfiles.Storage, file ownedfiles.File, w http.ResponseWriter, r *http.Request) {
+	if mediaFileExpired(file.ExpiresAt, time.Now()) {
+		w.Header().Set("Cache-Control", "private, no-store")
+		http.NotFound(w, r)
+		return
+	}
 	handle, err := storage.Open(file)
 	if err != nil {
 		http.NotFound(w, r)
@@ -1162,44 +1182,46 @@ func handleInlinePreview(storage *ownedfiles.Storage, file ownedfiles.File, w ht
 	w.Header().Set("Content-Type", file.MIMEType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Disposition", "inline; filename*=UTF-8''"+url.PathEscape(file.OriginalName))
-	w.Header().Set("Cache-Control", "private, max-age=3600")
+	setMediaCacheHeaders(w, r, file, stat, time.Now())
 	http.ServeContent(w, r, file.OriginalName, stat.ModTime(), handle)
 }
 
 // withMediaPreviews 为作品封面和本地媒体文件注入同源预览地址。
 // files 只可能是 []jobs.JobFile：GET/List 通过 FindByID/FindFiles 注入类型化文件，复用幂等键的
 // POST 也先重查一次，因此 result_json 解码出的 []any 分支在这里不可达。
-func withMediaPreviews(items []jobs.Job, deps Dependencies, now time.Time) {
+func withMediaPreviews(items []jobs.Job, deps Dependencies, now time.Time) []jobs.Job {
 	signer := deps.ASRSigner
-	if signer == nil || len(items) == 0 {
-		return
-	}
-	// Keep signed URLs stable across job polling and page reloads within the hour.
-	expires := now.UTC().Truncate(time.Hour).Add(24 * time.Hour)
+	expires := mediaLinkExpiry(now, nil)
 	for i := range items {
-		if items[i].Status == "completed" {
-			addCoverPreview(deps, items[i].Work, items[i].ID, expires)
+		job := &items[i]
+		if signer != nil && job.Status == "completed" {
+			addCoverPreview(deps, job.Work, job.ID, expires)
 		}
-		result, ok := items[i].Result.(map[string]any)
-		if !ok {
-			continue
-		}
-		files, ok := result["files"].([]jobs.JobFile)
-		if !ok {
-			continue
-		}
-		for j := range files {
-			file := &files[j]
-			hasThumbnail := ownedfiles.HasThumbnail(file.Kind)
-			if hasThumbnail || file.Kind == "music" {
-				file.PreviewURL = signer.PreviewURL(file.ID, expires)
+		var files []jobs.JobFile
+		if result, ok := job.Result.(map[string]any); ok {
+			files, _ = result["files"].([]jobs.JobFile)
+			for j := range files {
+				file := &files[j]
+				file.PreviewURL, file.ThumbnailURL = "", ""
+				if signer == nil || mediaFileExpired(file.ExpiresAt, now) {
+					continue
+				}
+				hasThumbnail := ownedfiles.HasThumbnail(file.Kind)
+				fileExpiry := mediaLinkExpiry(now, file.ExpiresAt)
+				if hasThumbnail || file.Kind == "music" {
+					file.PreviewURL = signer.PreviewURL(file.ID, fileExpiry)
+				}
+				if hasThumbnail && deps.Thumbnails != nil {
+					file.ThumbnailURL = signer.ThumbnailURL(file.ID, fileExpiry)
+				}
 			}
-			if hasThumbnail && deps.Thumbnails != nil && (file.ExpiresAt == nil || file.ExpiresAt.After(now)) {
-				file.ThumbnailURL = signer.ThumbnailURL(file.ID, expires)
+			if files != nil {
+				result["files"] = files
 			}
 		}
-		result["files"] = files
+		job.Music = jobMusic(job.Work, files, now)
 	}
+	return items
 }
 
 func recordJobAudit(recorder *audit.Recorder, r *http.Request, userID, jobID string, reused bool, status string) {
@@ -1284,7 +1306,11 @@ func tokenPayload(pair auth.TokenPair, requestID string, web bool) tokenResponse
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
+	return decodeJSONLimit(w, r, target, maxAuthBodyBytes)
+}
+
+func decodeJSONLimit(w http.ResponseWriter, r *http.Request, target any, limit int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {

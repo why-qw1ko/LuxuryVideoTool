@@ -5,6 +5,7 @@ let adminMode=false,currentView='new',adminOpen=false,adminCurrentView='dashboar
 let jobsPage=1,jobsPageSize=20,jobsTotal=0;
 let adminJobsPage=1,adminJobsPageSize=20,adminJobsTotal=0;
 let taskMusic={jobId:null,source:'',url:'',playing:false};
+let taskMusicRequest=0;
 let videoPreviewFailure=null;
 let statusChart=null,trendChart=null;
 let lastStatsSig='',lastAdminJobsSig='';
@@ -259,6 +260,7 @@ function closeAdminConsole(){
   resetAdminPasswordForm();
   resetProviderSettings();
   resetAdminApiCatalog();
+  if(typeof resetAdminReleases==='function')resetAdminReleases();
   closeAdminUserSessions();
   closeAdminUserMenu();
   adminOpen=false;adminMode=false;
@@ -275,9 +277,10 @@ function adminShowView(name){
   if(adminCurrentView==='password'&&name!=='password')resetAdminPasswordForm();
   if(adminCurrentView==='providers'&&name!=='providers')resetProviderSettings();
   if(adminCurrentView==='api-catalog'&&name!=='api-catalog')resetAdminApiCatalog();
+  if(adminCurrentView==='releases'&&name!=='releases'&&typeof resetAdminReleases==='function')resetAdminReleases();
   if(adminCurrentView==='users'&&name!=='users'){closeAdminUserSessions();closeAdminUserMenu()}
   adminCurrentView=name;
-  ['dashboard','jobs','users','cdks','usage','providers','api-catalog','password','detail'].forEach(v=>show('#admin-view-'+v,v===name));
+  ['dashboard','jobs','users','cdks','usage','providers','releases','api-catalog','password','detail'].forEach(v=>show('#admin-view-'+v,v===name));
   document.querySelectorAll('.admin-nav [data-admin-view]').forEach(btn=>{
     const current=btn.dataset.adminView===name;
     btn.classList.toggle('active',current);
@@ -290,8 +293,10 @@ function adminShowView(name){
   if(name==='usage')requestAdminUsageSettings();
   if(name==='providers')void loadProviders();
   if(name==='api-catalog')void loadAdminApiCatalog();
+  if(name==='releases'&&typeof loadAdminReleases==='function')void loadAdminReleases();
 }
 bindAdminApiCatalog();
+if(typeof bindAdminReleases==='function')bindAdminReleases();
 $('#admin-console-btn').addEventListener('click',()=>openAdminConsole());
 $('#settings-link').addEventListener('click',()=>openAdminConsole('usage'));
 $('#admin-back-front').addEventListener('click',closeAdminConsole);
@@ -405,6 +410,7 @@ function enter(value){
   resetCDKView();
   resetAdminJobManagement();
   resetAdminApiCatalog();
+  if(typeof resetAdminReleases==='function')resetAdminReleases();
   closeAdminUserSessions();
   closeAdminUserMenu();
   $('#admin-users-q').value='';
@@ -1329,7 +1335,7 @@ function adminJobCheckbox(job,title){
   return `<input type="checkbox" class="admin-selection-checkbox" data-admin-job-select value="${esc(job.id)}" aria-label="选择任务 ${esc(title)}">`;
 }
 function adminJobExpiryBadge(job){
-  return jobExpired(job)?'<span class="badge badge-warning">内容已过期</span>':'';
+  return jobExpired(job)?'<span class="badge badge-warning">服务器媒体已到期</span>':'';
 }
 function adminJobCardHTML(job){
   const w=job.work||{};
@@ -1882,14 +1888,17 @@ function jobMediaExpiry(job){
   const files=job?.result?.files||[];
   return files.filter(f=>f.expiresAt&&f.kind!=='asr_source').reduce((e,f)=>!e||f.expiresAt<e?f.expiresAt:e,null);
 }
+function fileExpired(file){return !!file?.expiresAt&&new Date(file.expiresAt).getTime()<=Date.now()}
 function jobExpired(job){const expiry=jobMediaExpiry(job);return !!expiry&&new Date(expiry).getTime()<=Date.now()}
 function jobListSignature(job){return JSON.stringify([job,jobExpired(job)])}
 function jobSignature(job){
   // 预览与缩略图的签名地址不参与比较，避免轮询重绘；只记录是否已有缩略图。
   // 过期标记是稳定布尔值，算入签名：任务在页面停留期间过期时，轮询能自动刷新列表行与详情。
   const result=job.result||null;
-  const stable=result?{...result,files:(result.files||[]).map(f=>({id:f.id,kind:f.kind,name:f.name,mimeType:f.mimeType,sizeBytes:f.sizeBytes,hasThumbnail:!!f.thumbnailUrl}))}:null;
-  return [job.status,job.progress,job.updatedAt,job.error?.code,jobExpired(job),JSON.stringify(stable)].join('|');
+  const stable=result?{...result,files:(result.files||[]).map(f=>({id:f.id,kind:f.kind,name:f.name,mimeType:f.mimeType,sizeBytes:f.sizeBytes,expired:fileExpired(f),hasThumbnail:!!f.thumbnailUrl}))}:null;
+  const music=job.music||{url:job.work?.musicUrl,title:job.work?.musicTitle,artist:job.work?.musicArtist};
+  const stableMusic={source:music.source,fileId:music.fileId,url:music.source==='server'?'':music.url,fallbackUrl:music.fallbackUrl,title:music.title,artist:music.artist,expired:fileExpired(music)};
+  return [job.status,job.progress,job.updatedAt,job.error?.code,jobExpired(job),JSON.stringify(stable),JSON.stringify(stableMusic)].join('|');
 }
 
 function jobRowHTML(job){
@@ -1900,7 +1909,7 @@ function jobRowHTML(job){
   if(w.authorName)meta.push(w.authorName);
   if(w.durationMs)meta.push(fmtDuration(w.durationMs));
   if(meta.length)meta.push(actionLabels[job.action]||'');
-  if(jobExpired(job))meta.push('已过期');
+  if(jobExpired(job))meta.push('服务器媒体已到期');
   return `<div class="row-top"><span class="row-title">${esc(title)}</span><span class="row-time">${fmtShort(job.createdAt)}</span></div>
   <div class="row-meta"><span class="dot dot-${tone}"></span>${esc(statusLabels[job.status]||job.status)}${meta.length?' · '+esc(meta.join(' · ')):''}</div>`;
 }
@@ -1956,7 +1965,7 @@ function jobDetailHTML(job){
 
   const mediaExpiry=jobMediaExpiry(job);
   const expired=jobExpired(job);
-  const expiredNotice=expired?`<div class="detail-notice expired-box" role="status">${icon('alert-circle',16)}<span>内容已过期</span></div>`:'';
+  const expiredNotice=expired?`<div class="detail-notice expired-box" role="status">${icon('alert-circle',16)}<span>服务器媒体已到期${mediaExpiry?`（${fmtDate(mediaExpiry)}）`:''}，任务文案仍可查看。</span></div>`:'';
 
   const metas=[];
   // 作者/分辨率仅在解析完成后显示；为空显示 "-"（未解析的任务不显示这些行）。
@@ -1970,7 +1979,7 @@ function jobDetailHTML(job){
   const signedCovers=[videoFile?.thumbnailUrl,w.coverPreviewUrl].filter(previewUsable);
   const coverSources=[...new Set(w.coverUrl?[...signedCovers,w.coverUrl]:signedCovers)];
   const coverImage=coverSources.length?`<img class="detail-cover" src="${esc(coverSources[0])}" data-cover-fallback="${esc(coverSources[1])}" data-cover-source="${esc(coverSources[2])}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="retryVideoCover(this)">`:'';
-  const previewAttrs=videoFile&&job.action!=='info'?`data-op="preview" aria-haspopup="dialog" data-fid="${esc(videoFile.id)}" data-name="${esc(videoFile.name)}" data-preview="${esc(videoFile.previewUrl||'')}"`:'';
+  const previewAttrs=videoFile&&!fileExpired(videoFile)&&job.action!=='info'?`data-op="preview" aria-haspopup="dialog" data-fid="${esc(videoFile.id)}" data-name="${esc(videoFile.name)}" data-preview="${esc(videoFile.previewUrl||'')}"`:'';
   const previewFailed=previewAttrs&&videoPreviewFailure?.jobId===job.id&&videoPreviewFailure.fileId===videoFile.id;
   const cover=coverImage&&previewAttrs&&!expired?`<button type="button" class="detail-cover-button" ${previewAttrs} aria-label="播放视频">${coverImage}<span class="detail-cover-play">${icon('play',24)}</span></button>`:coverImage;
 
@@ -1980,7 +1989,8 @@ function jobDetailHTML(job){
   const statusText=job.error&&job.error.message===job.statusMessage?'':job.statusMessage||(job.status==='completed'?'处理完成':'');
 
   const isNote=w.type==='note';
-  const linkFiles=isNote?files.filter(f=>f.kind!=='image'&&f.kind!=='animated'):files;
+  const availableFiles=files.filter(file=>!fileExpired(file));
+  const linkFiles=isNote?availableFiles.filter(f=>f.kind!=='image'&&f.kind!=='animated'):availableFiles;
   const fileHref=f=>adminMode?`/api/v1/admin/files/${encodeURIComponent(f.id)}`:`/api/v1/files/${encodeURIComponent(f.id)}`;
   // data-preview 携带同源签名流式地址：视频/配图下载直接用 <a download> 流式落盘，不再 fetch 整文件缓冲。
   const fileLinks=linkFiles.map(f=>`<a class="btn download" href="${fileHref(f)}" data-file="${esc(f.id)}" data-name="${esc(f.name)}" data-preview="${esc(f.previewUrl||'')}">${icon('download',14)} ${esc(fileLabel(f))}</a>`);
@@ -1996,21 +2006,25 @@ function jobDetailHTML(job){
   const transcript=text?`<section class="detail-section"><div class="section-head"><h3>${icon('file-text',14)} ${transcriptHeading}</h3><button type="button" class="copy-btn" data-copy title="复制全部文案">${icon('copy',13)} 复制</button></div><div class="result">${esc(text)}</div></section>`:'';
 
   // 画廊只加载静态缩略图，原图和动图在打开预览时加载。
-  const mediaFiles=files.filter(f=>f.kind==='image'||f.kind==='animated');
+  const mediaFiles=files.filter(f=>(f.kind==='image'||f.kind==='animated')&&!fileExpired(f));
   const noteImages=w.images||[];
-  // 按媒体类型和文件名前缀（image-NN）匹配，避免历史静态文件被当作动图、下载失败导致下标错位。
-  const mediaFileForImage=(img,i)=>mediaFiles.find(f=>f.kind===(img.animatedUrl?'animated':'image')&&(f.name||'').indexOf(`image-${String(i+1).padStart(2,'0')}.`)===0)||null;
-  const savedMediaCount=noteImages.filter((img,i)=>mediaFileForImage(img,i)).length;
+  // 保留过期文件用于判定状态，清理后通过任务保留期识别已到期图片。
+  const galleryMedia=noteImages.map((img,i)=>{
+    const stored=files.find(f=>f.kind===(img.animatedUrl?'animated':'image')&&(f.name||'').indexOf(`image-${String(i+1).padStart(2,'0')}.`)===0);
+    const file=stored&&!fileExpired(stored)?stored:null;
+    return {file,expired:fileExpired(stored)||(!file&&expired)};
+  });
+  const savedMediaCount=galleryMedia.filter(media=>media.file).length;
   const showMediaSummary=isNote&&job.status==='completed'&&job.action!=='info'&&noteImages.length>0;
-  const mediaSummary=showMediaSummary?`<p class="status-msg">已保存 ${savedMediaCount}/${noteImages.length} 项媒体${savedMediaCount<noteImages.length?'；未保存的媒体不会包含在压缩包中。':'。'}</p>`:'';
+  const mediaSummary=showMediaSummary?`<p class="status-msg">${expired?`媒体已到期${savedMediaCount?`，仍有 ${savedMediaCount}/${noteImages.length} 项可下载`:''}。`:`已保存 ${savedMediaCount}/${noteImages.length} 项媒体${savedMediaCount<noteImages.length?'；未保存的媒体不会包含在压缩包中。':'。'}`}</p>`:'';
   const galleryItems=noteImages.map((img,i)=>{
-    const file=mediaFileForImage(img,i);
+    const {file,expired:itemExpired}=galleryMedia[i];
     const animated=!!img.animatedUrl;
     const cdnSrc=img.animatedUrl||img.url;
     const viewerSrc=previewUsable(file?.previewUrl)?file.previewUrl:cdnSrc;
     const thumbnail=file?.thumbnailUrl||'';
     const dl=file?`<a class="gallery-dl" href="${fileHref(file)}" data-file data-name="${esc(file.name||'image')}" data-preview="${esc(file.previewUrl||'')}" title="下载">${icon('download',14)}</a>`:'';
-    const badge=`<span class="gallery-badge">${animated?'动图':'图片'}${showMediaSummary&&!file?' · 未保存':''}</span>`;
+    const badge=`<span class="gallery-badge${itemExpired?' expired':''}">${animated?'动图':'图片'}${itemExpired?' · 已到期':showMediaSummary&&!file?' · 未保存':''}</span>`;
     const thumb=thumbnail?`<img src="${esc(thumbnail)}" alt="" loading="lazy" decoding="async" onerror="this.remove()">`:'';
     const indicator=animated?`<span class="gallery-play">${icon('play',18)}</span>`:`<span class="gallery-placeholder">${icon('image',24)}</span>`;
     return `<figure class="gallery-item" data-file-id="${esc(file?.id)}" data-preview="${esc(viewerSrc)}" data-fallback="${esc(cdnSrc)}" data-poster="${esc(thumbnail||img.url)}" data-animated="${animated?'1':'0'}" data-title="${esc((stripHashtags(w.title,w.hashtags)||'预览').slice(0,40))}"><button type="button" class="gallery-media" aria-haspopup="dialog" aria-label="${animated?'播放动图':'查看原图'} ${i+1}">${indicator}${thumb}</button><div class="gallery-foot">${badge}${dl}</div></figure>`;
@@ -2018,15 +2032,14 @@ function jobDetailHTML(job){
   const noteGallery=isNote&&noteImages.length?`<div class="note-gallery">${galleryItems}</div>`:'';
   const zipLink=(isNote&&mediaFiles.length&&job.status==='completed')?archiveDownloadHTML(job.id,`${w.douyinWorkId||job.id}_images.zip`,savedMediaCount<noteImages.length?`打包下载已保存的 ${savedMediaCount} 项`:'打包下载全部'):'';
 
-  const musicFile=files.find(f=>f.kind==='music');
-  const musicPlayUrl=musicFile&&musicFile.previewUrl&&previewUsable(musicFile.previewUrl)?musicFile.previewUrl:w.musicUrl;
-  const musicRow=isNote&&w.musicUrl?`<div class="music-row"><span class="music-info">${icon('music',13)} <span>${esc(w.musicTitle||'背景音乐')}${w.musicArtist?' · '+esc(w.musicArtist):''}</span></span><button type="button" class="music-toggle" data-op="music" data-music="${esc(w.musicUrl)}" data-play-url="${esc(musicPlayUrl||'')}" data-fallback="${esc(w.musicUrl)}">${icon('play',13)} 播放音乐</button></div>`:'';
+  const music=taskMusicSource(job);
+  const musicRow=isNote&&music.url?`<div class="music-row"><span class="music-info">${icon('music',13)} <span>${esc(music.title||'背景音乐')}${music.artist?' · '+esc(music.artist):''}</span></span><button type="button" class="music-toggle" data-op="music" data-music="${esc(music.source)}" data-play-url="${esc(music.url)}" data-fallback="${esc(music.fallback)}">${icon('play',13)} 播放音乐</button></div>`:'';
   const hasMedia=cover||w.authorName||metas.length;
   const mediaBlock=isNote
     ?(noteGallery||zipLink||musicRow?`<div class="detail-media no-cover">${noteGallery}${mediaSummary}${musicRow}${metas.length?`<div class="detail-meta">${metas.join('')}</div>`:''}${canonical}${zipLink}</div>`:'')
     :(hasMedia?`<div class="detail-media${cover?'':' no-cover'}">${cover}<div class="detail-side">${metas.length?`<div class="detail-meta">${metas.join('')}</div>`:''}${canonical}</div></div>`:'');
 
-  const retentionNote=mediaExpiry?`<p class="retention-note">${icon('info',13)} 媒体文件保留至 ${fmtDate(mediaExpiry)}，到期后自动清理。删除任务也会删除媒体文件。</p>`:'';
+  const retentionNote=mediaExpiry&&!expired?`<p class="retention-note">${icon('info',13)} 服务器媒体保留至 ${fmtDate(mediaExpiry)}，到期后自动清理。删除任务也会删除服务器媒体。</p>`:'';
 
   return `<article class="job-detail" data-job="${esc(job.id)}">
     <div class="detail-head"><div><h2>${esc(title)}</h2><div class="badges">${badges.join('')}</div></div><span class="job-time" title="${esc(new Date(job.createdAt).toLocaleString())}">${fmtDate(job.createdAt)}</span></div>
@@ -2358,6 +2371,7 @@ function updateTaskMusicUI(){
   });
 }
 function stopTaskMusic(){
+  taskMusicRequest++;
   const audio=taskAudio();
   if(audio){
     audio.pause();
@@ -2368,12 +2382,9 @@ function stopTaskMusic(){
 }
 function resumeTaskMusic(){
   if(!taskMusic.jobId||!taskMusic.url)return;
-  const audio=taskAudio();
-  if(!audio)return;
-  audio.src=taskMusic.url;
-  audio.loop=true;
-  audio.play().then(()=>{taskMusic.playing=true;updateTaskMusicUI()}).catch(()=>{taskMusic.playing=false;updateTaskMusicUI()});
+  void toggleTaskMusic(taskMusic.jobId,taskMusic.source,taskMusic.url,taskMusic.fallback||'');
 }
+
 function playPreviewMusic(){
   if(previewMusicSuspended){
     previewMusicSuspended=false;
@@ -2382,62 +2393,82 @@ function playPreviewMusic(){
   }
   if(taskMusic.jobId&&taskMusic.url&&!taskMusic.playing)resumeTaskMusic();
 }
+function taskMusicSource(job){
+  const work=job?.work||{},media=job?.music;
+  const fallback=media?.fallbackUrl||work.musicUrl||'';
+  const files=job?.result?.files||[];
+  const saved=files.find(file=>file.kind==='music'&&!fileExpired(file)&&previewUsable(file.previewUrl));
+  let url='';
+  if(media?.source==='server'&&!fileExpired(media)&&previewUsable(media.url))url=media.url;
+  else if(media?.source==='original')url=media.url||fallback;
+  else url=saved?.previewUrl||fallback;
+  return {source:fallback||media?.fileId||saved?.id||url,url,fallback,title:media?.title||work.musicTitle||'',artist:media?.artist||work.musicArtist||''};
+}
 function syncTaskMusicWithJob(job){
-  const source=job?.work?.musicUrl||'';
-  if(!job||!source){
+  const music=taskMusicSource(job);
+  if(!job||!music.url){
     if(taskMusic.playing)stopTaskMusic();
     taskMusic={jobId:job?.id||null,source:'',url:'',playing:false};
     return;
   }
-  const files=(job.result&&job.result.files)||[];
-  const musicFile=Array.isArray(files)?files.find(f=>f.kind==='music')||null:null;
-  const url=musicFile&&musicFile.previewUrl&&previewUsable(musicFile.previewUrl)?musicFile.previewUrl:source;
-  if(taskMusic.jobId!==job.id){
-    if(taskMusic.playing)stopTaskMusic();
-    taskMusic={jobId:job.id,source,url,playing:false};
-  }else if(taskMusic.source!==source){
+  if(taskMusic.jobId!==job.id||taskMusic.source!==music.source){
     stopTaskMusic();
-    taskMusic={jobId:job.id,source,url,playing:false};
+    taskMusic={jobId:job.id,...music,playing:false};
   }else if(!taskMusic.playing){
-    taskMusic.url=url;
+    Object.assign(taskMusic,music);
   }
 }
 async function toggleTaskMusic(jobId,source,playUrl,fallbackUrl){
   if(!jobId||!source)return;
   const audio=taskAudio();
   if(!audio)return;
-  const url=playUrl||source;
   if(taskMusic.jobId!==jobId||taskMusic.source!==source){
     stopTaskMusic();
-    taskMusic={jobId,source,url,playing:false};
+    taskMusic={jobId,source,url:playUrl||source,fallback:fallbackUrl,playing:false};
   }
-  if(taskMusic.playing){
-    stopTaskMusic();
-    return;
-  }
-  try{
+  if(taskMusic.playing){stopTaskMusic();return}
+  const request=++taskMusicRequest,epoch=sessionEpoch;
+  const active=()=>request===taskMusicRequest&&epoch===sessionEpoch&&taskMusic.jobId===jobId;
+  const mode=adminMode;
+  const attempt=async url=>{
+    if(!active()||!url)return false;
     audio.src=url;
     audio.loop=true;
-    await audio.play();
-    taskMusic.url=url;
-    taskMusic.playing=true;
-    updateTaskMusicUI();
-  }catch(err){
-    if(fallbackUrl&&fallbackUrl!==url){
-      try{
-        audio.src=fallbackUrl;
-        audio.loop=true;
-        await audio.play();
-        taskMusic.url=fallbackUrl;
-        taskMusic.playing=true;
-        updateTaskMusicUI();
-        return;
-      }catch{}
+    try{
+      await audio.play();
+      if(!active())return false;
+      taskMusic.url=url;
+      taskMusic.playing=true;
+      updateTaskMusicUI();
+      return true;
+    }catch{return false}
+  };
+  const url=playUrl||source;
+  if(await attempt(url)||!active())return;
+  try{
+    const path=`/api/v1/${mode?'admin/':''}jobs/${encodeURIComponent(jobId)}`;
+    let data;
+    try{data=await api(`${path}/music/refresh`,{method:'POST',cache:'no-store'})}
+    catch{
+      if(!active())return;
+      data=await api(path,{cache:'no-store'});
     }
-    taskMusic.playing=false;
-    updateTaskMusicUI();
-    toast('音乐播放失败，请稍后重试','error');
-  }
+    if(!active())return;
+    const music=taskMusicSource(data.job);
+    Object.assign(taskMusic,music);
+    if(currentJob?.id===jobId&&adminMode===mode){
+      currentJob=data.job;
+      if(mode)renderAdminDetail(currentJob);else renderDetail();
+    }
+    if(music.url&&music.url!==url&&await attempt(music.url))return;
+    fallbackUrl=music.fallback||fallbackUrl;
+  }catch{}
+  if(!active())return;
+  if(fallbackUrl&&fallbackUrl!==url&&await attempt(fallbackUrl))return;
+  if(!active())return;
+  taskMusic.playing=false;
+  updateTaskMusicUI();
+  toast('音乐播放失败，请稍后重试','error');
 }
 
 /* ---------- 视频预览 / 图文查看 ---------- */

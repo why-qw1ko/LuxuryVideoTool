@@ -37,7 +37,7 @@ func (s *Signer) ValidateCoverPreview(jobID, expiry, signature string, now time.
 	return s.Validate("cover\x00"+jobID, expiry, signature, now)
 }
 
-func (s *Signer) Validate(fileID, expiry, signature string, now time.Time) bool { value, err := strconv.ParseInt(expiry, 10, 64); if err != nil || now.UTC().Unix() > value { return false }; expected, err := hex.DecodeString(s.sign(fileID, expiry)); if err != nil { return false }; received, err := hex.DecodeString(signature); if err != nil { return false }; return hmac.Equal(expected, received) }
+func (s *Signer) Validate(fileID, expiry, signature string, now time.Time) bool { value, err := strconv.ParseInt(expiry, 10, 64); if err != nil || now.UTC().Unix() >= value { return false }; expected, err := hex.DecodeString(s.sign(fileID, expiry)); if err != nil { return false }; received, err := hex.DecodeString(signature); if err != nil { return false }; return hmac.Equal(expected, received) }
 func (s *Signer) sign(fileID, expiry string) string { mac := hmac.New(sha256.New, s.key); mac.Write([]byte(fileID)); mac.Write([]byte{0}); mac.Write([]byte(expiry)); return hex.EncodeToString(mac.Sum(nil)) }
 
 // ArchiveURL 生成同源的短时 ZIP 下载地址，签名独立绑定用户、任务和有效期。

@@ -10,13 +10,3 @@ try {
 } finally {
     Pop-Location
 }
-
-Push-Location (Join-Path $repoRoot 'apps/client_flutter')
-try {
-    dart format --output=none --set-exit-if-changed lib test
-    flutter analyze
-    flutter test
-} finally {
-    Pop-Location
-}
-

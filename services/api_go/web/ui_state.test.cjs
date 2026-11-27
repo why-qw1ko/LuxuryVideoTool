@@ -1079,14 +1079,14 @@ test('后台任务过期后，桌面表格和移动卡片在原状态旁补充�
   const load = h.context.loadAdminJobs();
   h.requests[0].resolve({jobs: [job], total: 1});
   await load;
-  assert.doesNotMatch(h.node('#admin-jobs-list').innerHTML, /内容已过期/);
+  assert.doesNotMatch(h.node('#admin-jobs-list').innerHTML, /服务器媒体已到期/);
 
   now += 1000;
   const poll = h.context.loadAdminJobs(true);
   h.requests[1].resolve({jobs: [job], total: 1});
   await poll;
   const html = h.node('#admin-jobs-list').innerHTML;
-  assert.equal(html.match(/内容已过期/g)?.length, 2);
+  assert.equal(html.match(/服务器媒体已到期/g)?.length, 2);
   assert.equal(html.match(/已完成/g)?.length, 2);
   assert.equal(html.match(/data-op="view"/g)?.length, 2);
 });
@@ -1147,6 +1147,7 @@ test('图表颜色跟随当前 CSS 主题 token，状态与趋势保持统一', 
 
 test('画廊只加载静态缩略图，原图和动图保留给点击预览', () => {
   const h = harness(section('function esc(value)', 'function renderList(') +
+    section('function taskMusicSource(', 'function syncTaskMusicWithJob(') +
     section('function jobDetailHTML(', 'function renderDetail('));
   Object.assign(h.context, {
     actionLabels: {}, statusLabels: {}, statusTone: {},
@@ -1184,7 +1185,7 @@ test('画廊只加载静态缩略图，原图和动图保留给点击预览', ()
   const afterCleanup = h.context.jobDetailHTML({...data, mediaExpiresAt: '2000-01-01T00:00:00Z',
     result: {text: '原有图文配文', files: [{id: 'text', kind: 'result_text', name: 'result.txt'}]},
   });
-  assert.match(afterCleanup, /内容已过期/);
+  assert.match(afterCleanup, /服务器媒体已到期/);
   assert.match(afterCleanup, /原有图文配文/);
   assert.match(afterCleanup, /data-file="text"/);
   assert.match(afterCleanup, /class="note-gallery"/);
@@ -1193,6 +1194,7 @@ test('画廊只加载静态缩略图，原图和动图保留给点击预览', ()
 
 test('视频解析使用同源签名封面，已下载视频优先使用本地缩略图', () => {
   const h = harness(section('function esc(value)', 'function renderList(') +
+    section('function taskMusicSource(', 'function syncTaskMusicWithJob(') +
     section('function jobDetailHTML(', 'function renderDetail('));
   Object.assign(h.context, {
     actionLabels: {}, statusLabels: {}, statusTone: {},
@@ -1219,7 +1221,7 @@ test('视频解析使用同源签名封面，已下载视频优先使用本地�
   data.mediaExpiresAt = '2000-01-01T00:00:00Z';
   data.result.text = '原有视频文案';
   const expired = h.context.jobDetailHTML(data);
-  assert.match(expired, /内容已过期/);
+  assert.match(expired, /服务器媒体已到期/);
   assert.match(expired, /detail-cover/);
   assert.match(expired, /data-op="preview"/);
   assert.match(expired, /data-file="file"/);
@@ -1657,4 +1659,49 @@ test('创建表单异步保存失败后保留输入，提交期间拒绝重复�
   assert.equal(await result, form);
   assert.equal(fields.content, null);
   assert.equal(opener.focused, true);
+});
+
+
+test('媒体到期时画廊统一标已到期，清理后仍保留到期提示和文案', () => {
+  const h = harness(section('function esc(value)', 'function renderList(') +
+    section('function taskMusicSource(', 'function syncTaskMusicWithJob(') +
+    section('function jobDetailHTML(', 'function renderDetail('));
+  Object.assign(h.context, {
+    actionLabels: {}, statusLabels: {completed: '已完成'}, statusTone: {},
+    icon: name => name, previewUsable: Boolean, archiveDownloadHTML: () => '打包下载',
+  });
+  let now = Date.parse('2026-11-27T08:00:00Z');
+  h.context.Date = class extends Date { static now() { return now; } };
+  const deadline = '2026-11-27T08:00:01Z';
+  const data = {...job('expired-gallery'), action: 'download', status: 'completed', mediaExpiresAt: deadline,
+    work: {type: 'note', title: '作品', musicUrl: 'https://cdn.example.test/music.mp3', images: [
+      {url: 'https://cdn.example.test/image.jpg'},
+      {url: 'https://cdn.example.test/poster.jpg', animatedUrl: 'https://cdn.example.test/animated.mp4'},
+    ]}, result: {text: '保留的任务文案', files: [
+      {id: 'image', kind: 'image', name: 'image-01.jpg', expiresAt: deadline, previewUrl: '/preview/image', thumbnailUrl: '/thumb/image'},
+    ]},
+  };
+  const before = h.context.jobDetailHTML(data);
+  const beforeSignature = h.context.jobSignature(data);
+  assert.match(before, /动图 · 未保存/);
+  assert.match(before, /data-file-id="image"/);
+  assert.doesNotMatch(before, /已到期/);
+
+  now += 1000;
+  const expired = h.context.jobDetailHTML(data);
+  assert.notEqual(h.context.jobSignature(data), beforeSignature);
+  assert.match(expired, /服务器媒体已到期（[^<]+）/);
+  assert.equal(expired.match(/ · 已到期/g)?.length, 2);
+  assert.doesNotMatch(expired, /未保存|已保存 0|保留至|data-file-id="image"|href="\/api\/v1\/files\/image"|打包下载/);
+  assert.match(expired, /data-preview="https:\/\/cdn\.example\.test\/image\.jpg"/);
+  assert.match(expired, /播放音乐/);
+  assert.match(expired, /保留的任务文案/);
+
+  const cleaned = h.context.jobDetailHTML({...data, result: {...data.result, files: []}});
+  assert.equal(cleaned.match(/ · 已到期/g)?.length, 2);
+  assert.doesNotMatch(cleaned, /未保存|保留至/);
+  assert.match(cleaned, /保留的任务文案/);
+
+  const info = h.context.jobDetailHTML({...data, action: 'info', mediaExpiresAt: '', result: {files: []}});
+  assert.doesNotMatch(info, /已到期|已保存 0/);
 });

@@ -109,3 +109,35 @@ func TestArchiveSignerRelativeURLAndFieldBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func TestMediaSignaturesRejectExactExpiry(t *testing.T) {
+	expires := time.Date(2026, time.November, 27, 8, 0, 0, 0, time.UTC)
+	signer := NewSigner([]byte("01234567890123456789012345678901"), "")
+	for name, signed := range map[string]string{
+		"file":      signer.URL("file-1", expires),
+		"preview":   signer.PreviewURL("file-1", expires),
+		"thumbnail": signer.ThumbnailURL("file-1", expires),
+		"cover":     signer.CoverPreviewURL("file-1", expires),
+	} {
+		t.Run(name, func(t *testing.T) {
+			parsed, err := url.Parse(signed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			query := parsed.Query()
+			validate := signer.Validate
+			if name == "thumbnail" {
+				validate = signer.ValidateThumbnail
+			}
+			if name == "cover" {
+				validate = signer.ValidateCoverPreview
+			}
+			if !validate("file-1", query.Get("expires"), query.Get("signature"), expires.Add(-time.Nanosecond)) {
+				t.Fatal("signature rejected before expiry")
+			}
+			if validate("file-1", query.Get("expires"), query.Get("signature"), expires) {
+				t.Fatal("signature accepted at exact expiry")
+			}
+		})
+	}
+}

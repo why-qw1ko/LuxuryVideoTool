@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="/css/admin.css">
   <link rel="stylesheet" href="/css/cdks.css">
   <link rel="stylesheet" href="/css/api-catalog.css">
+  <link rel="stylesheet" href="/css/app-releases.css">
 </head>
 <body>
   <div id="toasts" class="toasts" aria-live="polite"></div>
@@ -163,6 +164,7 @@
           <button type="button" data-admin-view="usage"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2" fill="var(--sidebar)"/><circle cx="15" cy="17" r="2" fill="var(--sidebar)"/></svg>使用设置</button>
           <button type="button" data-admin-view="providers"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 10v4m4-7v10m4-14v18m4-14v10m4-7v4"/></svg>转写服务</button>
           <button type="button" data-admin-view="password"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></svg>修改密码</button>
+          <button type="button" data-admin-view="releases"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M4 16v4h16v-4"/></svg>安卓发版</button>
           <button type="button" data-admin-view="api-catalog" aria-controls="admin-view-api-catalog"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2ZM8 7h8m-8 4h8"/></svg>接口文档</button>
         </nav>
         <div class="admin-sidebar-foot">
@@ -430,6 +432,47 @@
           </form>
         </section>
 
+        <section id="admin-view-releases" class="admin-view panel hidden" aria-labelledby="admin-release-heading" aria-busy="false">
+          <div class="admin-head">
+            <div><h2 id="admin-release-heading" tabindex="-1">安卓发版</h2><p class="meta">上传已签名的 APK，保存更新说明后发布。安卓进入应用时自动检查新版本。</p></div>
+            <button id="admin-release-refresh" class="ghost" type="button">重新加载</button>
+          </div>
+          <p id="admin-release-status" class="meta" role="status" aria-live="polite"></p>
+          <div class="release-grid">
+            <section class="release-card" aria-labelledby="admin-release-current-heading">
+              <h3 id="admin-release-current-heading">当前已发布</h3>
+              <div id="admin-release-published"><p class="meta">正在读取版本信息…</p></div>
+              <div id="admin-release-published-notes" class="release-notes"></div>
+              <a id="admin-release-download" class="ghost hidden" download>下载安装包</a>
+              <form id="admin-release-policy-form" class="release-form">
+                <fieldset id="admin-release-policy-fields" disabled>
+                  <label class="release-switch"><span id="admin-release-policy-label">当前未开启强制更新</span><input id="admin-release-policy" type="checkbox" role="switch"></label>
+                  <p class="meta">开启后，旧版本用户需要更新才能继续使用。关闭可立即解除此要求，客户端下次检查时生效。</p>
+                  <div class="release-actions"><button class="ghost" type="submit">保存当前更新策略</button></div>
+                </fieldset>
+              </form>
+            </section>
+            <section class="release-card" aria-labelledby="admin-release-draft-heading">
+              <h3 id="admin-release-draft-heading">待发布草稿</h3>
+              <div id="admin-release-draft"><p class="meta">上传 APK 后生成草稿，版本号和包名自动读取。</p></div>
+              <form id="admin-release-upload-form" class="release-form">
+                <label for="admin-release-apk">选择安装包<input id="admin-release-apk" type="file" accept=".apk,application/vnd.android.package-archive" required></label>
+                <p class="meta">最大 256 MB。每次上传会替换待发布草稿；当前已发布版本保持可用。</p>
+                <div class="release-actions"><button id="admin-release-upload" class="ghost" type="submit" disabled>上传 APK</button></div>
+                <div id="admin-release-upload-progress" class="release-upload-progress hidden"><progress id="admin-release-progress" max="100" value="0" aria-label="APK 上传进度"></progress><span id="admin-release-progress-text"></span></div>
+              </form>
+              <form id="admin-release-draft-form" class="release-form">
+                <fieldset id="admin-release-draft-fields" disabled>
+                  <label for="admin-release-changelog">更新说明<textarea id="admin-release-changelog" maxlength="10000" rows="6" placeholder="说明此版本的功能变化和问题修复"></textarea></label>
+                  <label class="release-switch">发布后要求旧版本更新<input id="admin-release-force" type="checkbox" role="switch"></label>
+                  <p class="meta">草稿设置在发布后生效。覆盖升级须使用相同包名和兼容的签名，新安装包的版本编号应递增。</p>
+                  <div class="release-actions"><button id="admin-release-save" class="ghost" type="submit">保存草稿</button><button id="admin-release-publish" class="btn-primary" type="button" disabled>发布此版本</button></div>
+                </fieldset>
+              </form>
+            </section>
+          </div>
+        </section>
+
         <section id="admin-view-api-catalog" class="admin-view panel hidden" aria-labelledby="api-catalog-heading">
           <div class="admin-head"><h2 id="api-catalog-heading">接口文档</h2></div>
           <div class="api-catalog-toolbar">
@@ -512,6 +555,7 @@
   <button id="back-top" class="back-top hidden" type="button" aria-label="返回顶部" title="返回顶部"></button>
   <script src="/cdks.js" defer></script>
   <script src="/api-catalog.js" defer></script>
+  <script src="/app-releases.js" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>

@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -19,6 +20,16 @@ func NewService(adapter Adapter, cache Cache, ttl time.Duration, version string)
 }
 
 func (s *Service) Resolve(ctx context.Context, shareText string, force bool) (Work, bool, error) {
+	return s.resolve(ctx, shareText, force, false)
+}
+
+// RefreshMusic rejects incomplete music metadata before it can replace a saved source.
+func (s *Service) RefreshMusic(ctx context.Context, shareText string) (Work, error) {
+	work, _, err := s.resolve(ctx, shareText, true, true)
+	return work, err
+}
+
+func (s *Service) resolve(ctx context.Context, shareText string, force, requireMusic bool) (Work, bool, error) {
 	input, err := ExtractInput(shareText)
 	if err != nil {
 		return Work{}, false, err
@@ -36,6 +47,14 @@ func (s *Service) Resolve(ctx context.Context, shareText string, force bool) (Wo
 	if err != nil {
 		return Work{}, false, err
 	}
+	if requireMusic {
+		if err := ctx.Err(); err != nil {
+			return Work{}, false, err
+		}
+		if strings.TrimSpace(work.MusicURL) == "" {
+			return Work{}, false, ErrMusicUnavailable
+		}
+	}
 	// 空壳作品（仅 ID、无内容）不写缓存，避免瞬态失败污染后续请求。
 	if s.cache != nil && !isEmptyShell(work) {
 		work, err = s.cache.Save(ctx, work)
@@ -47,3 +66,4 @@ func (s *Service) Resolve(ctx context.Context, shareText string, force bool) (Wo
 }
 
 var ErrCacheMiss = errors.New("resolver cache miss")
+var ErrMusicUnavailable = errors.New("music source unavailable in refreshed work")

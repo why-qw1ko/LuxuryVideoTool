@@ -12,7 +12,10 @@ import (
 
 const maxCoverBytes = 4 << 20
 
-type CoverFetcher struct{ client *http.Client }
+type CoverFetcher struct {
+	client *http.Client
+	cache  coverCache
+}
 
 func NewCoverFetcher() *CoverFetcher {
 	return &CoverFetcher{client: &http.Client{
@@ -38,16 +41,25 @@ func CoverURLAllowed(raw string) bool {
 
 // Fetch returns a small raster image from the resolved work's cover candidates.
 func (f *CoverFetcher) Fetch(ctx context.Context, candidates []string) ([]byte, string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
 	allowed := slices.DeleteFunc(slices.Clone(candidates), func(candidate string) bool { return !CoverURLAllowed(candidate) })
-	for _, candidate := range uniqueCandidates(allowed) {
+	allowed = uniqueCandidates(allowed)
+	if len(allowed) == 0 {
+		return nil, "", ErrDownload
+	}
+	return f.cachedFetch(ctx, allowed)
+}
+
+func (f *CoverFetcher) fetchCandidates(ctx context.Context, candidates []string) ([]byte, string, error) {
+	for _, candidate := range candidates {
 		if ctx.Err() != nil {
 			return nil, "", ctx.Err()
 		}
 		if body, mime, err := f.fetch(ctx, candidate); err == nil {
 			return body, mime, nil
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
 	}
 	return nil, "", ErrDownload
 }

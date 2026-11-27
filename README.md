@@ -2,7 +2,7 @@
 
 Luxury Capture 是一个自托管的抖音内容解析、下载与转写工具。用户粘贴抖音分享文本后，由服务端完成作品解析、媒体下载、音频提取、ASR 转写与结果导出。
 
-当前部署重点是嵌入 Go 服务端的网页版。Android 与 Windows 客户端源码、设计和后续产物规划仍保留；只是当前 GitHub Actions 暂时只构建 Linux 服务端运行包，不自动构建 Android APK 或 Windows 客户端。
+当前保留 Go 服务端、内嵌网页版和 `android/` 原生安卓端。Flutter 与 Windows 桌面客户端已于 2026-11-27 备份到 `back/` 后移除。GitHub Actions 目前仅构建 Linux 服务端运行包。
 
 ## 技术测试与使用声明
 
@@ -31,14 +31,15 @@ Luxury Capture 是一个自托管的抖音内容解析、下载与转写工具�
 - 可导出 TXT、Markdown 和 meta JSON。
 - 支持任务进度、历史记录、搜索、重试、取消和删除；媒体保留到期自动清理，删除任务同时删除媒体。
 - 支持管理员在网页中配置 API Key 与转写模型。
-- Android 与 Windows 客户端作为后续分发形态保留，当前服务器部署不依赖客户端产物。
+- 提供 Kotlin + Jetpack Compose 原生安卓端，服务器部署不依赖客户端产物。
 
 ## 技术组成
 
 ```text
 services/api_go/       Go REST API、内嵌网页版、后台 Worker
 services/api_go/web/   轻量网页版静态资源
-apps/client_flutter/   Android / Windows 客户端源码
+android/               Kotlin / Jetpack Compose 原生安卓客户端
+back/                  已移除 Flutter / Windows 客户端的源码归档与声明
 scripts/               本地启动、打包与部署辅助脚本
 docs/                  运维、API、ADR 与验收文档
 deploy/                Caddy、systemd、Docker 等部署草案
@@ -109,7 +110,7 @@ http://服务器IP:7788
 
 长期运行建议使用 systemd 托管，并通过 Nginx 或 Caddy 配置 HTTPS 反向代理。完整说明见 [Linux 服务器部署说明](docs/operations/Linux服务器部署说明.md)。
 
-## Windows 本地运行
+## Windows 本地运行（Go 网页服务）
 
 源码运行：
 
@@ -139,21 +140,11 @@ dist\douyin-capture-windows-<版本号>
 
 更多说明见 [Windows 网页版使用说明](docs/operations/Windows网页版使用说明.md) 和 [启动与测试说明](docs/operations/启动与测试说明.md)。
 
-## Android 与 Windows 客户端
+## Android 客户端与历史归档
 
-仓库仍包含 Flutter 客户端源码：
+当前安卓端位于 `android/`，使用 Kotlin + Jetpack Compose，通过同一 Go 服务端访问账号、任务和结果。用 Android Studio 打开该目录，工具链与构建说明见 [Android 说明](android/README.md)。
 
-```text
-apps/client_flutter/
-```
-
-客户端目标：
-
-- Android APK / AAB。
-- Windows 桌面客户端或安装包。
-- 与同一 Go 服务端账号、任务历史和结果数据联动。
-
-当前阶段 GitHub Actions 不自动构建这些客户端产物，避免服务器部署流程被 Flutter、Android SDK 和 Windows 构建环境阻塞。需要客户端产物时，应在具备 Flutter、Android Studio、JDK 和 Windows C++ 桌面工具链的构建环境中单独执行。
+旧 Flutter 安卓端与 Windows 桌面端原位于 `apps/client_flutter/`，已于 2026-11-27 完成源码备份后移除。压缩包、校验清单、停用声明与恢复方法见 [back/README.md](back/README.md)。Windows 上的 Go 网页服务运行与打包方式继续保留。
 
 ## 关键配置
 
@@ -231,6 +222,7 @@ curl http://127.0.0.1:7788/health/ready
 
 - [Linux 服务器部署说明](docs/operations/Linux服务器部署说明.md)
 - [Windows 网页版使用说明](docs/operations/Windows网页版使用说明.md)
+- [安卓版本发布说明](docs/operations/安卓发版说明.md)
 - [启动与测试说明](docs/operations/启动与测试说明.md)
 - [开发运行说明](docs/operations/开发运行说明.md)
 - [API 文档](docs/api/README.md)
